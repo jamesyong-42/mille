@@ -432,6 +432,199 @@ fn map_notify_err(err: notify::Error) -> FxError {
 }
 
 // ---------------------------------------------------------------------------
+// Coalescer (Phase 3.6) — pure RawEvent batch -> FsChangeEvent batch.
+//
+// Sits between the platform stream and the api-visible event union. Operates
+// over a single debounce window's worth of raw events; no async / threading.
+// Phase 5 wires this between the Debouncer's output and the NAPI binding.
+
+/// High-level event surfaced by the coalescer. Mirrors the api.d.ts
+/// `FileSystemEvent` union (minus `Renamed`, deferred to 3.3-3.5).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FsChangeEvent {
+    /// A new file/dir. Phase 3.6 emits this for any Create that isn't
+    /// cancelled by a subsequent Delete within the same batch.
+    Created { path: PathBuf },
+    /// Content change. Modified×N collapsed to one.
+    Modified { path: PathBuf },
+    /// File/dir removed.
+    Deleted { path: PathBuf },
+    /// Platform emitted an ambiguous event (rename half, access flag, etc.).
+    /// Phase 3.3-3.5 will convert paired Unknown events into Renamed.
+    Unknown { path: PathBuf },
+    /// Watcher backlog overflow on this root; caller should re-walk it.
+    Coarse { root: PathBuf },
+    /// Transient platform-level error (not fatal).
+    Error { message: String },
+}
+
+/// Per-path coalesced state. Tracks the net effect of a sequence of raw
+/// events on a single path inside one debounce window.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PathState {
+    /// Net effect: a Create. Either a fresh Create, or Delete+Create
+    /// (atomic replace), or Create followed by any number of Modifies
+    /// (the Modifies are implied by the Create).
+    Created,
+    /// Net effect: a Modify. One or more Modifies on a pre-existing path.
+    Modified,
+    /// Net effect: a Delete. Path is gone after this batch.
+    Deleted,
+    /// Ambiguous (e.g. rename half). Pending pairing in 3.3-3.5.
+    Unknown,
+    /// Create+Delete inside the window — transient file. Drop entirely.
+    Cancelled,
+}
+
+/// Run one coalesce pass over a raw event batch from a debounce window.
+/// Pure. Deterministic. Same input → same output.
+///
+/// Algorithm: group by path, run a small state machine per group, then
+/// emit one event per path in first-seen order. `Overflow` and `Error`
+/// are not grouped per path and pass through inline.
+pub fn coalesce_events(raw: &[RawEvent]) -> Vec<FsChangeEvent> {
+    use std::collections::HashMap;
+
+    // Per-path running state, plus the index of first appearance so we
+    // can emit in deterministic first-seen order.
+    let mut state: HashMap<PathBuf, PathState> = HashMap::new();
+    let mut first_seen: Vec<PathBuf> = Vec::new();
+
+    // Output buffer. Overflow/Error events are appended inline at the
+    // position they appeared, preserving relative order with first-seen
+    // path events.
+    let mut out: Vec<FsChangeEvent> = Vec::new();
+    // Marker indices in `out` for each first-seen path so we can patch
+    // the final coalesced event in place once the batch is fully scanned.
+    let mut path_slot: HashMap<PathBuf, usize> = HashMap::new();
+
+    for ev in raw {
+        match ev {
+            RawEvent::Overflow { root } => {
+                out.push(FsChangeEvent::Coarse { root: root.clone() });
+            }
+            RawEvent::Error(msg) => {
+                out.push(FsChangeEvent::Error { message: msg.clone() });
+            }
+            RawEvent::Created(p)
+            | RawEvent::Modified(p)
+            | RawEvent::Deleted(p)
+            | RawEvent::Any(p) => {
+                // Reserve a slot for this path on first appearance so its
+                // position in the output matches first-seen order.
+                if !path_slot.contains_key(p) {
+                    path_slot.insert(p.clone(), out.len());
+                    first_seen.push(p.clone());
+                    // Placeholder; overwritten below before return.
+                    out.push(FsChangeEvent::Unknown { path: p.clone() });
+                }
+                let next = transition(state.get(p).copied(), ev);
+                state.insert(p.clone(), next);
+            }
+        }
+    }
+
+    // Patch each path slot with its final coalesced event, dropping
+    // cancelled paths by collecting into a fresh vector that skips them.
+    let mut final_out: Vec<FsChangeEvent> = Vec::with_capacity(out.len());
+    let mut emitted_path: HashMap<usize, ()> = HashMap::new();
+    for (idx, slot) in out.into_iter().enumerate() {
+        // Find the path that owns this slot, if any.
+        let owner = first_seen.iter().find(|p| path_slot[*p] == idx);
+        match owner {
+            Some(p) => {
+                if emitted_path.contains_key(&idx) {
+                    continue;
+                }
+                emitted_path.insert(idx, ());
+                match state[p] {
+                    PathState::Cancelled => { /* drop transient file */ }
+                    PathState::Created => {
+                        final_out.push(FsChangeEvent::Created { path: p.clone() });
+                    }
+                    PathState::Modified => {
+                        final_out.push(FsChangeEvent::Modified { path: p.clone() });
+                    }
+                    PathState::Deleted => {
+                        final_out.push(FsChangeEvent::Deleted { path: p.clone() });
+                    }
+                    PathState::Unknown => {
+                        final_out.push(FsChangeEvent::Unknown { path: p.clone() });
+                    }
+                }
+            }
+            None => {
+                // Pass-through Coarse / Error.
+                final_out.push(slot);
+            }
+        }
+    }
+
+    final_out
+}
+
+/// State-machine transition. `prev` is the current state for this path
+/// (or None on first event). `ev` is the incoming raw event — it must
+/// be a path-bearing variant (Created/Modified/Deleted/Any); Overflow
+/// and Error are handled inline by the caller and never reach here.
+fn transition(prev: Option<PathState>, ev: &RawEvent) -> PathState {
+    match (prev, ev) {
+        // First event for this path.
+        (None, RawEvent::Created(_)) => PathState::Created,
+        (None, RawEvent::Modified(_)) => PathState::Modified,
+        (None, RawEvent::Deleted(_)) => PathState::Deleted,
+        (None, RawEvent::Any(_)) => PathState::Unknown,
+
+        // Created → ...
+        // Create+Modify keeps the Create (Modifies implied by the Create).
+        (Some(PathState::Created), RawEvent::Modified(_)) => PathState::Created,
+        // Create+Delete cancels — transient file inside the window.
+        (Some(PathState::Created), RawEvent::Deleted(_)) => PathState::Cancelled,
+        // Duplicate Create — stay Created.
+        (Some(PathState::Created), RawEvent::Created(_)) => PathState::Created,
+        // Create+Any — treat ambiguous follow-up as no-op on the Create.
+        (Some(PathState::Created), RawEvent::Any(_)) => PathState::Created,
+
+        // Modified → ...
+        (Some(PathState::Modified), RawEvent::Modified(_)) => PathState::Modified,
+        // Modify+Delete — file is gone, Modifies are irrelevant.
+        (Some(PathState::Modified), RawEvent::Deleted(_)) => PathState::Deleted,
+        // Modify+Create — odd but plausible (deleted-then-recreated event
+        // arriving out of order). Promote to Created.
+        (Some(PathState::Modified), RawEvent::Created(_)) => PathState::Created,
+        (Some(PathState::Modified), RawEvent::Any(_)) => PathState::Modified,
+
+        // Deleted → ...
+        // Delete+Create — atomic replace / path reuse. Net effect Create.
+        (Some(PathState::Deleted), RawEvent::Created(_)) => PathState::Created,
+        // Delete+Modify — shouldn't happen (file gone), but be defensive.
+        (Some(PathState::Deleted), RawEvent::Modified(_)) => PathState::Deleted,
+        (Some(PathState::Deleted), RawEvent::Deleted(_)) => PathState::Deleted,
+        (Some(PathState::Deleted), RawEvent::Any(_)) => PathState::Deleted,
+
+        // Unknown → ... (preserve Unknown unless concretely overwritten).
+        (Some(PathState::Unknown), RawEvent::Created(_)) => PathState::Created,
+        (Some(PathState::Unknown), RawEvent::Modified(_)) => PathState::Modified,
+        (Some(PathState::Unknown), RawEvent::Deleted(_)) => PathState::Deleted,
+        (Some(PathState::Unknown), RawEvent::Any(_)) => PathState::Unknown,
+
+        // Cancelled is sticky within the batch — once we've seen
+        // Create+Delete, additional events on this path get a fresh start
+        // by re-promoting to whatever the new event suggests. This is the
+        // C+D+C case: third Create reanimates as Created.
+        (Some(PathState::Cancelled), RawEvent::Created(_)) => PathState::Created,
+        (Some(PathState::Cancelled), RawEvent::Modified(_)) => PathState::Modified,
+        (Some(PathState::Cancelled), RawEvent::Deleted(_)) => PathState::Deleted,
+        (Some(PathState::Cancelled), RawEvent::Any(_)) => PathState::Unknown,
+
+        // Non-path-bearing variants never reach here.
+        (_, RawEvent::Overflow { .. }) | (_, RawEvent::Error(_)) => {
+            prev.unwrap_or(PathState::Unknown)
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 
 #[cfg(test)]
@@ -724,6 +917,167 @@ mod tests {
         assert!(
             modify_count <= 5,
             "debouncer should merge rapid modifies, got {modify_count}: {got:?}"
+        );
+    }
+
+    // ---- Phase 3.6: coalescer ----
+
+    fn pb(s: &str) -> PathBuf {
+        PathBuf::from(s)
+    }
+
+    #[test]
+    fn coalesce_single_create_passes_through() {
+        let raw = vec![RawEvent::Created(pb("/a"))];
+        let out = coalesce_events(&raw);
+        assert_eq!(out, vec![FsChangeEvent::Created { path: pb("/a") }]);
+    }
+
+    #[test]
+    fn coalesce_create_then_delete_cancels() {
+        let raw = vec![RawEvent::Created(pb("/a")), RawEvent::Deleted(pb("/a"))];
+        let out = coalesce_events(&raw);
+        assert!(out.is_empty(), "C+D should cancel: {out:?}");
+    }
+
+    #[test]
+    fn coalesce_create_delete_create_yields_single_create() {
+        let raw = vec![
+            RawEvent::Created(pb("/a")),
+            RawEvent::Deleted(pb("/a")),
+            RawEvent::Created(pb("/a")),
+        ];
+        let out = coalesce_events(&raw);
+        assert_eq!(out, vec![FsChangeEvent::Created { path: pb("/a") }]);
+    }
+
+    #[test]
+    fn coalesce_collapses_repeated_modifies() {
+        let raw = vec![
+            RawEvent::Modified(pb("/a")),
+            RawEvent::Modified(pb("/a")),
+            RawEvent::Modified(pb("/a")),
+            RawEvent::Modified(pb("/a")),
+        ];
+        let out = coalesce_events(&raw);
+        assert_eq!(out, vec![FsChangeEvent::Modified { path: pb("/a") }]);
+    }
+
+    #[test]
+    fn coalesce_modify_then_delete_becomes_delete() {
+        let raw = vec![
+            RawEvent::Modified(pb("/a")),
+            RawEvent::Modified(pb("/a")),
+            RawEvent::Deleted(pb("/a")),
+        ];
+        let out = coalesce_events(&raw);
+        assert_eq!(out, vec![FsChangeEvent::Deleted { path: pb("/a") }]);
+    }
+
+    #[test]
+    fn coalesce_delete_then_create_becomes_create() {
+        let raw = vec![RawEvent::Deleted(pb("/a")), RawEvent::Created(pb("/a"))];
+        let out = coalesce_events(&raw);
+        assert_eq!(out, vec![FsChangeEvent::Created { path: pb("/a") }]);
+    }
+
+    #[test]
+    fn coalesce_preserves_per_path_ordering() {
+        // Two paths, distinct events. Output must contain one event per
+        // path, in first-seen order (a before b), with no interleaving.
+        let raw = vec![
+            RawEvent::Created(pb("/a")),
+            RawEvent::Modified(pb("/b")),
+            RawEvent::Modified(pb("/a")),
+            RawEvent::Modified(pb("/b")),
+        ];
+        let out = coalesce_events(&raw);
+        assert_eq!(
+            out,
+            vec![
+                FsChangeEvent::Created { path: pb("/a") },
+                FsChangeEvent::Modified { path: pb("/b") },
+            ]
+        );
+    }
+
+    #[test]
+    fn coalesce_unknown_passes_through() {
+        let raw = vec![RawEvent::Any(pb("/a"))];
+        let out = coalesce_events(&raw);
+        assert_eq!(out, vec![FsChangeEvent::Unknown { path: pb("/a") }]);
+    }
+
+    #[test]
+    fn coalesce_overflow_passes_through() {
+        let raw = vec![RawEvent::Overflow { root: pb("/root") }];
+        let out = coalesce_events(&raw);
+        assert_eq!(out, vec![FsChangeEvent::Coarse { root: pb("/root") }]);
+    }
+
+    #[test]
+    fn coalesce_error_passes_through() {
+        let raw = vec![RawEvent::Error("boom".into())];
+        let out = coalesce_events(&raw);
+        assert_eq!(
+            out,
+            vec![FsChangeEvent::Error {
+                message: "boom".into()
+            }]
+        );
+    }
+
+    #[test]
+    fn coalesce_empty_batch_returns_empty() {
+        let out = coalesce_events(&[]);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn coalesce_mixed_batch_big() {
+        // 5 paths, 20 raw events covering each documented case:
+        //   /a — Created+Modified×3            → Created
+        //   /b — Modified×4                    → Modified
+        //   /c — Created+Deleted               → cancelled (no event)
+        //   /d — Modified+Deleted              → Deleted
+        //   /e — Deleted+Created               → Created
+        let raw = vec![
+            RawEvent::Created(pb("/a")),
+            RawEvent::Modified(pb("/b")),
+            RawEvent::Created(pb("/c")),
+            RawEvent::Modified(pb("/d")),
+            RawEvent::Deleted(pb("/e")),
+            RawEvent::Modified(pb("/a")),
+            RawEvent::Modified(pb("/b")),
+            RawEvent::Deleted(pb("/c")),
+            RawEvent::Modified(pb("/d")),
+            RawEvent::Created(pb("/e")),
+            RawEvent::Modified(pb("/a")),
+            RawEvent::Modified(pb("/b")),
+            RawEvent::Modified(pb("/d")),
+            RawEvent::Modified(pb("/a")),
+            RawEvent::Modified(pb("/b")),
+            RawEvent::Deleted(pb("/d")),
+            RawEvent::Modified(pb("/a")),
+            RawEvent::Modified(pb("/b")),
+            RawEvent::Modified(pb("/a")),
+            RawEvent::Modified(pb("/b")),
+        ];
+        let out = coalesce_events(&raw);
+        assert!(
+            out.len() < raw.len(),
+            "coalesced output should be strictly smaller: {out:?}"
+        );
+        // /c cancelled, so 4 paths produce events.
+        assert_eq!(out.len(), 4, "one event per surviving path: {out:?}");
+        assert_eq!(
+            out,
+            vec![
+                FsChangeEvent::Created { path: pb("/a") },
+                FsChangeEvent::Modified { path: pb("/b") },
+                FsChangeEvent::Deleted { path: pb("/d") },
+                FsChangeEvent::Created { path: pb("/e") },
+            ]
         );
     }
 

@@ -39,6 +39,9 @@ pub struct WalkOptions {
     pub include_hidden: bool,
     /// If true, the walk root is returned as the first result.
     pub include_root: bool,
+    /// Worker threads for parallel walk. 0 or 1 = sequential. SPEC §4.3
+    /// recommends capping at 8 to leave headroom for editor work.
+    pub parallelism: usize,
 }
 
 impl Default for WalkOptions {
@@ -48,6 +51,7 @@ impl Default for WalkOptions {
             follow_symlinks: SymlinkPolicy::default(),
             include_hidden: true,
             include_root: false,
+            parallelism: 0,
         }
     }
 }
@@ -78,8 +82,12 @@ pub fn walk(root: &Path, options: WalkOptions) -> Result<Vec<WalkedEntry>, FxErr
     }
 
     let follow = matches!(options.follow_symlinks, SymlinkPolicy::Always);
+    let parallelism = match options.parallelism {
+        0 | 1 => Parallelism::Serial,
+        n => Parallelism::RayonNewPool(n),
+    };
     let mut builder = WalkDir::new(root)
-        .parallelism(Parallelism::Serial)
+        .parallelism(parallelism)
         .follow_links(follow)
         .sort(true);
     if let Some(d) = options.max_depth {
@@ -159,6 +167,62 @@ pub fn walk(root: &Path, options: WalkOptions) -> Result<Vec<WalkedEntry>, FxErr
     }
 
     Ok(out)
+}
+
+/// Convert a walked entry set into `Entry` records and push them into
+/// `EntryStore`, resolving each entry's `parent_id` from a path-indexed map
+/// built during the insertion pass. Expects walk output to be pre-ordered
+/// (parents before children) — which `walk()` guarantees via jwalk's DFS.
+///
+/// Returns the list of allocated EntryIds in insertion order. Phase 2.4
+/// coalescer: later phases may extend this to stream via a channel rather
+/// than materialize the full Vec first.
+pub fn populate_store(
+    store: &crate::store::EntryStore,
+    root: &Path,
+    walked: &[WalkedEntry],
+) -> Result<Vec<crate::entry::EntryId>, FxError> {
+    use crate::entry::{Entry, EntryId};
+    use std::collections::HashMap;
+
+    let mut path_to_id: HashMap<PathBuf, EntryId> = HashMap::with_capacity(walked.len());
+    let mut ids = Vec::with_capacity(walked.len());
+
+    for w in walked {
+        let parent_id = match &w.parent_path {
+            None => None,
+            Some(pp) => {
+                // The walk root is a valid parent whose entry we may not have
+                // inserted (when include_root=false). Treat "parent == walk root"
+                // as parent_id = None so workspace children attach as roots.
+                if pp == root {
+                    path_to_id.get(pp).copied()
+                } else {
+                    path_to_id.get(pp).copied()
+                }
+            }
+        };
+
+        let entry = Entry {
+            id: EntryId(0),
+            parent_id,
+            name: w.name.clone(),
+            kind: w.kind,
+            size: w.size,
+            mtime_ms: w.mtime_ms,
+            ctime_ms: w.ctime_ms,
+            symlink_target_is_dir: None,
+            path_segments: None,
+            is_ignored: false,
+            is_readonly: w.is_readonly,
+            is_hidden: w.is_hidden,
+        };
+        let id = store.insert(w.path.clone(), entry)?;
+        path_to_id.insert(w.path.clone(), id);
+        ids.push(id);
+    }
+
+    Ok(ids)
 }
 
 fn system_time_ms(t: SystemTime) -> Option<i64> {
@@ -303,6 +367,108 @@ mod tests {
         );
         let entries = walk(td.path(), WalkOptions::default()).unwrap();
         assert_eq!(entries[0].size, 43);
+    }
+
+    #[test]
+    fn parallel_walk_returns_same_entry_set_as_serial() {
+        use std::collections::HashSet;
+        let td = TempDir::new().unwrap();
+        fs::create_dir_all(td.path().join("a/b/c")).unwrap();
+        fs::create_dir_all(td.path().join("d")).unwrap();
+        for n in ["f1.txt", "f2.txt", "f3.txt"] {
+            make_file(&td.path().join("a/b"), n, b"x");
+        }
+        for n in ["g1.txt", "g2.txt"] {
+            make_file(&td.path().join("d"), n, b"y");
+        }
+
+        let serial = walk(td.path(), WalkOptions::default()).unwrap();
+        let parallel = walk(
+            td.path(),
+            WalkOptions {
+                parallelism: 4,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(serial.len(), parallel.len());
+        let ser_paths: HashSet<PathBuf> = serial.into_iter().map(|e| e.path).collect();
+        let par_paths: HashSet<PathBuf> = parallel.into_iter().map(|e| e.path).collect();
+        assert_eq!(ser_paths, par_paths);
+    }
+
+    #[test]
+    fn populate_store_links_parents_correctly() {
+        use crate::store::EntryStore;
+        let td = TempDir::new().unwrap();
+        fs::create_dir_all(td.path().join("a/b")).unwrap();
+        make_file(&td.path().join("a/b"), "c.txt", b"hi");
+
+        let walked = walk(td.path(), WalkOptions::default()).unwrap();
+        let store = EntryStore::new();
+        let ids = populate_store(&store, td.path(), &walked).unwrap();
+        assert_eq!(ids.len(), walked.len());
+
+        let snap = store.snapshot();
+        // /a is a root (its parent is the walk root).
+        let a = store.get_by_path(&td.path().join("a")).unwrap();
+        assert_eq!(a.parent_id, None);
+        assert_eq!(snap.roots().len(), 1);
+        assert_eq!(snap.roots()[0], a.id);
+
+        // /a/b has parent_id = a.id.
+        let b = store.get_by_path(&td.path().join("a/b")).unwrap();
+        assert_eq!(b.parent_id, Some(a.id));
+        assert_eq!(snap.children_of(a.id), &[b.id]);
+
+        // /a/b/c.txt has parent_id = b.id.
+        let c = store.get_by_path(&td.path().join("a/b/c.txt")).unwrap();
+        assert_eq!(c.parent_id, Some(b.id));
+        assert_eq!(snap.children_of(b.id), &[c.id]);
+
+        // Subtree summaries: three visible nodes under a.
+        assert_eq!(snap.subtree_visible_count(a.id), 3);
+        assert_eq!(snap.subtree_total_size(a.id), 2);
+    }
+
+    #[test]
+    fn populate_store_handles_empty_walk() {
+        use crate::store::EntryStore;
+        let td = TempDir::new().unwrap();
+        let walked = walk(td.path(), WalkOptions::default()).unwrap();
+        let store = EntryStore::new();
+        let ids = populate_store(&store, td.path(), &walked).unwrap();
+        assert!(ids.is_empty());
+        assert_eq!(store.snapshot().entry_count(), 0);
+    }
+
+    #[test]
+    fn populate_store_large_fixture_completes_under_budget() {
+        use crate::store::EntryStore;
+        use std::time::Instant;
+
+        let td = TempDir::new().unwrap();
+        // Create a broad tree: 20 top-level dirs × 50 files each = 1020 entries.
+        // Enough to exercise the code paths without making tests slow.
+        for i in 0..20 {
+            let dir = td.path().join(format!("d{:02}", i));
+            fs::create_dir(&dir).unwrap();
+            for j in 0..50 {
+                make_file(&dir, &format!("f{:03}.txt", j), b"hello");
+            }
+        }
+
+        let walked = walk(td.path(), WalkOptions::default()).unwrap();
+        assert_eq!(walked.len(), 20 + 20 * 50);
+
+        let store = EntryStore::new();
+        let t0 = Instant::now();
+        populate_store(&store, td.path(), &walked).unwrap();
+        let elapsed = t0.elapsed();
+        assert_eq!(store.snapshot().entry_count(), 1020);
+        // Debug-mode budget is loose; Phase 12 tightens with release bench.
+        assert!(elapsed.as_secs() < 3, "populate took {:?}", elapsed);
     }
 
     #[cfg(unix)]

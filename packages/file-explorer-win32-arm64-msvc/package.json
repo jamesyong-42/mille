@@ -1,0 +1,19 @@
+{
+  "name": "@mille/file-explorer-win32-arm64-msvc",
+  "version": "0.0.0",
+  "description": "Prebuilt native binary for @mille/file-explorer on win32-arm64-msvc.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jamesyong-42/mille"
+  },
+  "main": "file-explorer.win32-arm64-msvc.node",
+  "files": [
+    "file-explorer.*.node"
+  ],
+  "os": ["win32"],
+  "cpu": ["arm64"],
+  "engines": {
+    "node": ">=18"
+  }
+}

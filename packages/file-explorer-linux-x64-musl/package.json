@@ -1,0 +1,20 @@
+{
+  "name": "@mille/file-explorer-linux-x64-musl",
+  "version": "0.0.0",
+  "description": "Prebuilt native binary for @mille/file-explorer on linux-x64-musl.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jamesyong-42/mille"
+  },
+  "main": "file-explorer.linux-x64-musl.node",
+  "files": [
+    "file-explorer.*.node"
+  ],
+  "os": ["linux"],
+  "cpu": ["x64"],
+  "libc": ["musl"],
+  "engines": {
+    "node": ">=18"
+  }
+}

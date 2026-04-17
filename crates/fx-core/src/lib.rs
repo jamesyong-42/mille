@@ -27,10 +27,14 @@ pub use snapshot::StoreSnapshot;
 
 // TODO: Phase 2 — jwalk-based walker + coalescer
 pub mod walker;
-pub use walker::{populate_store, walk, SymlinkPolicy, WalkOptions, WalkedEntry};
+pub use walker::{
+    build_ignore_matcher_from_walk, populate_store, walk, SymlinkPolicy, WalkOptions,
+    WalkedEntry,
+};
 
 // TODO: Phase 2 — ripgrep `ignore` crate wrapper
 pub mod ignore;
+pub use crate::ignore::{IgnoreMatcher, IGNORE_FILE_NAMES};
 
 // TODO: Phase 3 — notify + debouncer + rename pairing + volatile throttling
 pub mod watcher;

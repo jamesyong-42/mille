@@ -89,6 +89,7 @@ pub fn walk(root: &Path, options: WalkOptions) -> Result<Vec<WalkedEntry>, FxErr
     let mut builder = WalkDir::new(root)
         .parallelism(parallelism)
         .follow_links(follow)
+        .skip_hidden(false)  // we handle hidden filtering ourselves per `include_hidden`
         .sort(true);
     if let Some(d) = options.max_depth {
         builder = builder.max_depth(d);
@@ -181,8 +182,9 @@ pub fn populate_store(
     store: &crate::store::EntryStore,
     root: &Path,
     walked: &[WalkedEntry],
+    ignore: Option<&crate::ignore::IgnoreMatcher>,
 ) -> Result<Vec<crate::entry::EntryId>, FxError> {
-    use crate::entry::{Entry, EntryId};
+    use crate::entry::{Entry, EntryId, EntryKind};
     use std::collections::HashMap;
 
     let mut path_to_id: HashMap<PathBuf, EntryId> = HashMap::with_capacity(walked.len());
@@ -191,16 +193,15 @@ pub fn populate_store(
     for w in walked {
         let parent_id = match &w.parent_path {
             None => None,
-            Some(pp) => {
-                // The walk root is a valid parent whose entry we may not have
-                // inserted (when include_root=false). Treat "parent == walk root"
-                // as parent_id = None so workspace children attach as roots.
-                if pp == root {
-                    path_to_id.get(pp).copied()
-                } else {
-                    path_to_id.get(pp).copied()
-                }
-            }
+            Some(pp) => path_to_id.get(pp).copied(),
+        };
+
+        // Suppress unused-variable warning on non-ignore paths.
+        let _ = root;
+
+        let is_ignored = match ignore {
+            Some(m) => m.is_ignored(&w.path, w.kind == EntryKind::Directory),
+            None => false,
         };
 
         let entry = Entry {
@@ -213,7 +214,7 @@ pub fn populate_store(
             ctime_ms: w.ctime_ms,
             symlink_target_is_dir: None,
             path_segments: None,
-            is_ignored: false,
+            is_ignored,
             is_readonly: w.is_readonly,
             is_hidden: w.is_hidden,
         };
@@ -223,6 +224,24 @@ pub fn populate_store(
     }
 
     Ok(ids)
+}
+
+/// Scan walked entries for `.gitignore` / `.ignore` / `.rgignore` files and
+/// build a stacked `IgnoreMatcher` that covers all of them. Convenience for
+/// the common "walk → build-matcher → populate" flow.
+pub fn build_ignore_matcher_from_walk(
+    walked: &[WalkedEntry],
+) -> Result<crate::ignore::IgnoreMatcher, FxError> {
+    let mut matcher = crate::ignore::IgnoreMatcher::new();
+    for w in walked {
+        if crate::ignore::IGNORE_FILE_NAMES
+            .iter()
+            .any(|n| w.name.as_str() == *n)
+        {
+            matcher.add_from_file(&w.path)?;
+        }
+    }
+    Ok(matcher)
 }
 
 fn system_time_ms(t: SystemTime) -> Option<i64> {
@@ -407,7 +426,7 @@ mod tests {
 
         let walked = walk(td.path(), WalkOptions::default()).unwrap();
         let store = EntryStore::new();
-        let ids = populate_store(&store, td.path(), &walked).unwrap();
+        let ids = populate_store(&store, td.path(), &walked, None).unwrap();
         assert_eq!(ids.len(), walked.len());
 
         let snap = store.snapshot();
@@ -438,9 +457,49 @@ mod tests {
         let td = TempDir::new().unwrap();
         let walked = walk(td.path(), WalkOptions::default()).unwrap();
         let store = EntryStore::new();
-        let ids = populate_store(&store, td.path(), &walked).unwrap();
+        let ids = populate_store(&store, td.path(), &walked, None).unwrap();
         assert!(ids.is_empty());
         assert_eq!(store.snapshot().entry_count(), 0);
+    }
+
+    #[test]
+    fn populate_store_flags_ignored_entries_when_matcher_provided() {
+        use crate::store::EntryStore;
+
+        let td = TempDir::new().unwrap();
+        fs::write(td.path().join(".gitignore"), "*.log\nbuild/\n").unwrap();
+        make_file(td.path(), "debug.log", b"");
+        make_file(td.path(), "main.rs", b"");
+        fs::create_dir(td.path().join("build")).unwrap();
+        make_file(&td.path().join("build"), "output.bin", b"");
+
+        let walked = walk(td.path(), WalkOptions::default()).unwrap();
+        let matcher = build_ignore_matcher_from_walk(&walked).unwrap();
+        assert_eq!(matcher.matcher_count(), 1);
+
+        let store = EntryStore::new();
+        populate_store(&store, td.path(), &walked, Some(&matcher)).unwrap();
+
+        let debug = store.get_by_path(&td.path().join("debug.log")).unwrap();
+        let main = store.get_by_path(&td.path().join("main.rs")).unwrap();
+        let build = store.get_by_path(&td.path().join("build")).unwrap();
+        let output = store.get_by_path(&td.path().join("build/output.bin")).unwrap();
+
+        assert!(debug.is_ignored);
+        assert!(!main.is_ignored);
+        assert!(build.is_ignored);
+        assert!(output.is_ignored);
+
+        // Subtree visible counts exclude both ignored AND hidden entries.
+        // .gitignore is hidden (starts with '.'), debug.log/build/*.bin are
+        // ignored — so only main.rs is visible.
+        let snap = store.snapshot();
+        let total_visible: u32 = snap
+            .roots()
+            .iter()
+            .map(|&r| snap.subtree_visible_count(r))
+            .sum();
+        assert_eq!(total_visible, 1);
     }
 
     #[test]
@@ -464,7 +523,7 @@ mod tests {
 
         let store = EntryStore::new();
         let t0 = Instant::now();
-        populate_store(&store, td.path(), &walked).unwrap();
+        populate_store(&store, td.path(), &walked, None).unwrap();
         let elapsed = t0.elapsed();
         assert_eq!(store.snapshot().entry_count(), 1020);
         // Debug-mode budget is loose; Phase 12 tightens with release bench.

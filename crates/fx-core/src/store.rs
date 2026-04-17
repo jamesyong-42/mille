@@ -121,14 +121,10 @@ impl EntryStore {
 
         let mut next = (*current).clone();
 
-        // Capture the entry's cached contributions BEFORE mutating anything,
-        // so ancestor decrements always see the exact values we added on insert.
-        let vis_contribution = next
-            .descendant_visible_counts
-            .get(&id)
-            .copied()
-            .unwrap_or(0);
-        let size_contribution = next.descendant_total_sizes.get(&id).copied().unwrap_or(0);
+        // Self-only contribution; the cache slot holds subtree totals, which
+        // would double-count when descendants' own cache entries are still live.
+        let vis_contribution = if entry_counts_visible(&existing) { 1u32 } else { 0 };
+        let size_contribution = existing.size;
         let parent_for_walk = existing.parent_id;
 
         next.entries.remove(&id)?;
@@ -202,6 +198,46 @@ impl EntryStore {
             ));
         }
 
+        let new_name = new_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .ok_or_else(|| {
+                FxError::InvalidInput("new_path has no valid UTF-8 filename".into())
+            })?
+            .to_string();
+
+        let current = self.inner.load_full();
+        let mut next = (*current).clone();
+
+        // Clone the Entry, update name, reinsert the Arc.
+        let mut updated = (*entry).clone();
+        updated.name = new_name.clone();
+        next.entries.insert(id, Arc::new(updated));
+
+        // Re-sort siblings: the entry's position is keyed by name.
+        if let Some(parent_id) = entry.parent_id {
+            if let Some(siblings) = next.children.get_mut(&parent_id) {
+                if let Some(pos) = siblings.iter().position(|&c| c == id) {
+                    siblings.remove(pos);
+                }
+                let insert_pos = siblings
+                    .binary_search_by(|&sib| {
+                        let sib_name = next
+                            .entries
+                            .get(&sib)
+                            .map(|e| e.name.as_str())
+                            .unwrap_or("");
+                        sib_name.cmp(&new_name)
+                    })
+                    .unwrap_or_else(|e| e);
+                siblings.insert(insert_pos, id);
+            }
+        }
+
+        next.tree_version += 1;
+        self.inner.store(Arc::new(next));
+
+        // path_to_id update trails snapshot publish, matching insert()'s ordering.
         let old_path = self
             .path_to_id
             .iter()
@@ -212,10 +248,6 @@ impl EntryStore {
         }
         self.path_to_id.insert(new_path, id);
 
-        let current = self.inner.load_full();
-        let mut next = (*current).clone();
-        next.tree_version += 1;
-        self.inner.store(Arc::new(next));
         Ok(())
     }
 
@@ -530,5 +562,53 @@ mod tests {
             "cycle defense failed: insert took {:?}",
             elapsed
         );
+    }
+
+    #[test]
+    fn remove_dir_with_child_does_not_corrupt_ancestor_cache() {
+        // Pre-fix, remove(d) subtracted d's subtree total (2) from root, leaving
+        // root's cache at 1 while {root, leaf} are still live — permanently wrong.
+        let s = EntryStore::new();
+        let root = s.insert("/r".into(), dir("r", None)).unwrap();
+        let d = s.insert("/r/d".into(), dir("d", Some(root))).unwrap();
+        let leaf_id = s
+            .insert("/r/d/f".into(), leaf("f", Some(d)))
+            .unwrap();
+
+        assert_eq!(s.snapshot().subtree_visible_count(root), 3);
+
+        // Remove dir directly (leaf still present): root drops by 1 (d itself), not 2.
+        s.remove(d).unwrap();
+        assert_eq!(s.snapshot().subtree_visible_count(root), 2);
+
+        // Orphan leaf removal can't find root (parent d is gone) — documented
+        // dangling-subtree behavior; root's slot is unaffected.
+        s.remove(leaf_id).unwrap();
+        assert_eq!(s.snapshot().subtree_visible_count(root), 2);
+
+        // Removing root clears its own cache slot; final count is 0.
+        s.remove(root).unwrap();
+        assert_eq!(s.snapshot().subtree_visible_count(root), 0);
+    }
+
+    #[test]
+    fn rename_leaf_updates_stored_entry_name() {
+        let s = EntryStore::new();
+        let id = s.insert("/old".into(), leaf("old", None)).unwrap();
+        s.rename(id, "/new".into()).unwrap();
+        assert_eq!(s.get_by_id(id).unwrap().name, "new");
+    }
+
+    #[test]
+    fn rename_leaf_resorts_siblings() {
+        let s = EntryStore::new();
+        let root = s.insert("/r".into(), dir("r", None)).unwrap();
+        let a = s.insert("/r/a".into(), leaf("a", Some(root))).unwrap();
+        let b = s.insert("/r/b".into(), leaf("b", Some(root))).unwrap();
+        let c = s.insert("/r/c".into(), leaf("c", Some(root))).unwrap();
+        assert_eq!(s.snapshot().children_of(root), &[a, b, c]);
+
+        s.rename(b, "/r/zzz".into()).unwrap();
+        assert_eq!(s.snapshot().children_of(root), &[a, c, b]);
     }
 }

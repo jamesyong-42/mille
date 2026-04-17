@@ -44,6 +44,7 @@ pub mod search;
 
 // TODO: Phase 2 — compact-folders computation
 pub mod compact;
+pub use compact::{compact_chain_for, is_compacted_intermediate};
 
 // TODO: Phase 1 — FxError + ErrorCode mapping
 pub mod error;

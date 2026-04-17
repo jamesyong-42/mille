@@ -166,22 +166,24 @@ impl StoreSnapshot {
             let visible = include_ignored || entry_counts_visible(entry);
             if visible {
                 *known = known.saturating_add(1);
-            }
-            if expanded.contains(&id) {
-                match self.children.get(&id) {
-                    Some(kids) if !kids.is_empty() => {
-                        // Push reversed so DFS emits children left-to-right.
-                        for &child in kids.iter().rev() {
-                            stack.push(child);
+                // Only descend when the parent itself would render — otherwise
+                // children would appear as orphan rows with no parent above.
+                if expanded.contains(&id) {
+                    match self.children.get(&id) {
+                        Some(kids) if !kids.is_empty() => {
+                            // Push reversed so DFS emits children left-to-right.
+                            for &child in kids.iter().rev() {
+                                stack.push(child);
+                            }
                         }
-                    }
-                    Some(_) => {
-                        // Known-empty dir — nothing to add, nothing pending.
-                    }
-                    None => {
-                        // Expanded but children-map missing: worker hasn't
-                        // delivered them yet. Report to caller.
-                        pending.push(id);
+                        Some(_) => {
+                            // Known-empty dir — nothing to add, nothing pending.
+                        }
+                        None => {
+                            // Expanded but children-map missing: worker hasn't
+                            // delivered them yet. Report to caller.
+                            pending.push(id);
+                        }
                     }
                 }
             }
@@ -223,12 +225,14 @@ impl StoreSnapshot {
                         return out;
                     }
                 }
-            }
-            if query.expanded.contains(&id) {
-                if let Some(kids) = self.children.get(&id) {
-                    let child_depth = depth.saturating_add(1);
-                    for &child in kids.iter().rev() {
-                        stack.push((child, child_depth));
+                // Only descend when the parent itself would render — otherwise
+                // children would appear as orphan rows at the wrong depth.
+                if query.expanded.contains(&id) {
+                    if let Some(kids) = self.children.get(&id) {
+                        let child_depth = depth.saturating_add(1);
+                        for &child in kids.iter().rev() {
+                            stack.push((child, child_depth));
+                        }
                     }
                 }
             }
@@ -535,6 +539,50 @@ mod tests {
         });
         let sliced: Vec<EntryId> = rows.iter().map(|r| r.id).collect();
         assert_eq!(sliced, vec![ids[2], ids[3], ids[4], ids[5]]);
+    }
+
+    #[test]
+    fn invisible_expanded_parent_suppresses_children() {
+        // Tree: R (visible) -> D (ignored) -> G (visible). Both R and D are in
+        // the expanded set — stale entry for D survives after it becomes ignored.
+        let mut snap = StoreSnapshot::empty();
+        let r = EntryId(1);
+        let d = EntryId(2);
+        let g = EntryId(3);
+        seed(&mut snap, r, None, "r", EntryKind::Directory, 0, false, false);
+        seed(&mut snap, d, Some(r), "d", EntryKind::Directory, 0, true, false);
+        seed(&mut snap, g, Some(d), "g", EntryKind::File, 0, false, false);
+
+        let mut expanded: HashSet<EntryId> = HashSet::new();
+        expanded.insert(r);
+        expanded.insert(d);
+
+        // include_ignored=false: D is suppressed, and G must not leak through.
+        let vc = snap.visible_row_count(&expanded, false);
+        assert_eq!(vc.known, 1);
+        assert!(vc.pending_expansions.is_empty());
+
+        let rows = snap.visible_rows(VisibleRowsQuery {
+            expanded: &expanded,
+            offset: 0,
+            limit: 10,
+            include_ignored: false,
+        });
+        let ids: Vec<EntryId> = rows.iter().map(|r| r.id).collect();
+        assert_eq!(ids, vec![r]);
+
+        // include_ignored=true: D becomes visible, so descent resumes.
+        let vc_all = snap.visible_row_count(&expanded, true);
+        assert_eq!(vc_all.known, 3);
+
+        let rows_all = snap.visible_rows(VisibleRowsQuery {
+            expanded: &expanded,
+            offset: 0,
+            limit: 10,
+            include_ignored: true,
+        });
+        let ids_all: Vec<EntryId> = rows_all.iter().map(|r| r.id).collect();
+        assert_eq!(ids_all, vec![r, d, g]);
     }
 
     #[test]

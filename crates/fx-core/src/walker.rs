@@ -172,8 +172,13 @@ pub fn walk(root: &Path, options: WalkOptions) -> Result<Vec<WalkedEntry>, FxErr
 
 /// Convert a walked entry set into `Entry` records and push them into
 /// `EntryStore`, resolving each entry's `parent_id` from a path-indexed map
-/// built during the insertion pass. Expects walk output to be pre-ordered
-/// (parents before children) — which `walk()` guarantees via jwalk's DFS.
+/// built during the insertion pass.
+///
+/// Internally topo-sorts by (depth asc, path asc) before insertion so that
+/// parents are always processed before their children, regardless of walker
+/// order. `Parallelism::Serial` happens to preserve DFS ordering, but
+/// `Parallelism::RayonNewPool(n)` does not — without this sort, children
+/// whose parent had not yet been seen would silently become spurious roots.
 ///
 /// Returns the list of allocated EntryIds in insertion order. Phase 2.4
 /// coalescer: later phases may extend this to stream via a channel rather
@@ -190,7 +195,14 @@ pub fn populate_store(
     let mut path_to_id: HashMap<PathBuf, EntryId> = HashMap::with_capacity(walked.len());
     let mut ids = Vec::with_capacity(walked.len());
 
-    for w in walked {
+    // Topo-sort by (depth asc, path asc). Walker output under
+    // Parallelism::RayonNewPool(n) does not guarantee parent-before-child
+    // order; without this sort, children whose parent hadn't been inserted
+    // would look up None in `path_to_id` and attach as spurious roots.
+    let mut ordered: Vec<&WalkedEntry> = walked.iter().collect();
+    ordered.sort_by(|a, b| a.depth.cmp(&b.depth).then_with(|| a.path.cmp(&b.path)));
+
+    for w in ordered {
         let parent_id = match &w.parent_path {
             None => None,
             Some(pp) => path_to_id.get(pp).copied(),
@@ -528,6 +540,74 @@ mod tests {
         assert_eq!(store.snapshot().entry_count(), 1020);
         // Debug-mode budget is loose; Phase 12 tightens with release bench.
         assert!(elapsed.as_secs() < 3, "populate took {:?}", elapsed);
+    }
+
+    #[test]
+    fn populate_store_handles_out_of_order_walked_entries() {
+        use crate::store::EntryStore;
+        let td = TempDir::new().unwrap();
+        fs::create_dir_all(td.path().join("a/b")).unwrap();
+        make_file(&td.path().join("a/b"), "c.txt", b"hi");
+
+        let mut walked = walk(td.path(), WalkOptions::default()).unwrap();
+        // Reverse the slice so deepest entries appear first — worst case for
+        // parent lookup in an unsorted insertion loop.
+        walked.reverse();
+
+        let store = EntryStore::new();
+        populate_store(&store, td.path(), &walked, None).unwrap();
+
+        let a = store.get_by_path(&td.path().join("a")).unwrap();
+        let b = store.get_by_path(&td.path().join("a/b")).unwrap();
+        let c = store.get_by_path(&td.path().join("a/b/c.txt")).unwrap();
+
+        assert_eq!(a.parent_id, None);
+        assert_eq!(b.parent_id, Some(a.id));
+        assert_eq!(c.parent_id, Some(b.id));
+
+        let snap = store.snapshot();
+        assert_eq!(snap.roots().len(), 1);
+        assert_eq!(snap.roots()[0], a.id);
+        assert_eq!(snap.children_of(a.id), &[b.id]);
+        assert_eq!(snap.children_of(b.id), &[c.id]);
+    }
+
+    #[test]
+    fn populate_store_parallel_walk_preserves_structure() {
+        use crate::store::EntryStore;
+        let td = TempDir::new().unwrap();
+        fs::create_dir_all(td.path().join("a/b")).unwrap();
+        make_file(&td.path().join("a/b"), "c.txt", b"hi");
+
+        let walked = walk(
+            td.path(),
+            WalkOptions {
+                parallelism: 4,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let store = EntryStore::new();
+        let ids = populate_store(&store, td.path(), &walked, None).unwrap();
+        assert_eq!(ids.len(), walked.len());
+
+        let snap = store.snapshot();
+        let a = store.get_by_path(&td.path().join("a")).unwrap();
+        assert_eq!(a.parent_id, None);
+        assert_eq!(snap.roots().len(), 1);
+        assert_eq!(snap.roots()[0], a.id);
+
+        let b = store.get_by_path(&td.path().join("a/b")).unwrap();
+        assert_eq!(b.parent_id, Some(a.id));
+        assert_eq!(snap.children_of(a.id), &[b.id]);
+
+        let c = store.get_by_path(&td.path().join("a/b/c.txt")).unwrap();
+        assert_eq!(c.parent_id, Some(b.id));
+        assert_eq!(snap.children_of(b.id), &[c.id]);
+
+        assert_eq!(snap.subtree_visible_count(a.id), 3);
+        assert_eq!(snap.subtree_total_size(a.id), 2);
     }
 
     #[cfg(unix)]

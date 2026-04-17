@@ -57,10 +57,33 @@ impl EntryStore {
         let _guard = self.write_lock.lock();
         let id = EntryId::alloc_from(&self.id_counter)?;
         entry.id = id;
+        let parent = entry.parent_id;
+        let name = entry.name.clone();
 
         let current = self.inner.load_full();
         let mut next = (*current).clone();
         next.entries.insert(id, Arc::new(entry));
+
+        match parent {
+            None => next.roots.push(id),
+            Some(parent_id) => {
+                let siblings = next.children.entry(parent_id).or_default();
+                // Binary-search by sibling name (raw bytes). O(log n) position find + O(n) insert.
+                let pos = siblings
+                    .binary_search_by(|&sib| {
+                        let sib_name = next
+                            .entries
+                            .get(&sib)
+                            .map(|e| e.name.as_str())
+                            .unwrap_or("");
+                        sib_name.cmp(&name)
+                    })
+                    .unwrap_or_else(|e| e);
+                siblings.insert(pos, id);
+                *next.direct_child_counts.entry(parent_id).or_insert(0) += 1;
+            }
+        }
+
         next.tree_version += 1;
         self.inner.store(Arc::new(next));
 
@@ -71,11 +94,29 @@ impl EntryStore {
     pub fn remove(&self, id: EntryId) -> Option<Arc<Entry>> {
         let _guard = self.write_lock.lock();
         let current = self.inner.load_full();
-        if !current.entries.contains_key(&id) {
-            return None;
-        }
+        let existing = current.entries.get(&id)?.clone();
+
         let mut next = (*current).clone();
-        let removed = next.entries.remove(&id)?;
+        next.entries.remove(&id)?;
+
+        match existing.parent_id {
+            None => {
+                if let Some(pos) = next.roots.iter().position(|&r| r == id) {
+                    next.roots.remove(pos);
+                }
+            }
+            Some(parent_id) => {
+                if let Some(siblings) = next.children.get_mut(&parent_id) {
+                    if let Some(pos) = siblings.iter().position(|&c| c == id) {
+                        siblings.remove(pos);
+                    }
+                }
+                if let Some(count) = next.direct_child_counts.get_mut(&parent_id) {
+                    *count = count.saturating_sub(1);
+                }
+            }
+        }
+
         next.tree_version += 1;
         self.inner.store(Arc::new(next));
 
@@ -88,7 +129,7 @@ impl EntryStore {
         if let Some(p) = path_to_remove {
             self.path_to_id.remove(&p);
         }
-        Some(removed)
+        Some(existing)
     }
 
     pub fn rename(&self, id: EntryId, new_path: PathBuf) -> Result<(), FxError> {
@@ -264,6 +305,77 @@ mod tests {
         }
         assert_eq!(all.len(), THREADS * PER_THREAD);
         assert_eq!(s.snapshot().entry_count(), THREADS * PER_THREAD);
+    }
+
+    #[test]
+    fn insert_root_appears_in_roots_and_has_no_children() {
+        let s = EntryStore::new();
+        let root = s.insert("/r".into(), dir("r", None)).unwrap();
+        let snap = s.snapshot();
+        assert_eq!(snap.roots(), &[root]);
+        assert!(snap.children_of(root).is_empty());
+        assert_eq!(snap.direct_child_count(root), None);
+        assert!(!snap.has_children(root));
+    }
+
+    #[test]
+    fn insert_child_updates_parent_children_and_count() {
+        let s = EntryStore::new();
+        let root = s.insert("/r".into(), dir("r", None)).unwrap();
+        let child = s.insert("/r/a".into(), leaf("a", Some(root))).unwrap();
+        let snap = s.snapshot();
+        assert_eq!(snap.children_of(root), &[child]);
+        assert_eq!(snap.direct_child_count(root), Some(1));
+        assert!(snap.has_children(root));
+    }
+
+    #[test]
+    fn siblings_appear_in_sorted_order() {
+        let s = EntryStore::new();
+        let root = s.insert("/r".into(), dir("r", None)).unwrap();
+        // Insert out of order; children list should still come back sorted.
+        let c = s.insert("/r/c".into(), leaf("c", Some(root))).unwrap();
+        let a = s.insert("/r/a".into(), leaf("a", Some(root))).unwrap();
+        let b = s.insert("/r/b".into(), leaf("b", Some(root))).unwrap();
+        let snap = s.snapshot();
+        assert_eq!(snap.children_of(root), &[a, b, c]);
+    }
+
+    #[test]
+    fn remove_child_drops_count_and_children_entry() {
+        let s = EntryStore::new();
+        let root = s.insert("/r".into(), dir("r", None)).unwrap();
+        let a = s.insert("/r/a".into(), leaf("a", Some(root))).unwrap();
+        s.insert("/r/b".into(), leaf("b", Some(root))).unwrap();
+        s.remove(a).unwrap();
+        let snap = s.snapshot();
+        assert_eq!(snap.direct_child_count(root), Some(1));
+        assert_eq!(snap.children_of(root).len(), 1);
+    }
+
+    #[test]
+    fn remove_root_leaves_children_dangling_but_does_not_panic() {
+        // Phase 1: rename/remove are leaf-leaning. If a caller removes a root
+        // with children, the children's parent_id becomes dangling until a
+        // walker-driven rewalk reconciles the subtree. Documented limitation.
+        let s = EntryStore::new();
+        let root = s.insert("/r".into(), dir("r", None)).unwrap();
+        let child = s.insert("/r/a".into(), leaf("a", Some(root))).unwrap();
+        s.remove(root).unwrap();
+        let snap = s.snapshot();
+        assert!(snap.roots().is_empty());
+        assert!(snap.get(child).is_some(), "child still present though dangling");
+    }
+
+    #[test]
+    fn tree_version_bumps_on_every_mutation() {
+        let s = EntryStore::new();
+        let v0 = s.tree_version();
+        s.insert("/a".into(), leaf("a", None)).unwrap();
+        let v1 = s.tree_version();
+        s.insert("/b".into(), leaf("b", None)).unwrap();
+        let v2 = s.tree_version();
+        assert!(v1 > v0 && v2 > v1);
     }
 
     #[test]

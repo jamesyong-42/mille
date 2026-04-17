@@ -10,7 +10,7 @@
 // ancestor-walks in EntryStore insert/remove. A full Zed-style SumTree port
 // is deferred to Phase 12 behind the same public query API.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 
 use smallvec::SmallVec;
@@ -85,6 +85,167 @@ impl StoreSnapshot {
 /// and hidden entries are filtered out by default).
 pub(crate) fn entry_counts_visible(entry: &Entry) -> bool {
     !entry.is_ignored && !entry.is_hidden
+}
+
+// ============================================================================
+// Viewport queries (commit 2.2).
+// ============================================================================
+//
+// These are what the NAPI binding calls via MirrorSnapshot (Phase 5). They are
+// pure Rust against the BTreeMap storage + the summary caches from 2.1. When
+// Phase 12 profiling justifies a sum-tree port these methods become O(log n);
+// today they're O(visible rows), which handles 100k entries in ~1ms.
+
+#[derive(Clone, Debug)]
+pub struct VisibleRowCount {
+    pub known: u32,
+    /// Folders that the client has expanded but whose children haven't arrived
+    /// yet. Empty when the count is fully resolved; non-empty means the UI can
+    /// render a "loading" badge without fudging the scroll-height math.
+    pub pending_expansions: SmallVec<[EntryId; 8]>,
+}
+
+#[derive(Clone, Debug)]
+pub struct VisibleRowsQuery<'a> {
+    pub expanded: &'a HashSet<EntryId>,
+    pub offset: u32,
+    pub limit: u32,
+    pub include_ignored: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VisibleRowOut {
+    pub id: EntryId,
+    pub depth: u16,
+    pub has_children: bool,
+    pub is_expanded: bool,
+}
+
+impl StoreSnapshot {
+    /// Total rows the viewport would render given current `expanded` state,
+    /// plus any expanded folders whose children are still pending.
+    pub fn visible_row_count(
+        &self,
+        expanded: &HashSet<EntryId>,
+        include_ignored: bool,
+    ) -> VisibleRowCount {
+        let mut known: u32 = 0;
+        let mut pending: SmallVec<[EntryId; 8]> = SmallVec::new();
+
+        for &root in self.roots.iter() {
+            self.count_subtree(root, expanded, include_ignored, &mut known, &mut pending);
+        }
+
+        VisibleRowCount {
+            known,
+            pending_expansions: pending,
+        }
+    }
+
+    /// Iterative DFS over a single subtree — avoids native-stack risk on deep
+    /// trees. Emits pending ids for expanded dirs whose children aren't loaded.
+    fn count_subtree(
+        &self,
+        root: EntryId,
+        expanded: &HashSet<EntryId>,
+        include_ignored: bool,
+        known: &mut u32,
+        pending: &mut SmallVec<[EntryId; 8]>,
+    ) {
+        let mut stack: Vec<EntryId> = Vec::new();
+        stack.push(root);
+
+        while let Some(id) = stack.pop() {
+            let Some(entry) = self.entries.get(&id) else { continue };
+            let visible = include_ignored || entry_counts_visible(entry);
+            if visible {
+                *known = known.saturating_add(1);
+            }
+            if expanded.contains(&id) {
+                match self.children.get(&id) {
+                    Some(kids) if !kids.is_empty() => {
+                        // Push reversed so DFS emits children left-to-right.
+                        for &child in kids.iter().rev() {
+                            stack.push(child);
+                        }
+                    }
+                    Some(_) => {
+                        // Known-empty dir — nothing to add, nothing pending.
+                    }
+                    None => {
+                        // Expanded but children-map missing: worker hasn't
+                        // delivered them yet. Report to caller.
+                        pending.push(id);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Flattened visible rows in display order, sliced by `offset`/`limit`.
+    /// Early-terminates the DFS once `limit` rows are collected, so large
+    /// subtrees beyond the viewport don't get materialized.
+    pub fn visible_rows(&self, query: VisibleRowsQuery<'_>) -> Vec<VisibleRowOut> {
+        let limit = query.limit as usize;
+        if limit == 0 {
+            return Vec::new();
+        }
+
+        let mut out: Vec<VisibleRowOut> = Vec::new();
+        let mut skipped: u32 = 0;
+        let mut stack: Vec<(EntryId, u16)> = Vec::new();
+        for &root in self.roots.iter().rev() {
+            stack.push((root, 0));
+        }
+
+        while let Some((id, depth)) = stack.pop() {
+            let Some(entry) = self.entries.get(&id) else { continue };
+            let visible = query.include_ignored || entry_counts_visible(entry);
+            if visible {
+                if skipped < query.offset {
+                    skipped += 1;
+                } else {
+                    let kids = self.children.get(&id);
+                    let has_children = kids.is_some_and(|v| !v.is_empty());
+                    out.push(VisibleRowOut {
+                        id,
+                        depth,
+                        has_children,
+                        is_expanded: query.expanded.contains(&id),
+                    });
+                    if out.len() >= limit {
+                        return out;
+                    }
+                }
+            }
+            if query.expanded.contains(&id) {
+                if let Some(kids) = self.children.get(&id) {
+                    let child_depth = depth.saturating_add(1);
+                    for &child in kids.iter().rev() {
+                        stack.push((child, child_depth));
+                    }
+                }
+            }
+        }
+
+        out
+    }
+
+    /// Cross-check helper for tests. Not exposed to production callers.
+    #[cfg(test)]
+    pub(crate) fn visible_row_count_naive(
+        &self,
+        expanded: &HashSet<EntryId>,
+        include_ignored: bool,
+    ) -> u32 {
+        self.visible_rows(VisibleRowsQuery {
+            expanded,
+            offset: 0,
+            limit: u32::MAX,
+            include_ignored,
+        })
+        .len() as u32
+    }
 }
 
 #[cfg(test)]
@@ -220,5 +381,241 @@ mod tests {
         seed(&mut snap, f2, Some(d), "f2", EntryKind::File, 200, false, false);
         assert_eq!(snap.subtree_total_size(d), 300);
         assert_eq!(snap.subtree_visible_count(d), 3);
+    }
+
+    // --- Viewport query tests (commit 2.2) ---
+
+    #[test]
+    fn empty_snapshot_visible_count_and_rows() {
+        let snap = StoreSnapshot::empty();
+        let expanded: HashSet<EntryId> = HashSet::new();
+        let vc = snap.visible_row_count(&expanded, false);
+        assert_eq!(vc.known, 0);
+        assert!(vc.pending_expansions.is_empty());
+        let rows = snap.visible_rows(VisibleRowsQuery {
+            expanded: &expanded,
+            offset: 0,
+            limit: 100,
+            include_ignored: false,
+        });
+        assert!(rows.is_empty());
+    }
+
+    #[test]
+    fn single_root_visible_count_is_one() {
+        let mut snap = StoreSnapshot::empty();
+        let r = EntryId(1);
+        seed(&mut snap, r, None, "r", EntryKind::Directory, 0, false, false);
+        let expanded: HashSet<EntryId> = HashSet::new();
+        assert_eq!(snap.visible_row_count(&expanded, false).known, 1);
+    }
+
+    #[test]
+    fn root_with_three_children_expanded_dfs_order_and_depths() {
+        let mut snap = StoreSnapshot::empty();
+        let r = EntryId(1);
+        let a = EntryId(2);
+        let b = EntryId(3);
+        let c = EntryId(4);
+        seed(&mut snap, r, None, "r", EntryKind::Directory, 0, false, false);
+        seed(&mut snap, a, Some(r), "a", EntryKind::File, 0, false, false);
+        seed(&mut snap, b, Some(r), "b", EntryKind::File, 0, false, false);
+        seed(&mut snap, c, Some(r), "c", EntryKind::File, 0, false, false);
+
+        let mut expanded: HashSet<EntryId> = HashSet::new();
+        expanded.insert(r);
+
+        assert_eq!(snap.visible_row_count(&expanded, false).known, 4);
+
+        let rows = snap.visible_rows(VisibleRowsQuery {
+            expanded: &expanded,
+            offset: 0,
+            limit: 100,
+            include_ignored: false,
+        });
+        let ids: Vec<EntryId> = rows.iter().map(|r| r.id).collect();
+        let depths: Vec<u16> = rows.iter().map(|r| r.depth).collect();
+        assert_eq!(ids, vec![r, a, b, c]);
+        assert_eq!(depths, vec![0, 1, 1, 1]);
+    }
+
+    #[test]
+    fn root_with_children_collapsed_emits_only_root() {
+        let mut snap = StoreSnapshot::empty();
+        let r = EntryId(1);
+        let a = EntryId(2);
+        seed(&mut snap, r, None, "r", EntryKind::Directory, 0, false, false);
+        seed(&mut snap, a, Some(r), "a", EntryKind::File, 0, false, false);
+
+        let expanded: HashSet<EntryId> = HashSet::new();
+        assert_eq!(snap.visible_row_count(&expanded, false).known, 1);
+        let rows = snap.visible_rows(VisibleRowsQuery {
+            expanded: &expanded,
+            offset: 0,
+            limit: 100,
+            include_ignored: false,
+        });
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, r);
+        assert!(rows[0].has_children);
+        assert!(!rows[0].is_expanded);
+    }
+
+    #[test]
+    fn ignored_child_excluded_unless_include_ignored() {
+        let mut snap = StoreSnapshot::empty();
+        let r = EntryId(1);
+        let good = EntryId(2);
+        let ign = EntryId(3);
+        seed(&mut snap, r, None, "r", EntryKind::Directory, 0, false, false);
+        seed(&mut snap, good, Some(r), "good", EntryKind::File, 0, false, false);
+        seed(&mut snap, ign, Some(r), "ign", EntryKind::File, 0, true, false);
+
+        let mut expanded: HashSet<EntryId> = HashSet::new();
+        expanded.insert(r);
+
+        assert_eq!(snap.visible_row_count(&expanded, false).known, 2);
+        assert_eq!(snap.visible_row_count(&expanded, true).known, 3);
+    }
+
+    #[test]
+    fn nested_expansion_pending_when_children_missing() {
+        let mut snap = StoreSnapshot::empty();
+        let a = EntryId(1);
+        let b = EntryId(2);
+        seed(&mut snap, a, None, "a", EntryKind::Directory, 0, false, false);
+        seed(&mut snap, b, Some(a), "b", EntryKind::Directory, 0, false, false);
+        // b is expanded but has no children map entry — worker hasn't delivered.
+
+        let mut expanded: HashSet<EntryId> = HashSet::new();
+        expanded.insert(a);
+        expanded.insert(b);
+
+        let vc = snap.visible_row_count(&expanded, false);
+        assert_eq!(vc.known, 2);
+        assert_eq!(vc.pending_expansions.as_slice(), &[b]);
+    }
+
+    #[test]
+    fn viewport_offset_and_limit_slice_correctly() {
+        let mut snap = StoreSnapshot::empty();
+        let r = EntryId(1);
+        seed(&mut snap, r, None, "r", EntryKind::Directory, 0, false, false);
+        let mut expanded: HashSet<EntryId> = HashSet::new();
+        expanded.insert(r);
+        let ids: Vec<EntryId> = (0..10)
+            .map(|i| {
+                let cid = EntryId(i + 2);
+                seed(
+                    &mut snap,
+                    cid,
+                    Some(r),
+                    &format!("c{:02}", i),
+                    EntryKind::File,
+                    0,
+                    false,
+                    false,
+                );
+                cid
+            })
+            .collect();
+
+        // Full set is [r, c00, c01, .., c09] — 11 rows. Offset 3 skips [r, c00, c01].
+        let rows = snap.visible_rows(VisibleRowsQuery {
+            expanded: &expanded,
+            offset: 3,
+            limit: 4,
+            include_ignored: false,
+        });
+        let sliced: Vec<EntryId> = rows.iter().map(|r| r.id).collect();
+        assert_eq!(sliced, vec![ids[2], ids[3], ids[4], ids[5]]);
+    }
+
+    #[test]
+    fn visible_row_count_matches_naive_on_several_trees() {
+        // Table-driven cross-check; a proptest variant follows.
+        for seed_shape in 0u32..16 {
+            let mut snap = StoreSnapshot::empty();
+            let mut next_id: u64 = 1;
+            let mut expanded: HashSet<EntryId> = HashSet::new();
+
+            let roots = (seed_shape % 3) + 1;
+            for r in 0..roots {
+                let rid = EntryId(next_id);
+                next_id += 1;
+                seed(
+                    &mut snap,
+                    rid,
+                    None,
+                    &format!("r{}", r),
+                    EntryKind::Directory,
+                    0,
+                    false,
+                    false,
+                );
+                if seed_shape & 1 != 0 {
+                    expanded.insert(rid);
+                }
+                let children = (seed_shape % 4) + 1;
+                for c in 0..children {
+                    let cid = EntryId(next_id);
+                    next_id += 1;
+                    let ignored = seed_shape & 2 != 0 && c == 0;
+                    seed(
+                        &mut snap,
+                        cid,
+                        Some(rid),
+                        &format!("c{}", c),
+                        EntryKind::File,
+                        0,
+                        ignored,
+                        false,
+                    );
+                }
+            }
+            let include_ignored = seed_shape & 4 != 0;
+            let vc = snap.visible_row_count(&expanded, include_ignored).known;
+            let naive = snap.visible_row_count_naive(&expanded, include_ignored);
+            assert_eq!(vc, naive, "shape {} diverged", seed_shape);
+        }
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::prelude::ProptestConfig::with_cases(64))]
+
+        #[test]
+        fn prop_visible_row_count_matches_naive(
+            // Random tree of up to 32 entries. Each node picks a parent from
+            // existing ids (None for the first). Flags flip independently.
+            shape in proptest::collection::vec(
+                (proptest::bool::ANY, proptest::bool::ANY, proptest::bool::ANY, 0usize..32),
+                1..32
+            ),
+            expand_mask in proptest::num::u64::ANY,
+            include_ignored in proptest::bool::ANY,
+        ) {
+            let mut snap = StoreSnapshot::empty();
+            let mut ids: Vec<EntryId> = Vec::new();
+            for (i, (is_dir, ignored, hidden, parent_pick)) in shape.iter().enumerate() {
+                let id = EntryId((i as u64) + 1);
+                let parent = if ids.is_empty() {
+                    None
+                } else {
+                    Some(ids[parent_pick % ids.len()])
+                };
+                let kind = if *is_dir { EntryKind::Directory } else { EntryKind::File };
+                seed(&mut snap, id, parent, &format!("n{}", i), kind, 0, *ignored, *hidden);
+                ids.push(id);
+            }
+            let mut expanded: HashSet<EntryId> = HashSet::new();
+            for (i, id) in ids.iter().enumerate() {
+                if (expand_mask >> (i % 64)) & 1 == 1 {
+                    expanded.insert(*id);
+                }
+            }
+            let vc = snap.visible_row_count(&expanded, include_ignored).known;
+            let naive = snap.visible_row_count_naive(&expanded, include_ignored);
+            proptest::prop_assert_eq!(vc, naive);
+        }
     }
 }

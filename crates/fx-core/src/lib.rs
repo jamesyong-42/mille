@@ -13,6 +13,10 @@
 pub mod entry;
 pub use entry::{Capability, Entry, EntryId, EntryKind};
 
+// TODO: Phase 1 — Fs trait + InMemoryFs (Phase 2 adds RealFs)
+pub mod fs;
+pub use fs::{DirEntry, Fs, FsMetadata, InMemoryFs, RealFs};
+
 // TODO: Phase 1–2 — EntryStore (sum-tree, id allocator, path index)
 pub mod store;
 

@@ -583,6 +583,7 @@ dependencies = [
  "notify",
  "notify-debouncer-full",
  "nucleo",
+ "parking_lot",
  "proptest",
  "rmp-serde",
  "serde",

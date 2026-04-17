@@ -166,7 +166,8 @@ impl EntryStore {
     }
 
     // Test-only: force the id counter near overflow so the cap can be exercised.
-    #[cfg(any(test, feature = "test-util"))]
+    // Kept unconditionally `pub` with `__` sigil so integration tests can reach it.
+    #[doc(hidden)]
     pub fn __set_counter_for_tests(&self, value: u64) {
         self.id_counter.store(value, Ordering::Relaxed);
     }

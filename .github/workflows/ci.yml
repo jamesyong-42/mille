@@ -1,0 +1,178 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: short
+
+jobs:
+  # ------------------------------------------------------------------
+  # Rust-only checks (fmt, clippy, tests on host).
+  # ------------------------------------------------------------------
+  test-rust:
+    name: Rust lints & tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: cargo fmt --check
+        run: cargo fmt --all -- --check
+
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: cargo test
+        run: cargo test --workspace
+
+  # ------------------------------------------------------------------
+  # JS / TS checks on host only.
+  # ------------------------------------------------------------------
+  test-js:
+    name: JS typecheck & tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile=false
+
+      - name: Typecheck
+        run: pnpm -r --if-present typecheck
+
+      - name: Test
+        run: pnpm -r --if-present test
+
+  # ------------------------------------------------------------------
+  # Native build matrix — 8 triples per SPEC §6.2.
+  # Each job produces a .node artifact for the corresponding platform.
+  # ------------------------------------------------------------------
+  build:
+    name: Build ${{ matrix.settings.target }}
+    runs-on: ${{ matrix.settings.host }}
+    strategy:
+      fail-fast: false
+      matrix:
+        settings:
+          - host: macos-14
+            target: aarch64-apple-darwin
+            build: pnpm build:napi --target aarch64-apple-darwin
+
+          - host: macos-13
+            target: x86_64-apple-darwin
+            build: pnpm build:napi --target x86_64-apple-darwin
+
+          - host: windows-latest
+            target: x86_64-pc-windows-msvc
+            build: pnpm build:napi --target x86_64-pc-windows-msvc
+
+          - host: windows-latest
+            target: aarch64-pc-windows-msvc
+            build: pnpm build:napi --target aarch64-pc-windows-msvc
+
+          - host: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            docker: ghcr.io/napi-rs/napi-rs/nodejs-rust:lts-debian
+            build: pnpm build:napi --target x86_64-unknown-linux-gnu --use-napi-cross
+
+          - host: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            docker: ghcr.io/napi-rs/napi-rs/nodejs-rust:lts-debian-aarch64
+            build: pnpm build:napi --target aarch64-unknown-linux-gnu --use-napi-cross
+
+          - host: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            docker: ghcr.io/napi-rs/napi-rs/nodejs-rust:lts-alpine
+            build: pnpm build:napi --target x86_64-unknown-linux-musl
+
+          - host: ubuntu-latest
+            target: aarch64-unknown-linux-musl
+            docker: ghcr.io/napi-rs/napi-rs/nodejs-rust:lts-alpine
+            build: pnpm build:napi --target aarch64-unknown-linux-musl --use-napi-cross
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install Rust toolchain
+        if: ${{ !matrix.settings.docker }}
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.settings.target }}
+
+      - name: Cache cargo
+        if: ${{ !matrix.settings.docker }}
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.settings.target }}
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile=false
+
+      # Host-native or cross-compile via @napi-rs/cli (handles QEMU / napi-cross internally).
+      - name: Build (host)
+        if: ${{ !matrix.settings.docker }}
+        shell: bash
+        run: ${{ matrix.settings.build }}
+
+      # For Linux triples we run the official napi-rs container so the produced
+      # binary is glibc/musl-correct and aarch64 cross-compiles are supported.
+      - name: Build (docker)
+        if: ${{ matrix.settings.docker }}
+        uses: addnab/docker-run-action@v3
+        with:
+          image: ${{ matrix.settings.docker }}
+          options: -v ${{ github.workspace }}:/build -w /build
+          run: |
+            set -euo pipefail
+            corepack enable
+            pnpm install --frozen-lockfile=false
+            ${{ matrix.settings.build }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bindings-${{ matrix.settings.target }}
+          path: |
+            packages/**/*.node
+            artifacts/**/*.node
+          if-no-files-found: error
+          retention-days: 7

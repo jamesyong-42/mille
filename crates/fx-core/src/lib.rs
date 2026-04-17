@@ -19,6 +19,11 @@ pub use fs::{DirEntry, Fs, FsMetadata, InMemoryFs, RealFs};
 
 // TODO: Phase 1–2 — EntryStore (sum-tree, id allocator, path index)
 pub mod store;
+pub use store::EntryStore;
+
+// TODO: Phase 4 — writeSnapshot / eventsSince (here now so store can use it)
+pub mod snapshot;
+pub use snapshot::StoreSnapshot;
 
 // TODO: Phase 2 — jwalk-based walker + coalescer
 pub mod walker;
@@ -31,9 +36,6 @@ pub mod watcher;
 
 // TODO: Phase 10 — nucleo fuzzy search adapter
 pub mod search;
-
-// TODO: Phase 4 — writeSnapshot / eventsSince
-pub mod snapshot;
 
 // TODO: Phase 2 — compact-folders computation
 pub mod compact;

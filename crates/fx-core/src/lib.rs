@@ -27,6 +27,7 @@ pub use snapshot::StoreSnapshot;
 
 // TODO: Phase 2 — jwalk-based walker + coalescer
 pub mod walker;
+pub use walker::{walk, SymlinkPolicy, WalkOptions, WalkedEntry};
 
 // TODO: Phase 2 — ripgrep `ignore` crate wrapper
 pub mod ignore;

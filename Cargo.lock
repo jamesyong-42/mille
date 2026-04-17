@@ -588,6 +588,7 @@ dependencies = [
  "rmp-serde",
  "serde",
  "smallvec",
+ "tempfile",
  "thiserror",
  "tokio",
  "tokio-util",

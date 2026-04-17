@@ -68,6 +68,7 @@ bitflags = { version = "2", features = ["serde"] }
 
 # Dev
 proptest = "1.5"
+tempfile = "3.10"
 
 [profile.release]
 lto = "fat"

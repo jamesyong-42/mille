@@ -68,6 +68,12 @@ impl StoreSnapshot {
         self.children.get(&id).is_some_and(|v| !v.is_empty())
     }
 
+    /// Iterate over every (id, entry) pair in the snapshot. Primarily for
+    /// bench harnesses and crash-resume serialization.
+    pub fn entries_iter(&self) -> impl Iterator<Item = (EntryId, &Arc<Entry>)> + '_ {
+        self.entries.iter().map(|(id, e)| (*id, e))
+    }
+
     /// Visible-descendant count for the subtree rooted at `id` (inclusive).
     /// Returns 0 for unknown ids so callers can blindly sum.
     pub fn subtree_visible_count(&self, id: EntryId) -> u32 {

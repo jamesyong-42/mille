@@ -23,7 +23,7 @@ pub use store::EntryStore;
 
 // TODO: Phase 4 — writeSnapshot / eventsSince (here now so store can use it)
 pub mod snapshot;
-pub use snapshot::StoreSnapshot;
+pub use snapshot::{StoreSnapshot, VisibleRowCount, VisibleRowOut, VisibleRowsQuery};
 
 // TODO: Phase 2 — jwalk-based walker + coalescer
 pub mod walker;

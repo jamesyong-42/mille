@@ -1,0 +1,3 @@
+# Contributing
+
+Thanks for your interest. This project is in pre-alpha and the public contribution flow isn't set up yet. The authoritative design document (`SPEC.md`) and phased implementation roadmap (`PLAN.md`) currently live in a sibling `research/file-explorer/` directory outside this repo; they will be copied into the repo once Phase 0 scaffolding stabilizes. If you'd like to read them in the meantime, see the project root at <https://github.com/jamesyong-42/mille> for linked excerpts, or reach out. Pull requests should follow the Summary + Test Plan template in `.github/PULL_REQUEST_TEMPLATE.md`.

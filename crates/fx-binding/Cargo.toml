@@ -1,0 +1,22 @@
+[package]
+name = "fx-binding"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Thin napi-rs binding for fx-core."
+
+[lib]
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[dependencies]
+fx-core = { path = "../fx-core" }
+napi.workspace = true
+napi-derive.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+
+[build-dependencies]
+napi-build.workspace = true

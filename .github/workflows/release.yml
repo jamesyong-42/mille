@@ -1,0 +1,179 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Skip actual npm publish (pnpm publish --dry-run)"
+        type: boolean
+        default: false
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: short
+
+jobs:
+  # ------------------------------------------------------------------
+  # Native build matrix — mirror of ci.yml's `build` job.
+  # Duplicated intentionally for Phase 0; factor into a reusable
+  # workflow once the matrix stabilizes.
+  # ------------------------------------------------------------------
+  build:
+    name: Build ${{ matrix.settings.target }}
+    runs-on: ${{ matrix.settings.host }}
+    strategy:
+      fail-fast: false
+      matrix:
+        settings:
+          - host: macos-14
+            target: aarch64-apple-darwin
+            build: pnpm build:napi --target aarch64-apple-darwin --release
+
+          - host: macos-13
+            target: x86_64-apple-darwin
+            build: pnpm build:napi --target x86_64-apple-darwin --release
+
+          - host: windows-latest
+            target: x86_64-pc-windows-msvc
+            build: pnpm build:napi --target x86_64-pc-windows-msvc --release
+
+          - host: windows-latest
+            target: aarch64-pc-windows-msvc
+            build: pnpm build:napi --target aarch64-pc-windows-msvc --release
+
+          - host: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            docker: ghcr.io/napi-rs/napi-rs/nodejs-rust:lts-debian
+            build: pnpm build:napi --target x86_64-unknown-linux-gnu --release --use-napi-cross
+
+          - host: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            docker: ghcr.io/napi-rs/napi-rs/nodejs-rust:lts-debian-aarch64
+            build: pnpm build:napi --target aarch64-unknown-linux-gnu --release --use-napi-cross
+
+          - host: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            docker: ghcr.io/napi-rs/napi-rs/nodejs-rust:lts-alpine
+            build: pnpm build:napi --target x86_64-unknown-linux-musl --release
+
+          - host: ubuntu-latest
+            target: aarch64-unknown-linux-musl
+            docker: ghcr.io/napi-rs/napi-rs/nodejs-rust:lts-alpine
+            build: pnpm build:napi --target aarch64-unknown-linux-musl --release --use-napi-cross
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install Rust toolchain
+        if: ${{ !matrix.settings.docker }}
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.settings.target }}
+
+      - name: Cache cargo
+        if: ${{ !matrix.settings.docker }}
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.settings.target }}
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile=false
+
+      - name: Build (host)
+        if: ${{ !matrix.settings.docker }}
+        shell: bash
+        run: ${{ matrix.settings.build }}
+
+      - name: Build (docker)
+        if: ${{ matrix.settings.docker }}
+        uses: addnab/docker-run-action@v3
+        with:
+          image: ${{ matrix.settings.docker }}
+          options: -v ${{ github.workspace }}:/build -w /build
+          run: |
+            set -euo pipefail
+            corepack enable
+            pnpm install --frozen-lockfile=false
+            ${{ matrix.settings.build }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bindings-${{ matrix.settings.target }}
+          path: |
+            packages/**/*.node
+            artifacts/**/*.node
+          if-no-files-found: error
+          retention-days: 7
+
+  # ------------------------------------------------------------------
+  # Collect all 8 artifacts, run napi pre-publish, publish to npm.
+  # ------------------------------------------------------------------
+  publish:
+    name: Publish to npm
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile=false
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: bindings-*
+          merge-multiple: false
+
+      - name: Move binaries into per-platform packages
+        run: pnpm exec napi artifacts --npm-dir packages --dir artifacts
+
+      - name: Stamp optionalDependencies versions
+        run: pnpm exec napi pre-publish -t npm --no-gh-release
+
+      - name: Publish (dry-run)
+        if: ${{ inputs.dry_run == true }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: pnpm -r publish --access public --no-git-checks --dry-run
+
+      - name: Publish
+        if: ${{ inputs.dry_run != true }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: pnpm -r publish --access public --no-git-checks

@@ -17,7 +17,7 @@ use parking_lot::Mutex;
 
 use crate::entry::{Entry, EntryId, EntryKind};
 use crate::error::FxError;
-use crate::snapshot::StoreSnapshot;
+use crate::snapshot::{entry_counts_visible, StoreSnapshot, MAX_ANCESTOR_WALK};
 
 pub struct EntryStore {
     inner: ArcSwap<StoreSnapshot>,
@@ -59,6 +59,8 @@ impl EntryStore {
         entry.id = id;
         let parent = entry.parent_id;
         let name = entry.name.clone();
+        let counts_visible = entry_counts_visible(&entry);
+        let size = entry.size;
 
         let current = self.inner.load_full();
         let mut next = (*current).clone();
@@ -84,6 +86,27 @@ impl EntryStore {
             }
         }
 
+        // Seed the new entry's own summaries (inclusive of self).
+        next.descendant_visible_counts
+            .insert(id, counts_visible as u32);
+        next.descendant_total_sizes.insert(id, size);
+
+        // Walk ancestors, bumping each summary. Depth-capped at MAX_ANCESTOR_WALK
+        // so a malformed parent_id cycle can't spin us forever.
+        let mut cur = parent;
+        let mut hops: usize = 0;
+        while let Some(a) = cur {
+            if hops >= MAX_ANCESTOR_WALK {
+                break;
+            }
+            if counts_visible {
+                *next.descendant_visible_counts.entry(a).or_insert(0) += 1;
+            }
+            *next.descendant_total_sizes.entry(a).or_insert(0) += size;
+            cur = next.entries.get(&a).and_then(|e| e.parent_id);
+            hops += 1;
+        }
+
         next.tree_version += 1;
         self.inner.store(Arc::new(next));
 
@@ -97,7 +120,20 @@ impl EntryStore {
         let existing = current.entries.get(&id)?.clone();
 
         let mut next = (*current).clone();
+
+        // Capture the entry's cached contributions BEFORE mutating anything,
+        // so ancestor decrements always see the exact values we added on insert.
+        let vis_contribution = next
+            .descendant_visible_counts
+            .get(&id)
+            .copied()
+            .unwrap_or(0);
+        let size_contribution = next.descendant_total_sizes.get(&id).copied().unwrap_or(0);
+        let parent_for_walk = existing.parent_id;
+
         next.entries.remove(&id)?;
+        next.descendant_visible_counts.remove(&id);
+        next.descendant_total_sizes.remove(&id);
 
         match existing.parent_id {
             None => {
@@ -115,6 +151,24 @@ impl EntryStore {
                     *count = count.saturating_sub(1);
                 }
             }
+        }
+
+        // Ancestor-walk mirrors insert. saturating_sub defends against malformed
+        // data where the cache somehow drifted below the contribution.
+        let mut cur = parent_for_walk;
+        let mut hops: usize = 0;
+        while let Some(a) = cur {
+            if hops >= MAX_ANCESTOR_WALK {
+                break;
+            }
+            if let Some(c) = next.descendant_visible_counts.get_mut(&a) {
+                *c = c.saturating_sub(vis_contribution);
+            }
+            if let Some(s) = next.descendant_total_sizes.get_mut(&a) {
+                *s = s.saturating_sub(size_contribution);
+            }
+            cur = next.entries.get(&a).and_then(|e| e.parent_id);
+            hops += 1;
         }
 
         next.tree_version += 1;
@@ -386,5 +440,95 @@ mod tests {
         assert!(s.insert("/last".into(), leaf("last", None)).is_ok());
         let err = s.insert("/past".into(), leaf("past", None)).unwrap_err();
         assert!(matches!(err, FxError::EntryIdExhausted));
+    }
+
+    // --- Subtree summary tests (commit 2.1) ---
+
+    fn file_with_size(name: &str, parent: Option<EntryId>, size: u64) -> Entry {
+        Entry {
+            size,
+            ..leaf(name, parent)
+        }
+    }
+
+    #[test]
+    fn insert_then_remove_returns_summaries_to_zero() {
+        let s = EntryStore::new();
+        let root = s.insert("/r".into(), dir("r", None)).unwrap();
+        let child = s
+            .insert("/r/f".into(), file_with_size("f", Some(root), 128))
+            .unwrap();
+        let snap = s.snapshot();
+        assert_eq!(snap.subtree_visible_count(root), 2);
+        assert_eq!(snap.subtree_total_size(root), 128);
+
+        s.remove(child).unwrap();
+        let snap = s.snapshot();
+        assert_eq!(snap.subtree_visible_count(root), 1);
+        assert_eq!(snap.subtree_total_size(root), 0);
+
+        s.remove(root).unwrap();
+        let snap = s.snapshot();
+        assert_eq!(snap.subtree_visible_count(root), 0);
+        assert_eq!(snap.subtree_total_size(root), 0);
+    }
+
+    #[test]
+    fn store_insert_accumulates_summary_up_a_chain() {
+        let s = EntryStore::new();
+        let a = s.insert("/a".into(), dir("a", None)).unwrap();
+        let b = s.insert("/a/b".into(), dir("b", Some(a))).unwrap();
+        let c = s
+            .insert("/a/b/c".into(), file_with_size("c", Some(b), 77))
+            .unwrap();
+        let snap = s.snapshot();
+        assert_eq!(snap.subtree_visible_count(a), 3);
+        assert_eq!(snap.subtree_visible_count(b), 2);
+        assert_eq!(snap.subtree_visible_count(c), 1);
+        assert_eq!(snap.subtree_total_size(a), 77);
+        assert_eq!(snap.subtree_total_size(b), 77);
+        assert_eq!(snap.subtree_total_size(c), 77);
+    }
+
+    #[test]
+    fn store_cycle_in_parent_ids_does_not_hang_insert() {
+        // Build a snapshot manually containing a cycle, install it behind the
+        // ArcSwap, then insert a child that would walk through the cycle.
+        // The 128-hop cap guarantees termination.
+        use std::time::{Duration, Instant};
+
+        let s = EntryStore::new();
+        // Reserve ids via the counter (so allocator is past them).
+        let id_x = EntryId::alloc_from(&s.id_counter).unwrap();
+        let id_y = EntryId::alloc_from(&s.id_counter).unwrap();
+
+        // Construct a pathological snapshot where x.parent = y and y.parent = x.
+        let mut rigged = (*s.snapshot()).clone();
+        let x = Entry {
+            id: id_x,
+            parent_id: Some(id_y),
+            ..leaf("x", Some(id_y))
+        };
+        let y = Entry {
+            id: id_y,
+            parent_id: Some(id_x),
+            ..leaf("y", Some(id_x))
+        };
+        rigged.entries.insert(id_x, Arc::new(x));
+        rigged.entries.insert(id_y, Arc::new(y));
+        s.inner.store(Arc::new(rigged));
+
+        let start = Instant::now();
+        // Insert a fresh leaf whose parent is id_x; ancestor walk sees the
+        // x <-> y cycle and must bail out within 128 hops, not loop forever.
+        let result = s.insert("/cycle/z".into(), leaf("z", Some(id_x)));
+        let elapsed = start.elapsed();
+
+        assert!(result.is_ok(), "insert with cyclic parent should still return");
+        assert!(
+            elapsed < Duration::from_secs(1),
+            "cycle defense failed: insert took {:?}",
+            elapsed
+        );
     }
 }

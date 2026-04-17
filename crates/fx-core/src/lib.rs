@@ -36,3 +36,4 @@ pub mod compact;
 
 // TODO: Phase 1 — FxError + ErrorCode mapping
 pub mod error;
+pub use error::{ErrorCode, FxError};

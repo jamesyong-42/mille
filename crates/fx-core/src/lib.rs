@@ -11,6 +11,7 @@
 
 // TODO: Phase 1 — Entry, EntryKind, EntryId, Capability types
 pub mod entry;
+pub use entry::{Capability, Entry, EntryId, EntryKind};
 
 // TODO: Phase 1–2 — EntryStore (sum-tree, id allocator, path index)
 pub mod store;

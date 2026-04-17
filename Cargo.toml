@@ -62,6 +62,9 @@ thiserror = "1.0"
 # Small collections
 smallvec = { version = "1.13", features = ["const_generics", "union"] }
 
+# Bitflags (for Capability and friends)
+bitflags = { version = "2", features = ["serde"] }
+
 # Dev
 proptest = "1.5"
 

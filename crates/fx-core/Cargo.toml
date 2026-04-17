@@ -47,5 +47,8 @@ thiserror.workspace = true
 # Small collections
 smallvec.workspace = true
 
+# Bitflags (Capability mask)
+bitflags.workspace = true
+
 [dev-dependencies]
 proptest.workspace = true

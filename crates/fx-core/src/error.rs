@@ -1,8 +1,7 @@
-// Implemented in Phase 1 — see PLAN.md
-//
-// Placeholder so other modules may refer to `FxError` without breaking
-// compile once they begin using it. The real variants (Io { code, path,
-// source }, Unsupported, Cancelled, InvalidInput, InternalBug) land in
-// commit 1.2 per PLAN.md.
+// Stub for commit 1.1 — only the EntryIdExhausted variant is used today.
+// Commit 1.2 replaces this with the full taxonomy per SPEC §4.7.
 
-pub enum FxError {}
+#[derive(Debug)]
+pub enum FxError {
+    EntryIdExhausted,
+}

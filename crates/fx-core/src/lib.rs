@@ -42,6 +42,10 @@ pub use watcher::{
     coalesce_events, FsChangeEvent, RawEvent, RenamePairer, Watcher, WatcherOptions,
 };
 
+// Phase 3.7 — volatile-subtree detection and throttling
+pub mod volatile;
+pub use volatile::VolatileTracker;
+
 // TODO: Phase 10 — nucleo fuzzy search adapter
 pub mod search;
 

@@ -7,6 +7,7 @@
 #[macro_use]
 extern crate napi_derive;
 
+pub mod error;
 pub mod explorer;
 pub mod types;
 

@@ -173,6 +173,26 @@ pub fn write_snapshot(
         return Err(err);
     }
 
+    // Durability: POSIX requires fsync on the parent directory to make the
+    // rename itself durable against power loss. Without this, a crash
+    // between the kernel's rename and the directory-metadata flush can
+    // leave the dirent pointing at the old file even though we returned Ok.
+    // Best-effort: failure to open/fsync the parent must NOT fail the
+    // snapshot — the rename already succeeded; this is belt-and-suspenders.
+    //
+    // Windows parent-durability (FlushFileBuffers on a directory handle)
+    // has different semantics and is tracked as a PLAN 13.x follow-up.
+    #[cfg(unix)]
+    {
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                if let Ok(dir) = std::fs::File::open(parent) {
+                    let _ = dir.sync_all();
+                }
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -518,6 +538,30 @@ mod tests {
         // Root subtree: 2 visible (root + a), 42 bytes total.
         assert_eq!(loaded.descendant_visible_counts.get(&root).copied(), Some(2));
         assert_eq!(loaded.descendant_total_sizes.get(&root).copied(), Some(42));
+    }
+
+    #[test]
+    fn write_snapshot_removes_tmp_and_fsyncs_parent() {
+        // Documents the write_snapshot durability contract: after Ok,
+        // the target is in place, the .tmp sibling is gone, and the file
+        // is readable back. The parent-dir fsync itself is invisible to
+        // userspace — we can't reproduce power loss in a unit test — but
+        // this pins down the observable post-conditions so regressions in
+        // the rename/cleanup sequence are caught.
+        let (store, _root) = build_small_tree();
+        let snap = store.snapshot();
+        let td = TempDir::new().unwrap();
+        let path = td.path().join("snap.bin");
+
+        write_snapshot(&snap, 7, &[], &path).unwrap();
+
+        assert!(path.exists(), "target snapshot file must exist after Ok");
+        assert!(
+            !path.with_extension("tmp").exists(),
+            "tmp sibling must be gone after successful rename"
+        );
+        let loaded = read_snapshot(&path).expect("target must be readable back");
+        assert_eq!(loaded.next_entry_id, 7);
     }
 
     #[test]

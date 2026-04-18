@@ -50,6 +50,10 @@ pub use volatile::VolatileTracker;
 pub mod intent;
 pub use intent::{IntentCache, IntentKind, MutationIntent};
 
+// Phase 3.8 — Linux inotify limit auto-detect + hybrid-fallback advisor
+pub mod inotify_limits;
+pub use inotify_limits::{advise_budget, current_limits, InotifyLimits, WatchBudget};
+
 // TODO: Phase 10 — nucleo fuzzy search adapter
 pub mod search;
 

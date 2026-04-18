@@ -165,8 +165,8 @@ impl Watcher {
 
         let canonical = canonicalize_or_owned(root);
 
-        let mut roots = self.roots.lock().expect("roots mutex poisoned");
-        let mut inner = self.inner.lock().expect("inner mutex poisoned");
+        let mut roots = lock_recover(&self.roots);
+        let mut inner = lock_recover(&self.inner);
         let watcher = inner
             .as_mut()
             .ok_or_else(|| FxError::InternalBug("watcher backend already dropped".into()))?;
@@ -204,8 +204,8 @@ impl Watcher {
     /// Stop watching `root`. No-op if not watched.
     pub fn unwatch(&self, root: &Path) -> Result<(), FxError> {
         let canonical = canonicalize_or_owned(root);
-        let mut roots = self.roots.lock().expect("roots mutex poisoned");
-        let mut inner = self.inner.lock().expect("inner mutex poisoned");
+        let mut roots = lock_recover(&self.roots);
+        let mut inner = lock_recover(&self.inner);
         let watcher = inner
             .as_mut()
             .ok_or_else(|| FxError::InternalBug("watcher backend already dropped".into()))?;
@@ -221,7 +221,7 @@ impl Watcher {
 
     /// List of currently-watched roots, for introspection.
     pub fn watched_roots(&self) -> Vec<PathBuf> {
-        self.roots.lock().expect("roots mutex poisoned").clone()
+        lock_recover(&self.roots).clone()
     }
 }
 
@@ -229,19 +229,31 @@ impl Drop for Watcher {
     fn drop(&mut self) {
         // Order matters: drop the notify watcher first so it stops
         // pushing events, then signal the forwarding thread to exit.
-        if let Ok(mut guard) = self.inner.lock() {
-            guard.take();
+        // A panic during Drop is particularly painful, so recover from
+        // poisoning rather than letting the lock() Result escape.
+        lock_recover(&self.inner).take();
+        if let Some(tx) = lock_recover(&self.shutdown).take() {
+            let _ = tx.send(());
         }
-        if let Ok(mut guard) = self.shutdown.lock() {
-            if let Some(tx) = guard.take() {
-                let _ = tx.send(());
-            }
+        if let Some(handle) = lock_recover(&self.forwarder).take() {
+            let _ = handle.join();
         }
-        if let Ok(mut guard) = self.forwarder.lock() {
-            if let Some(handle) = guard.take() {
-                let _ = handle.join();
-            }
-        }
+    }
+}
+
+/// Lock `m`, recovering silently if the mutex is poisoned.
+///
+/// The types guarded by Watcher's mutexes (`Vec<PathBuf>`, `Option<handle>`)
+/// have no cross-field invariants that a panic mid-mutation could
+/// violate — the lock only protects against torn writes, not data
+/// corruption. A stale-but-valid view is always safe to observe here.
+/// Panicking the caller for something that is architecturally recoverable
+/// turns our `Result<_, FxError>` public API into a time bomb; prefer
+/// degraded operation instead.
+fn lock_recover<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    match m.lock() {
+        Ok(g) => g,
+        Err(poisoned) => poisoned.into_inner(),
     }
 }
 
@@ -1503,6 +1515,72 @@ mod tests {
             &out2[0],
             FsChangeEvent::RenameDegraded { missing_half, .. } if missing_half == &c
         ));
+    }
+
+    #[test]
+    fn watcher_recovers_from_poisoned_roots_mutex() {
+        // Poison every mutex on the Watcher and confirm that the public
+        // API degrades to Ok(...) / valid clones instead of panicking the
+        // caller. This is a regression against the old `.expect("mutex
+        // poisoned")` pattern that turned any in-lock panic into a
+        // permanent public-API landmine.
+        //
+        // To poison cross-thread without transmuting `&Mutex<T>` into a
+        // Send raw pointer, we use `std::thread::scope` — borrows of
+        // `w.roots` / `w.inner` are live across the scope boundary and
+        // the compiler is happy.
+        let td = TempDir::new().unwrap();
+        let events: Events = Arc::new(StdMutex::new(Vec::new()));
+        let w = make_watcher(Arc::clone(&events));
+
+        std::thread::scope(|s| {
+            // Poison roots.
+            let h = s.spawn(|| {
+                let _g = w.roots.lock().unwrap();
+                panic!("simulated panic while holding roots");
+            });
+            let _ = h.join(); // Err — that's the point.
+
+            // Poison inner so Drop also exercises recovery.
+            let h = s.spawn(|| {
+                let _g = w.inner.lock().unwrap();
+                panic!("simulated");
+            });
+            let _ = h.join();
+
+            // Poison shutdown + forwarder so Drop's take() calls hit
+            // recovery paths too.
+            let h = s.spawn(|| {
+                let _g = w.shutdown.lock().unwrap();
+                panic!("simulated");
+            });
+            let _ = h.join();
+
+            let h = s.spawn(|| {
+                let _g = w.forwarder.lock().unwrap();
+                panic!("simulated");
+            });
+            let _ = h.join();
+        });
+
+        assert!(w.roots.is_poisoned(), "roots should be poisoned");
+        assert!(w.inner.is_poisoned(), "inner should be poisoned");
+        assert!(w.shutdown.is_poisoned(), "shutdown should be poisoned");
+        assert!(w.forwarder.is_poisoned(), "forwarder should be poisoned");
+
+        // watched_roots(): must not panic, must return a clone of the
+        // (possibly stale) roots list.
+        let _roots = w.watched_roots();
+
+        // watch(): must not panic, must return Ok despite poisoned locks.
+        w.watch(td.path(), WatcherOptions::default())
+            .expect("watch should degrade past poisoning");
+
+        // unwatch() too — exercises both poisoned locks again.
+        w.unwatch(td.path())
+            .expect("unwatch should degrade past poisoning");
+
+        // Drop runs at end of scope and must also survive poisoning.
     }
 
     #[cfg(target_os = "macos")]

@@ -86,10 +86,10 @@ impl VolatileTracker {
                 .entry(dir.to_path_buf())
                 .or_insert(now);
             self.last_breach.insert(dir.to_path_buf(), now);
-        } else if self.volatile_since.contains_key(dir) {
-            // Still volatile (not yet released via flush) — refresh breach.
-            self.last_breach.insert(dir.to_path_buf(), now);
         }
+        // If count <= threshold, do NOT refresh last_breach even if already
+        // volatile — let the cooldown clock run so flush() can release the dir
+        // once activity has genuinely subsided.
     }
 
     /// True iff `dir` is currently flagged volatile.
@@ -225,15 +225,50 @@ mod tests {
         }
         assert!(t.is_volatile(&dir));
 
-        // Keep poking it past the cooldown; flush should NOT release it.
+        // Keep hammering it above threshold past the cooldown; flush should
+        // NOT release it while activity stays above threshold in the window.
         let mut now = base + Duration::from_millis(210);
         for _ in 0..10 {
-            now += Duration::from_millis(500);
-            t.record(&dir, now);
+            // Burst of 210 events over ~210ms keeps the sliding-window count
+            // above threshold=200 every cycle.
+            for _ in 0..210 {
+                now += Duration::from_millis(1);
+                t.record(&dir, now);
+            }
             let released = t.flush(now);
             assert!(released.is_empty(), "should not release while active");
         }
         assert!(t.is_volatile(&dir));
+    }
+
+    #[test]
+    fn tracker_releases_after_activity_drops_below_threshold() {
+        // Use a small threshold and short cooldown to exercise release.
+        let mut t = VolatileTracker::with_config(
+            10,
+            Duration::from_secs(1),
+            Duration::from_millis(500),
+        );
+        let base = Instant::now();
+        let dir = PathBuf::from("/a");
+
+        // 15 events at t=0 — pushes above threshold (10); should flip volatile.
+        for i in 0..15 {
+            t.record(&dir, base + Duration::from_millis(i));
+        }
+        assert!(t.is_volatile(&dir));
+
+        // A single event at t=100ms — well below threshold in the window.
+        t.record(&dir, base + Duration::from_millis(100));
+
+        // Flush at t=700ms — past cooldown (500ms) since the last breach
+        // (which was the last above-threshold event ~t=14ms).
+        let released = t.flush(base + Duration::from_millis(700));
+        assert!(
+            released.iter().any(|p| p == &dir),
+            "tracker should release once activity drops below threshold"
+        );
+        assert!(!t.is_volatile(&dir));
     }
 
     #[test]

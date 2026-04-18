@@ -12,6 +12,8 @@ use napi_derive::napi;
 
 use fx_core::{EntryStore, Watcher};
 
+use crate::snapshot::MirrorSnapshot;
+
 /// Local-mode capability bitmask advertised in Phase 5 wave 1.
 /// ReadWrite (1) | CaseSensitive (2) | Watch (32) = 35.
 /// Keep in sync with api.d.ts `Capability` when later waves expand.
@@ -117,6 +119,15 @@ impl FileExplorer {
     #[napi(js_name = "getTreeVersion")]
     pub fn get_tree_version(&self) -> u32 {
         self.store.tree_version() as u32
+    }
+
+    /// Capture an immutable view of the tree. The inner Arc is stable
+    /// between deltas, so identity comparison holds on the JS side.
+    #[napi(js_name = "getSnapshot")]
+    pub fn get_snapshot(&self) -> MirrorSnapshot {
+        MirrorSnapshot {
+            inner: self.store.snapshot(),
+        }
     }
 
     /// Teardown. Phase 5 wave 7 wires to a real shutdown sequence.

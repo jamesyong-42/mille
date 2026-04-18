@@ -9,6 +9,7 @@ extern crate napi_derive;
 
 pub mod error;
 pub mod explorer;
+pub mod snapshot;
 pub mod types;
 
 /// Module version string. Present so the native module has at least one

@@ -1,0 +1,75 @@
+//! MirrorSnapshot — JS-visible wrapper around `Arc<StoreSnapshot>`.
+//!
+//! SPEC §4.9: reads go through an immutable snapshot so the JS side can
+//! use identity comparison (`===`) for concurrent-safe rendering. The
+//! inner `Arc` is unchanged between deltas, so two `getSnapshot()` calls
+//! between the same versions share an identity-equal inner pointer.
+//!
+//! Wave 2 surface: tree_version, decoration_version (stub), roots(),
+//! get_by_id, direct_child_count, has_children. visible_rows /
+//! visible_row_count land in wave 3 (commit 5.4). Decorations ship in
+//! Phase 9.
+
+use std::sync::Arc;
+
+use napi_derive::napi;
+
+use fx_core::{EntryId, StoreSnapshot};
+
+use crate::types::EntryJs;
+
+/// Immutable snapshot of the tree at a specific tree-version.
+#[napi]
+pub struct MirrorSnapshot {
+    pub(crate) inner: Arc<StoreSnapshot>,
+}
+
+#[napi]
+impl MirrorSnapshot {
+    /// Monotonic tree-version at the moment of capture.
+    #[napi(getter, js_name = "treeVersion")]
+    pub fn tree_version(&self) -> u32 {
+        self.inner.tree_version() as u32
+    }
+
+    /// Decoration version. Phase 9 wires to a real counter; 0 until then.
+    #[napi(getter, js_name = "decorationVersion")]
+    pub fn decoration_version(&self) -> u32 {
+        0
+    }
+
+    /// Workspace roots in the order they were registered.
+    #[napi]
+    pub fn roots(&self) -> Vec<EntryJs> {
+        self.inner
+            .roots()
+            .iter()
+            .filter_map(|id| self.inner.get(*id).map(|arc| EntryJs::from_core(arc.as_ref())))
+            .collect()
+    }
+
+    /// Lookup an entry by id. Returns None if the id isn't in this snapshot.
+    #[napi(js_name = "getById")]
+    pub fn get_by_id(&self, id: i64) -> Option<EntryJs> {
+        // i64→u64 is lossless for non-negative ids; negative ids never exist
+        // (allocator caps at 2^53, well below i64::MAX) so out-of-range is
+        // the caller's problem — they get None from the lookup anyway.
+        let eid = EntryId(id as u64);
+        self.inner.get(eid).map(|arc| EntryJs::from_core(arc.as_ref()))
+    }
+
+    /// Direct-child count for a directory id. None if the id isn't known
+    /// or isn't a container.
+    #[napi(js_name = "directChildCount")]
+    pub fn direct_child_count(&self, id: i64) -> Option<u32> {
+        let eid = EntryId(id as u64);
+        self.inner.direct_child_count(eid)
+    }
+
+    /// True if the entry has at least one child visible in this snapshot.
+    #[napi(js_name = "hasChildren")]
+    pub fn has_children(&self, id: i64) -> bool {
+        let eid = EntryId(id as u64);
+        self.inner.has_children(eid)
+    }
+}

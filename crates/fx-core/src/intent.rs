@@ -15,6 +15,11 @@ use std::time::{Duration, Instant};
 /// Default time a recorded intent is eligible to match an echo.
 pub const DEFAULT_TTL: Duration = Duration::from_secs(2);
 
+/// Hard cap on cache size. Large enough to absorb bursts of hundreds of
+/// mutations per second within the default 2s TTL, small enough to keep
+/// the linear scan cheap. Bounds memory regardless of caller sweep cadence.
+pub const MAX_ENTRIES: usize = 4096;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum IntentKind {
     Create,
@@ -54,7 +59,14 @@ impl IntentCache {
 
     /// Record that we just performed a mutation; expect a watcher echo
     /// within `ttl`. Stacks — two identical records require two consumes.
+    ///
+    /// If the cache is at `MAX_ENTRIES`, the oldest entry is dropped to
+    /// bound memory regardless of caller sweep cadence.
     pub fn record(&mut self, path: PathBuf, kind: IntentKind, now: Instant) {
+        if self.entries.len() >= MAX_ENTRIES {
+            // Drop oldest. O(n) on Vec; migrate to VecDeque if this becomes hot.
+            self.entries.remove(0);
+        }
         self.entries.push(MutationIntent {
             path,
             kind,
@@ -64,6 +76,9 @@ impl IntentCache {
 
     /// True if a matching unexpired intent existed; consumes one on match.
     pub fn consume(&mut self, path: &Path, kind: IntentKind, now: Instant) -> bool {
+        // Auto-sweep expired entries first so the scan window stays short
+        // even if callers never invoke sweep() directly.
+        self.sweep(now);
         // Find the oldest unexpired matching entry; remove it.
         let mut found = None;
         for (i, entry) in self.entries.iter().enumerate() {
@@ -175,6 +190,52 @@ mod tests {
         assert_eq!(c.len(), 1);
         assert!(!c.consume(Path::new("/a"), IntentKind::Modify, later));
         assert!(c.consume(Path::new("/b"), IntentKind::Modify, later));
+    }
+
+    #[test]
+    fn cache_bounded_at_max_entries() {
+        let mut c = IntentCache::new();
+        let now = Instant::now();
+        for i in 0..5000 {
+            c.record(PathBuf::from(format!("/p{}", i)), IntentKind::Create, now);
+        }
+        assert_eq!(c.len(), MAX_ENTRIES);
+    }
+
+    #[test]
+    fn cache_drops_oldest_when_at_cap() {
+        let mut c = IntentCache::new();
+        let now = Instant::now();
+        // Fill to cap with distinguishable paths.
+        for i in 0..MAX_ENTRIES {
+            c.record(PathBuf::from(format!("/p{}", i)), IntentKind::Create, now);
+        }
+        assert_eq!(c.len(), MAX_ENTRIES);
+        // One more push — oldest ("/p0") should be evicted.
+        let newest = PathBuf::from("/newest");
+        c.record(newest.clone(), IntentKind::Create, now);
+        assert_eq!(c.len(), MAX_ENTRIES);
+        // Oldest gone.
+        assert!(!c.consume(Path::new("/p0"), IntentKind::Create, now));
+        // Newest still present.
+        assert!(c.consume(&newest, IntentKind::Create, now));
+    }
+
+    #[test]
+    fn cache_consume_auto_sweeps() {
+        let mut c = IntentCache::with_ttl(Duration::from_secs(1));
+        let now = Instant::now();
+        c.record(PathBuf::from("/a"), IntentKind::Create, now);
+        c.record(PathBuf::from("/b"), IntentKind::Create, now);
+        c.record(PathBuf::from("/c"), IntentKind::Create, now);
+        assert_eq!(c.len(), 3);
+        let later = now + Duration::from_secs(2);
+        // Non-matching path at t=2s — entries all expired, auto-sweep clears them.
+        assert!(!c.consume(Path::new("/nope"), IntentKind::Create, later));
+        assert_eq!(c.len(), 0);
+        // Matching path, now expired — still false; len remains 0.
+        assert!(!c.consume(Path::new("/a"), IntentKind::Create, later));
+        assert_eq!(c.len(), 0);
     }
 
     #[test]

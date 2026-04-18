@@ -26,6 +26,11 @@ pub struct ChangeSet {
     /// the ancestor-walk in insert/remove. This is what sessions index
     /// against — each session checks `expanded ∩ subtree_roots_changed`.
     pub subtree_roots_changed: HashSet<EntryId>,
+    /// Folders whose direct-children list changed. Distinct from
+    /// subtree_roots_changed, which fires for any descendant summary change.
+    /// Phase 7 uses this to decide which expanded folders need their
+    /// child-list re-sent; subtree_roots_changed drives row-count refresh.
+    pub child_set_changed: HashSet<EntryId>,
     /// Tree version BEFORE the changes landed.
     pub from_version: u64,
     /// Tree version AFTER the changes landed (the current one).
@@ -37,6 +42,7 @@ impl ChangeSet {
         self.changed_ids.is_empty()
             && self.reparented_ids.is_empty()
             && self.subtree_roots_changed.is_empty()
+            && self.child_set_changed.is_empty()
     }
 
     pub fn len(&self) -> usize {
@@ -50,6 +56,7 @@ impl ChangeSet {
         self.changed_ids.extend(other.changed_ids);
         self.reparented_ids.extend(other.reparented_ids);
         self.subtree_roots_changed.extend(other.subtree_roots_changed);
+        self.child_set_changed.extend(other.child_set_changed);
         // Version bookends: preserve earliest `from` and latest `to`. A zero
         // `from_version` on either side means "unset" — take the non-zero one.
         if self.from_version == 0 || (other.from_version != 0 && other.from_version < self.from_version) {
@@ -72,6 +79,19 @@ mod tests {
         assert_eq!(c.len(), 0);
         assert_eq!(c.from_version, 0);
         assert_eq!(c.to_version, 0);
+    }
+
+    #[test]
+    fn merge_unions_child_set_changed() {
+        let mut a = ChangeSet::default();
+        a.child_set_changed.insert(EntryId(100));
+        let mut b = ChangeSet::default();
+        b.child_set_changed.insert(EntryId(101));
+        b.child_set_changed.insert(EntryId(100));
+        a.merge(b);
+        assert_eq!(a.child_set_changed.len(), 2);
+        assert!(a.child_set_changed.contains(&EntryId(100)));
+        assert!(a.child_set_changed.contains(&EntryId(101)));
     }
 
     #[test]

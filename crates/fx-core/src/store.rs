@@ -98,20 +98,33 @@ impl EntryStore {
         next.descendant_total_sizes.insert(id, size);
 
         // Walk ancestors, bumping each summary. Depth-capped at MAX_ANCESTOR_WALK
-        // so a malformed parent_id cycle can't spin us forever. Collect the
-        // visited ancestors so the ChangeSet accumulator can record them too.
-        let mut visited_ancestors: Vec<EntryId> = Vec::new();
+        // so a malformed parent_id cycle can't spin us forever. Record an
+        // ancestor in the ChangeSet only when its summary actually moves
+        // (visible-count bump or non-zero size add); otherwise a hidden
+        // zero-byte entry would spuriously flag every ancestor.
+        let mut summary_changed_ancestors: Vec<EntryId> = Vec::new();
         let mut cur = parent;
         let mut hops: usize = 0;
         while let Some(a) = cur {
             if hops >= MAX_ANCESTOR_WALK {
                 break;
             }
+            let mut touched = false;
             if counts_visible {
                 *next.descendant_visible_counts.entry(a).or_insert(0) += 1;
+                touched = true;
             }
-            *next.descendant_total_sizes.entry(a).or_insert(0) += size;
-            visited_ancestors.push(a);
+            if size > 0 {
+                *next.descendant_total_sizes.entry(a).or_insert(0) += size;
+                touched = true;
+            } else {
+                // Keep the slot materialized for consistency with prior behavior,
+                // even when size delta is zero.
+                next.descendant_total_sizes.entry(a).or_insert(0);
+            }
+            if touched {
+                summary_changed_ancestors.push(a);
+            }
             cur = next.entries.get(&a).and_then(|e| e.parent_id);
             hops += 1;
         }
@@ -126,8 +139,12 @@ impl EntryStore {
         // Record the mutation in the pending ChangeSet for Phase 7 delta diff.
         self.record_mutation(prev_tree_version, new_tree_version, |cs| {
             cs.changed_ids.insert(id);
-            for a in &visited_ancestors {
+            for a in &summary_changed_ancestors {
                 cs.subtree_roots_changed.insert(*a);
+            }
+            // Parent's direct-children list just grew.
+            if let Some(parent_id) = parent {
+                cs.child_set_changed.insert(parent_id);
             }
         });
         Ok(id)
@@ -169,22 +186,32 @@ impl EntryStore {
         }
 
         // Ancestor-walk mirrors insert. saturating_sub defends against malformed
-        // data where the cache somehow drifted below the contribution. Collect
-        // visited ancestors for the ChangeSet accumulator.
-        let mut visited_ancestors: Vec<EntryId> = Vec::new();
+        // data where the cache somehow drifted below the contribution. Only
+        // flag an ancestor as a changed subtree root when its summary actually
+        // moves (mirror of the insert-side tightening).
+        let mut summary_changed_ancestors: Vec<EntryId> = Vec::new();
         let mut cur = parent_for_walk;
         let mut hops: usize = 0;
         while let Some(a) = cur {
             if hops >= MAX_ANCESTOR_WALK {
                 break;
             }
-            if let Some(c) = next.descendant_visible_counts.get_mut(&a) {
-                *c = c.saturating_sub(vis_contribution);
+            let mut touched = false;
+            if vis_contribution > 0 {
+                if let Some(c) = next.descendant_visible_counts.get_mut(&a) {
+                    *c = c.saturating_sub(vis_contribution);
+                }
+                touched = true;
             }
-            if let Some(s) = next.descendant_total_sizes.get_mut(&a) {
-                *s = s.saturating_sub(size_contribution);
+            if size_contribution > 0 {
+                if let Some(s) = next.descendant_total_sizes.get_mut(&a) {
+                    *s = s.saturating_sub(size_contribution);
+                }
+                touched = true;
             }
-            visited_ancestors.push(a);
+            if touched {
+                summary_changed_ancestors.push(a);
+            }
             cur = next.entries.get(&a).and_then(|e| e.parent_id);
             hops += 1;
         }
@@ -207,8 +234,12 @@ impl EntryStore {
         // Record the mutation in the pending ChangeSet for Phase 7 delta diff.
         self.record_mutation(prev_tree_version, new_tree_version, |cs| {
             cs.changed_ids.insert(id);
-            for a in &visited_ancestors {
+            for a in &summary_changed_ancestors {
                 cs.subtree_roots_changed.insert(*a);
+            }
+            // Parent's direct-children list just shrank.
+            if let Some(parent_id) = parent_for_walk {
+                cs.child_set_changed.insert(parent_id);
             }
         });
 
@@ -750,5 +781,40 @@ mod tests {
         assert!(cs.changed_ids.contains(&b));
         assert!(cs.changed_ids.contains(&c));
         assert_eq!(cs.changed_ids.len(), 3);
+    }
+
+    // --- child_set_changed tests (commit 4.2) ---
+
+    #[test]
+    fn child_set_changed_populated_on_insert_of_child() {
+        let s = EntryStore::new();
+        let root = s.insert("/r".into(), dir("r", None)).unwrap();
+        // Drain the root insertion first to isolate.
+        let _ = s.take_pending_changes();
+        s.insert("/r/a".into(), leaf("a", Some(root))).unwrap();
+        let cs = s.take_pending_changes();
+        assert!(cs.child_set_changed.contains(&root));
+    }
+
+    #[test]
+    fn child_set_changed_populated_on_remove_of_child() {
+        let s = EntryStore::new();
+        let root = s.insert("/r".into(), dir("r", None)).unwrap();
+        let a = s.insert("/r/a".into(), leaf("a", Some(root))).unwrap();
+        let _ = s.take_pending_changes();
+        s.remove(a).unwrap();
+        let cs = s.take_pending_changes();
+        assert!(cs.child_set_changed.contains(&root));
+    }
+
+    #[test]
+    fn child_set_changed_empty_for_root_mutation_without_children() {
+        let s = EntryStore::new();
+        s.insert("/r".into(), dir("r", None)).unwrap();
+        let cs = s.take_pending_changes();
+        assert!(
+            cs.child_set_changed.is_empty(),
+            "root insert has no parent — nothing to flag"
+        );
     }
 }

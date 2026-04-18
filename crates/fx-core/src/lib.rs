@@ -38,7 +38,9 @@ pub use crate::ignore::{IgnoreMatcher, IGNORE_FILE_NAMES};
 
 // Phase 3 — notify + debouncer + rename pairing + volatile throttling
 pub mod watcher;
-pub use watcher::{coalesce_events, FsChangeEvent, RawEvent, Watcher, WatcherOptions};
+pub use watcher::{
+    coalesce_events, FsChangeEvent, RawEvent, RenamePairer, Watcher, WatcherOptions,
+};
 
 // TODO: Phase 10 — nucleo fuzzy search adapter
 pub mod search;

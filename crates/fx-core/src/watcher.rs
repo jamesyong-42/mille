@@ -439,7 +439,8 @@ fn map_notify_err(err: notify::Error) -> FxError {
 // Phase 5 wires this between the Debouncer's output and the NAPI binding.
 
 /// High-level event surfaced by the coalescer. Mirrors the api.d.ts
-/// `FileSystemEvent` union (minus `Renamed`, deferred to 3.3-3.5).
+/// `FileSystemEvent` union. Phase 3.3-3.5 add Renamed + RenameDegraded
+/// via the `RenamePairer` below.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum FsChangeEvent {
     /// A new file/dir. Phase 3.6 emits this for any Create that isn't
@@ -450,8 +451,14 @@ pub enum FsChangeEvent {
     /// File/dir removed.
     Deleted { path: PathBuf },
     /// Platform emitted an ambiguous event (rename half, access flag, etc.).
-    /// Phase 3.3-3.5 will convert paired Unknown events into Renamed.
+    /// The `RenamePairer` (3.3-3.5) upgrades matched pairs into `Renamed`.
     Unknown { path: PathBuf },
+    /// Successful rename pair (two Unknown halves correlated by the pairer).
+    Renamed { from: PathBuf, to: PathBuf },
+    /// Pair detection failed — an Unknown half aged out of the pairer's
+    /// window without a partner. SPEC §9.4: emit honestly; consumers may
+    /// treat as a delete of `missing_half` or re-walk the subtree.
+    RenameDegraded { missing_half: PathBuf, reason: String },
     /// Watcher backlog overflow on this root; caller should re-walk it.
     Coarse { root: PathBuf },
     /// Transient platform-level error (not fatal).
@@ -622,6 +629,223 @@ fn transition(prev: Option<PathState>, ev: &RawEvent) -> PathState {
             prev.unwrap_or(PathState::Unknown)
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Rename pairer (Phase 3.3 Linux stub, 3.4 macOS real, 3.5 Windows stub)
+//
+// Sits after `coalesce_events`. Accepts a batch of FsChangeEvents, upgrades
+// matched pairs of `Unknown` halves into `Renamed`, and degrades any
+// Unknown that ages out of the pairing window into `RenameDegraded` per
+// SPEC §9.4 (honest over silent-drop).
+//
+// Platform strategies differ only in *how* two Unknowns are correlated:
+//   - macOS uses (dev, inode) via `symlink_metadata`. An Unknown whose
+//     path still exists carries the inode; an Unknown whose path is gone
+//     is a "from" half. Pairing emits `Renamed { from, to }`.
+//   - Linux / Windows / fallback: pure arrival-order heuristic — two
+//     Unknowns in the same batch pair as (first, second). Cookie-based
+//     (Linux inotify) and FILE_ID_INFO (Windows) matching are tracked as
+//     PLAN 13.x follow-ups; notify 6's event surface doesn't expose
+//     cookies cleanly through `notify-debouncer-full` yet.
+//
+// Not wired into the live Watcher yet — Phase 5/8 integration.
+
+use std::time::Instant;
+
+/// One Unknown awaiting a partner. Short-lived; entries either pair with
+/// a later arrival or flush as degraded after `window`.
+#[derive(Clone, Debug)]
+struct PendingUnknown {
+    path: PathBuf,
+    /// Arrival time, for timeout-based degradation via `feed(now)` /
+    /// `flush()`.
+    arrived_at: Instant,
+    /// `(dev, ino)` at arrival, if stat succeeded. macOS sets this for
+    /// Unknowns whose path still exists ("to" half). Linux / Windows
+    /// stubs leave it `None`.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    dev_ino: Option<(u64, u64)>,
+}
+
+/// Pairs `Unknown` halves into `Renamed` within a configurable window.
+///
+/// The pairer is stateful: callers feed batches one at a time (typically
+/// the output of `coalesce_events`) and receive a new batch with pairs
+/// upgraded. Unknowns that stay unpaired past `window` flush as
+/// `RenameDegraded`. Pass `now` explicitly so tests can drive a virtual
+/// clock.
+pub struct RenamePairer {
+    /// How long to hold unpaired Unknowns before degrading.
+    window: Duration,
+    /// Queue of waiting halves, in arrival order. Linear scan is fine —
+    /// queue depth is small (<10) in practice.
+    pending: Vec<PendingUnknown>,
+}
+
+impl RenamePairer {
+    /// New pairer with the given degrade window. SPEC §4.4 suggests ~1s
+    /// as the upper bound; callers may tighten for tests.
+    pub fn new(window: Duration) -> Self {
+        Self {
+            window,
+            pending: Vec::new(),
+        }
+    }
+
+    /// Feed a batch. Unknowns try to pair with already-pending halves
+    /// first, then with each other in arrival order. After the batch is
+    /// processed, any pending entry older than `window` (relative to
+    /// `now`) flushes as `RenameDegraded`.
+    pub fn feed(&mut self, events: Vec<FsChangeEvent>, now: Instant) -> Vec<FsChangeEvent> {
+        let mut out: Vec<FsChangeEvent> = Vec::with_capacity(events.len());
+
+        for ev in events {
+            match ev {
+                FsChangeEvent::Unknown { path } => {
+                    let arrival = PendingUnknown {
+                        dev_ino: stat_dev_ino(&path),
+                        path,
+                        arrived_at: now,
+                    };
+                    match try_pair(&mut self.pending, &arrival) {
+                        Some(pair) => out.push(pair),
+                        None => self.pending.push(arrival),
+                    }
+                }
+                // All other variants pass through untouched.
+                other => out.push(other),
+            }
+        }
+
+        // Flush aged entries. `saturating_sub` tolerates `now` earlier
+        // than `arrived_at` (shouldn't happen in production; paranoia).
+        let window = self.window;
+        let mut i = 0;
+        while i < self.pending.len() {
+            if now.saturating_duration_since(self.pending[i].arrived_at) >= window {
+                let p = self.pending.remove(i);
+                out.push(FsChangeEvent::RenameDegraded {
+                    missing_half: p.path,
+                    reason: "unpaired Unknown exceeded pair window".into(),
+                });
+            } else {
+                i += 1;
+            }
+        }
+
+        out
+    }
+
+    /// Drain all pending halves as `RenameDegraded`. Called on shutdown
+    /// so nothing is silently lost.
+    pub fn flush(&mut self) -> Vec<FsChangeEvent> {
+        self.pending
+            .drain(..)
+            .map(|p| FsChangeEvent::RenameDegraded {
+                missing_half: p.path,
+                reason: "pairer flushed with pending half".into(),
+            })
+            .collect()
+    }
+
+    /// Count of Unknowns awaiting a partner. Tests use this to assert
+    /// queue semantics without walking the output stream.
+    pub fn pending_count(&self) -> usize {
+        self.pending.len()
+    }
+}
+
+/// macOS: stat the path; if it exists, return `(dev, ino)`. Absent path →
+/// None (this Unknown is the "from" half of a rename). Non-macOS builds
+/// skip the syscall — the stub strategies don't need inodes.
+#[cfg(target_os = "macos")]
+fn stat_dev_ino(path: &Path) -> Option<(u64, u64)> {
+    use std::os::unix::fs::MetadataExt;
+    std::fs::symlink_metadata(path)
+        .ok()
+        .map(|m| (m.dev(), m.ino()))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn stat_dev_ino(_path: &Path) -> Option<(u64, u64)> {
+    None
+}
+
+/// Try to pair `arrival` with an existing pending entry. Returns the
+/// resulting `Renamed` event if a match is found and removes the partner
+/// from the queue. Strategy differs by platform (see module comment).
+fn try_pair(pending: &mut Vec<PendingUnknown>, arrival: &PendingUnknown) -> Option<FsChangeEvent> {
+    try_pair_impl(pending, arrival)
+}
+
+/// macOS: require complementary kinds (one path stat'd, the other gone)
+/// or an inode match. Two random unrelated Unknowns must NOT pair just
+/// because they arrived close together — that would manufacture bogus
+/// renames when two independent files are simultaneously touched.
+#[cfg(target_os = "macos")]
+fn try_pair_impl(
+    pending: &mut Vec<PendingUnknown>,
+    arrival: &PendingUnknown,
+) -> Option<FsChangeEvent> {
+    // Inode match — strongest signal. Cross-batch rename where both
+    // halves happened to stat successfully (rare but possible for fast
+    // same-inode path reuse).
+    if let Some(arr_id) = arrival.dev_ino {
+        if let Some(idx) = pending
+            .iter()
+            .position(|p| p.dev_ino == Some(arr_id) && p.path != arrival.path)
+        {
+            let partner = pending.remove(idx);
+            return Some(FsChangeEvent::Renamed {
+                from: partner.path,
+                to: arrival.path.clone(),
+            });
+        }
+    }
+
+    // Complementary-kind match: one half exists (stat'd OK), the other
+    // doesn't (stat returned None). Oldest complementary half wins.
+    let want_complement_stat = arrival.dev_ino.is_none();
+    if let Some(idx) = pending.iter().position(|p| {
+        if want_complement_stat {
+            p.dev_ino.is_some()
+        } else {
+            p.dev_ino.is_none()
+        }
+    }) {
+        let partner = pending.remove(idx);
+        let (from, to) = if arrival.dev_ino.is_some() {
+            // Arrival is the live "to", partner is the gone "from".
+            (partner.path.clone(), arrival.path.clone())
+        } else {
+            // Arrival is the gone "from", partner is the live "to".
+            (arrival.path.clone(), partner.path.clone())
+        };
+        return Some(FsChangeEvent::Renamed { from, to });
+    }
+
+    None
+}
+
+/// Linux / Windows / fallback: pure arrival-order heuristic. Any two
+/// Unknowns pair into a Renamed with the older as `from` and the newer
+/// as `to`. Crude but correct for same-dir renames where notify emits
+/// MOVED_FROM+MOVED_TO adjacently. PLAN 13.x revisits with cookie /
+/// FILE_ID_INFO matching once the notify surface exposes them.
+#[cfg(not(target_os = "macos"))]
+fn try_pair_impl(
+    pending: &mut Vec<PendingUnknown>,
+    arrival: &PendingUnknown,
+) -> Option<FsChangeEvent> {
+    if pending.is_empty() {
+        return None;
+    }
+    let partner = pending.remove(0);
+    Some(FsChangeEvent::Renamed {
+        from: partner.path,
+        to: arrival.path.clone(),
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -1108,5 +1332,200 @@ mod tests {
             got.iter().any(|e| path_matches(e, "slow.txt")),
             "debouncer should emit event for slow.txt within 1.5s: {got:?}"
         );
+    }
+
+    // ---- Phase 3.3-3.5: rename pairer ----
+    //
+    // Logic tests are platform-independent. The macOS-specific strategy
+    // requires complementary-kind Unknowns (one path exists, one doesn't),
+    // so tests that need "two Unknowns with nonexistent paths" use
+    // tempdir-backed real files where applicable. The Linux/Windows stub
+    // and fallback happily pair any two Unknowns in arrival order.
+
+    /// A path guaranteed not to exist, so macOS `stat` returns None and
+    /// the Unknown becomes a "from" half.
+    fn ghost_path(td: &TempDir, name: &str) -> PathBuf {
+        td.path().join(name)
+    }
+
+    #[test]
+    fn pairer_empty_batch_returns_empty() {
+        let mut p = RenamePairer::new(Duration::from_secs(1));
+        let out = p.feed(vec![], Instant::now());
+        assert!(out.is_empty());
+        assert_eq!(p.pending_count(), 0);
+    }
+
+    #[test]
+    fn pairer_passes_through_non_unknown_events() {
+        let mut p = RenamePairer::new(Duration::from_secs(1));
+        let inp = vec![
+            FsChangeEvent::Created { path: pb("/a") },
+            FsChangeEvent::Modified { path: pb("/b") },
+            FsChangeEvent::Deleted { path: pb("/c") },
+            FsChangeEvent::Coarse { root: pb("/r") },
+            FsChangeEvent::Error { message: "x".into() },
+        ];
+        let out = p.feed(inp.clone(), Instant::now());
+        assert_eq!(out, inp);
+        assert_eq!(p.pending_count(), 0);
+    }
+
+    #[test]
+    fn pairer_pairs_two_unknowns_in_same_batch() {
+        // Use a tempdir so on macOS both paths are non-existent ("from"
+        // halves) — but the pairer's macOS strategy still needs one of
+        // them to look like a "to". We set up: a absent, b present.
+        let td = TempDir::new().unwrap();
+        let a = ghost_path(&td, "a");
+        let b = td.path().join("b");
+        fs::write(&b, b"").unwrap();
+
+        let mut p = RenamePairer::new(Duration::from_secs(1));
+        let out = p.feed(
+            vec![
+                FsChangeEvent::Unknown { path: a.clone() },
+                FsChangeEvent::Unknown { path: b.clone() },
+            ],
+            Instant::now(),
+        );
+        assert_eq!(out, vec![FsChangeEvent::Renamed { from: a, to: b }]);
+        assert_eq!(p.pending_count(), 0);
+    }
+
+    #[test]
+    fn pairer_flushes_unpaired_after_window() {
+        let mut p = RenamePairer::new(Duration::from_millis(100));
+        let t0 = Instant::now();
+        let _ = p.feed(
+            vec![FsChangeEvent::Unknown { path: pb("/a") }],
+            t0,
+        );
+        assert_eq!(p.pending_count(), 1);
+
+        // Next feed past the window — expect RenameDegraded.
+        let t1 = t0 + Duration::from_millis(150);
+        let out = p.feed(vec![], t1);
+        assert_eq!(out.len(), 1);
+        match &out[0] {
+            FsChangeEvent::RenameDegraded {
+                missing_half,
+                reason,
+            } => {
+                assert_eq!(missing_half, &pb("/a"));
+                assert!(!reason.is_empty());
+            }
+            other => panic!("expected RenameDegraded, got {other:?}"),
+        }
+        assert_eq!(p.pending_count(), 0);
+    }
+
+    #[test]
+    fn pairer_flush_on_demand() {
+        let mut p = RenamePairer::new(Duration::from_secs(10));
+        let _ = p.feed(
+            vec![FsChangeEvent::Unknown { path: pb("/a") }],
+            Instant::now(),
+        );
+        assert_eq!(p.pending_count(), 1);
+
+        let flushed = p.flush();
+        assert_eq!(flushed.len(), 1);
+        assert!(matches!(
+            &flushed[0],
+            FsChangeEvent::RenameDegraded { missing_half, .. } if missing_half == &pb("/a")
+        ));
+        assert_eq!(p.pending_count(), 0);
+    }
+
+    #[test]
+    fn pairer_preserves_coarse_and_error_passthrough() {
+        // Interleave Coarse / Error with Unknown halves. Pass-throughs
+        // keep their relative position; the Unknown pair produces a
+        // single Renamed at the Unknown-pair's position.
+        let td = TempDir::new().unwrap();
+        let a = ghost_path(&td, "a");
+        let b = td.path().join("b");
+        fs::write(&b, b"").unwrap();
+
+        let mut p = RenamePairer::new(Duration::from_secs(1));
+        let out = p.feed(
+            vec![
+                FsChangeEvent::Coarse { root: pb("/r") },
+                FsChangeEvent::Unknown { path: a.clone() },
+                FsChangeEvent::Error { message: "x".into() },
+                FsChangeEvent::Unknown { path: b.clone() },
+            ],
+            Instant::now(),
+        );
+        // Expected order: Coarse, Error, Renamed (emitted at the second
+        // Unknown's position). The first Unknown queues, then pairs —
+        // so there's no standalone Unknown in the output.
+        assert_eq!(out.len(), 3);
+        assert!(matches!(&out[0], FsChangeEvent::Coarse { .. }));
+        assert!(matches!(&out[1], FsChangeEvent::Error { .. }));
+        assert_eq!(out[2], FsChangeEvent::Renamed { from: a, to: b });
+    }
+
+    #[test]
+    fn pairer_handles_three_unknowns_in_batch() {
+        // Three Unknowns: first two pair, third queues. Next feed past
+        // the window flushes the leftover as degraded.
+        let td = TempDir::new().unwrap();
+        let a = ghost_path(&td, "a");
+        let b = td.path().join("b");
+        fs::write(&b, b"").unwrap();
+        let c = ghost_path(&td, "c");
+
+        let mut p = RenamePairer::new(Duration::from_millis(100));
+        let t0 = Instant::now();
+        let out = p.feed(
+            vec![
+                FsChangeEvent::Unknown { path: a.clone() },
+                FsChangeEvent::Unknown { path: b.clone() },
+                FsChangeEvent::Unknown { path: c.clone() },
+            ],
+            t0,
+        );
+        assert_eq!(out.len(), 1);
+        assert_eq!(
+            out[0],
+            FsChangeEvent::Renamed {
+                from: a,
+                to: b,
+            }
+        );
+        assert_eq!(p.pending_count(), 1, "third unknown queued");
+
+        let out2 = p.feed(vec![], t0 + Duration::from_millis(250));
+        assert_eq!(out2.len(), 1);
+        assert!(matches!(
+            &out2[0],
+            FsChangeEvent::RenameDegraded { missing_half, .. } if missing_half == &c
+        ));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn pairer_macos_pairs_real_rename() {
+        // Real filesystem rename: A exists, then fs::rename(A, B).
+        // After the rename A is gone and B is live; stat'ing each
+        // Unknown at arrival time lets the pairer distinguish halves
+        // and emit Renamed { from: A, to: B }.
+        let td = TempDir::new().unwrap();
+        let a = td.path().join("original.txt");
+        let b = td.path().join("renamed.txt");
+        fs::write(&a, b"hello").unwrap();
+        fs::rename(&a, &b).unwrap();
+
+        let mut p = RenamePairer::new(Duration::from_secs(1));
+        let out = p.feed(
+            vec![
+                FsChangeEvent::Unknown { path: a.clone() },
+                FsChangeEvent::Unknown { path: b.clone() },
+            ],
+            Instant::now(),
+        );
+        assert_eq!(out, vec![FsChangeEvent::Renamed { from: a, to: b }]);
     }
 }

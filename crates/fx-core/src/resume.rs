@@ -11,7 +11,7 @@
 //! future-version snapshots with FxError::Unsupported rather than silently
 //! misinterpreting bytes.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -198,12 +198,177 @@ pub fn read_snapshot(path: &Path) -> Result<ResumeSnapshot, FxError> {
     Ok(resume)
 }
 
+// ============================================================================
+// events_since — resume-diff walk (commit 4.4).
+// ============================================================================
+
+/// Event kinds emitted by the resume walk. Shaped to match
+/// `watcher::FsChangeEvent` semantically so callers can forward into the
+/// same downstream pipeline.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResumeEvent {
+    /// Path exists now but didn't in the snapshot.
+    Appeared { path: PathBuf },
+    /// Path was in the snapshot but no longer exists.
+    Disappeared { path: PathBuf },
+    /// Path exists in both but mtime / size differs.
+    Modified { path: PathBuf },
+    /// Root itself disappeared — caller should treat subtree as gone.
+    RootDisappeared { root: PathBuf },
+}
+
+/// Materialize the absolute path of an entry by walking up its parent chain
+/// until we hit a root. Snapshots store the root's on-disk path on
+/// `RootStat`; intermediate entries only carry their segment name, so we
+/// join `root_stats[idx].path + segment-chain`.
+///
+/// Returns None if the id isn't in the snapshot, or if the ancestor chain
+/// is cyclic / terminates in a non-root (shouldn't happen for snapshots
+/// produced by `write_snapshot`).
+fn entry_path(snap: &ResumeSnapshot, id: EntryId) -> Option<PathBuf> {
+    // Depth cap mirrors snapshot::MAX_ANCESTOR_WALK — defends against cycles.
+    const MAX_HOPS: usize = 128;
+
+    // Walk up, collecting segments child→root. Stop when we hit an entry
+    // whose parent_id is None (a root in the store sense).
+    let mut segments: Vec<&str> = Vec::new();
+    let mut cur = id;
+    let mut root_id: Option<EntryId> = None;
+    for _ in 0..MAX_HOPS {
+        let entry = snap.entries.get(&cur)?;
+        segments.push(entry.name.as_str());
+        match entry.parent_id {
+            None => {
+                root_id = Some(cur);
+                break;
+            }
+            Some(p) => cur = p,
+        }
+    }
+    let root_id = root_id?;
+
+    // Find the on-disk path of this root via its position in snap.roots.
+    let root_pos = snap.roots.iter().position(|&r| r == root_id)?;
+    let root_path = snap.root_stats.get(root_pos).map(|rs| rs.path.clone())?;
+
+    // segments is child→root-segment. Drop the root segment (last pushed) —
+    // its on-disk path comes from RootStat, not from the entry's own name.
+    segments.pop();
+    segments.reverse();
+
+    let mut out = root_path;
+    for seg in segments {
+        out.push(seg);
+    }
+    Some(out)
+}
+
+/// Walk each root in the snapshot and diff it against the current on-disk
+/// state. Returns the set of events a just-resumed watcher would need to
+/// emit to bring subscribers up to date. Output is sorted by (variant,
+/// path) so replay into the event pipeline is deterministic.
+pub fn events_since(snap: &ResumeSnapshot) -> Result<Vec<ResumeEvent>, FxError> {
+    use crate::walker::{walk, WalkOptions};
+
+    let mut out: Vec<ResumeEvent> = Vec::new();
+
+    // Build the snapshot path-set once: (mtime_ms, size) keyed by absolute
+    // path. Entries whose path can't be materialized (unreachable from any
+    // root) are skipped — they can't be diffed against disk either way.
+    let mut snap_paths: HashMap<PathBuf, (i64, u64)> =
+        HashMap::with_capacity(snap.entries.len());
+    for (id, entry) in snap.entries.iter() {
+        if let Some(p) = entry_path(snap, *id) {
+            snap_paths.insert(p, (entry.mtime_ms, entry.size));
+        }
+    }
+
+    for root_stat in &snap.root_stats {
+        let root = &root_stat.path;
+
+        // Root-gone short-circuit: before walking, check the root itself.
+        // Missing root → emit RootDisappeared and skip per-entry diffing for
+        // this subtree (would otherwise flood with Disappeared events).
+        if !root.exists() {
+            out.push(ResumeEvent::RootDisappeared { root: root.clone() });
+            continue;
+        }
+
+        let walked = match walk(
+            root,
+            WalkOptions {
+                include_hidden: true,
+                include_root: true,
+                ..WalkOptions::default()
+            },
+        ) {
+            Ok(w) => w,
+            Err(FxError::Io { code: ErrorCode::ENOENT, .. }) => {
+                out.push(ResumeEvent::RootDisappeared { root: root.clone() });
+                continue;
+            }
+            Err(e) => return Err(e),
+        };
+
+        // Collect the disk view keyed by absolute path.
+        let mut disk_paths: HashMap<PathBuf, (i64, u64)> =
+            HashMap::with_capacity(walked.len());
+        for w in &walked {
+            disk_paths.insert(w.path.clone(), (w.mtime_ms, w.size));
+        }
+
+        // Scope the snapshot-side path-set to this root's subtree so we
+        // don't mis-flag entries from sibling roots as Disappeared here.
+        let snap_subtree: HashSet<&PathBuf> = snap_paths
+            .keys()
+            .filter(|p| p.starts_with(root))
+            .collect();
+
+        // Appeared: on disk, not in snapshot.
+        for p in disk_paths.keys() {
+            if !snap_paths.contains_key(p) {
+                out.push(ResumeEvent::Appeared { path: p.clone() });
+            }
+        }
+
+        // Disappeared + Modified.
+        for snap_p in snap_subtree {
+            match disk_paths.get(snap_p) {
+                None => out.push(ResumeEvent::Disappeared { path: snap_p.clone() }),
+                Some(&(disk_mtime, disk_size)) => {
+                    let (snap_mtime, snap_size) = snap_paths[snap_p];
+                    if disk_mtime != snap_mtime || disk_size != snap_size {
+                        out.push(ResumeEvent::Modified { path: snap_p.clone() });
+                    }
+                }
+            }
+        }
+    }
+
+    // Deterministic output so replay into the event pipeline is stable.
+    out.sort_by(|a, b| {
+        fn key(e: &ResumeEvent) -> (u8, &Path) {
+            match e {
+                ResumeEvent::Appeared { path } => (0, path),
+                ResumeEvent::Disappeared { path } => (1, path),
+                ResumeEvent::Modified { path } => (2, path),
+                ResumeEvent::RootDisappeared { root } => (3, root),
+            }
+        }
+        key(a).cmp(&key(b))
+    });
+
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::entry::{Entry, EntryId, EntryKind};
     use crate::store::EntryStore;
+    use crate::walker::{walk, WalkOptions};
     use std::fs;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use tempfile::TempDir;
 
     // Helper: shove a small tree into a fresh EntryStore. Returns the
@@ -364,5 +529,221 @@ mod tests {
 
         let err = write_snapshot(&snap, 0, &[], &path).unwrap_err();
         assert_eq!(err.code(), ErrorCode::ENOENT);
+    }
+
+    // ===== events_since tests (commit 4.4) =====
+
+    /// Walk a real directory, populate an EntryStore, build a ResumeSnapshot.
+    fn snapshot_of_real_dir(root: &Path) -> ResumeSnapshot {
+        let store = EntryStore::new();
+        let walked = walk(
+            root,
+            WalkOptions {
+                include_hidden: true,
+                include_root: true,
+                ..WalkOptions::default()
+            },
+        )
+        .unwrap();
+        crate::walker::populate_store(&store, root, &walked, None).unwrap();
+
+        // populate_store drained the id counter; the next_entry_id we report
+        // is the count of entries allocated (ids 0, 1, ... N-1).
+        let counter = AtomicU64::new(walked.len() as u64);
+
+        let snap = store.snapshot();
+        let root_mtime = fs::metadata(root)
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        let root_stats = vec![RootStat {
+            path: root.to_path_buf(),
+            mtime_ms: root_mtime,
+        }];
+
+        snapshot_to_resume(&snap, counter.load(Ordering::Relaxed), &root_stats)
+    }
+
+    #[test]
+    fn events_since_empty_when_nothing_changed() {
+        let td = TempDir::new().unwrap();
+        fs::write(td.path().join("a.txt"), b"hi").unwrap();
+        fs::create_dir(td.path().join("sub")).unwrap();
+        fs::write(td.path().join("sub").join("b.txt"), b"world").unwrap();
+
+        let snap = snapshot_of_real_dir(td.path());
+        let events = events_since(&snap).unwrap();
+        assert!(
+            events.is_empty(),
+            "unchanged tree must not emit events, got {events:?}"
+        );
+    }
+
+    #[test]
+    fn events_since_detects_new_file() {
+        let td = TempDir::new().unwrap();
+        fs::write(td.path().join("keep.txt"), b"hi").unwrap();
+        let snap = snapshot_of_real_dir(td.path());
+
+        fs::write(td.path().join("fresh.txt"), b"new!").unwrap();
+
+        let events = events_since(&snap).unwrap();
+        let appeared: Vec<&PathBuf> = events
+            .iter()
+            .filter_map(|e| match e {
+                ResumeEvent::Appeared { path } => Some(path),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            appeared.iter().any(|p| p.ends_with("fresh.txt")),
+            "expected Appeared(fresh.txt), got {events:?}"
+        );
+    }
+
+    #[test]
+    fn events_since_detects_deleted_file() {
+        let td = TempDir::new().unwrap();
+        fs::write(td.path().join("goner.txt"), b"bye").unwrap();
+        fs::write(td.path().join("keeper.txt"), b"still here").unwrap();
+        let snap = snapshot_of_real_dir(td.path());
+
+        fs::remove_file(td.path().join("goner.txt")).unwrap();
+
+        let events = events_since(&snap).unwrap();
+        let gone: Vec<&PathBuf> = events
+            .iter()
+            .filter_map(|e| match e {
+                ResumeEvent::Disappeared { path } => Some(path),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            gone.iter().any(|p| p.ends_with("goner.txt")),
+            "expected Disappeared(goner.txt), got {events:?}"
+        );
+    }
+
+    #[test]
+    fn events_since_detects_modified_file() {
+        let td = TempDir::new().unwrap();
+        let f = td.path().join("mut.txt");
+        fs::write(&f, b"v1").unwrap();
+        let snap = snapshot_of_real_dir(td.path());
+
+        // Alter size (always flags Modified even on coarse mtime filesystems).
+        // Brief sleep improves mtime-diff coverage on sub-second granularity.
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        fs::write(&f, b"v2-longer-content").unwrap();
+
+        let events = events_since(&snap).unwrap();
+        let modified: Vec<&PathBuf> = events
+            .iter()
+            .filter_map(|e| match e {
+                ResumeEvent::Modified { path } => Some(path),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            modified.iter().any(|p| p.ends_with("mut.txt")),
+            "expected Modified(mut.txt), got {events:?}"
+        );
+    }
+
+    #[test]
+    fn events_since_detects_root_gone() {
+        let td = TempDir::new().unwrap();
+        let root = td.path().join("doomed");
+        fs::create_dir(&root).unwrap();
+        fs::write(root.join("a.txt"), b"bye").unwrap();
+
+        let snap = snapshot_of_real_dir(&root);
+
+        fs::remove_dir_all(&root).unwrap();
+
+        let events = events_since(&snap).unwrap();
+        let root_gone: Vec<&PathBuf> = events
+            .iter()
+            .filter_map(|e| match e {
+                ResumeEvent::RootDisappeared { root } => Some(root),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            root_gone.len(),
+            1,
+            "expected one RootDisappeared, got {events:?}"
+        );
+        assert_eq!(*root_gone[0], root);
+        // No per-entry Disappeared spam — the whole subtree is folded.
+        let per_entry_gone: Vec<_> = events
+            .iter()
+            .filter(|e| matches!(e, ResumeEvent::Disappeared { .. }))
+            .collect();
+        assert!(
+            per_entry_gone.is_empty(),
+            "root-gone short-circuits per-entry Disappeared, got {per_entry_gone:?}"
+        );
+    }
+
+    #[test]
+    fn events_since_handles_multiple_roots() {
+        let td_a = TempDir::new().unwrap();
+        let td_b = TempDir::new().unwrap();
+        fs::write(td_a.path().join("a.txt"), b"A").unwrap();
+        fs::write(td_b.path().join("b.txt"), b"B").unwrap();
+
+        // Populate both roots into one EntryStore so they share the entries map.
+        let store = EntryStore::new();
+        for root in [td_a.path(), td_b.path()] {
+            let walked = walk(
+                root,
+                WalkOptions {
+                    include_hidden: true,
+                    include_root: true,
+                    ..WalkOptions::default()
+                },
+            )
+            .unwrap();
+            crate::walker::populate_store(&store, root, &walked, None).unwrap();
+        }
+
+        let snap = store.snapshot();
+        let root_stats = vec![
+            RootStat {
+                path: td_a.path().to_path_buf(),
+                mtime_ms: 0,
+            },
+            RootStat {
+                path: td_b.path().to_path_buf(),
+                mtime_ms: 0,
+            },
+        ];
+        let resume = snapshot_to_resume(&snap, 0, &root_stats);
+
+        // Mutate only root A; root B stays untouched.
+        fs::write(td_a.path().join("new.txt"), b"x").unwrap();
+
+        let events = events_since(&resume).unwrap();
+        let in_b: Vec<_> = events
+            .iter()
+            .filter(|e| match e {
+                ResumeEvent::Appeared { path }
+                | ResumeEvent::Disappeared { path }
+                | ResumeEvent::Modified { path } => path.starts_with(td_b.path()),
+                ResumeEvent::RootDisappeared { root } => root.starts_with(td_b.path()),
+            })
+            .collect();
+
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                ResumeEvent::Appeared { path } if path.ends_with("new.txt")
+            )),
+            "expected Appeared(new.txt) in root A, got {events:?}"
+        );
+        assert!(in_b.is_empty(), "root B should have no events, got {in_b:?}");
     }
 }

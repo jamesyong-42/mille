@@ -21,6 +21,10 @@ pub use fs::{DirEntry, Fs, FsMetadata, InMemoryFs, RealFs};
 pub mod store;
 pub use store::EntryStore;
 
+// Phase 4 — ChangeSet accumulator consumed by the per-session delta diff.
+pub mod changes;
+pub use changes::ChangeSet;
+
 // TODO: Phase 4 — writeSnapshot / eventsSince (here now so store can use it)
 pub mod snapshot;
 pub use snapshot::{StoreSnapshot, VisibleRowCount, VisibleRowOut, VisibleRowsQuery};

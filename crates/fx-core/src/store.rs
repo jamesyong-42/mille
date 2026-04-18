@@ -15,6 +15,7 @@ use arc_swap::ArcSwap;
 use dashmap::DashMap;
 use parking_lot::Mutex;
 
+use crate::changes::ChangeSet;
 use crate::entry::{Entry, EntryId, EntryKind};
 use crate::error::FxError;
 use crate::snapshot::{entry_counts_visible, StoreSnapshot, MAX_ANCESTOR_WALK};
@@ -24,6 +25,10 @@ pub struct EntryStore {
     path_to_id: DashMap<PathBuf, EntryId>,
     id_counter: AtomicU64,
     write_lock: Mutex<()>,
+    // Accumulated structural changes since the last take_pending_changes().
+    // Guarded by its own mutex so writers can push under the write_lock without
+    // tangling the main snapshot publish path.
+    pending_changes: Mutex<ChangeSet>,
 }
 
 impl EntryStore {
@@ -33,6 +38,7 @@ impl EntryStore {
             path_to_id: DashMap::new(),
             id_counter: AtomicU64::new(0),
             write_lock: Mutex::new(()),
+            pending_changes: Mutex::new(ChangeSet::default()),
         }
     }
 
@@ -92,7 +98,9 @@ impl EntryStore {
         next.descendant_total_sizes.insert(id, size);
 
         // Walk ancestors, bumping each summary. Depth-capped at MAX_ANCESTOR_WALK
-        // so a malformed parent_id cycle can't spin us forever.
+        // so a malformed parent_id cycle can't spin us forever. Collect the
+        // visited ancestors so the ChangeSet accumulator can record them too.
+        let mut visited_ancestors: Vec<EntryId> = Vec::new();
         let mut cur = parent;
         let mut hops: usize = 0;
         while let Some(a) = cur {
@@ -103,14 +111,25 @@ impl EntryStore {
                 *next.descendant_visible_counts.entry(a).or_insert(0) += 1;
             }
             *next.descendant_total_sizes.entry(a).or_insert(0) += size;
+            visited_ancestors.push(a);
             cur = next.entries.get(&a).and_then(|e| e.parent_id);
             hops += 1;
         }
 
+        let prev_tree_version = next.tree_version;
         next.tree_version += 1;
+        let new_tree_version = next.tree_version;
         self.inner.store(Arc::new(next));
 
         self.path_to_id.insert(path, id);
+
+        // Record the mutation in the pending ChangeSet for Phase 7 delta diff.
+        self.record_mutation(prev_tree_version, new_tree_version, |cs| {
+            cs.changed_ids.insert(id);
+            for a in &visited_ancestors {
+                cs.subtree_roots_changed.insert(*a);
+            }
+        });
         Ok(id)
     }
 
@@ -150,7 +169,9 @@ impl EntryStore {
         }
 
         // Ancestor-walk mirrors insert. saturating_sub defends against malformed
-        // data where the cache somehow drifted below the contribution.
+        // data where the cache somehow drifted below the contribution. Collect
+        // visited ancestors for the ChangeSet accumulator.
+        let mut visited_ancestors: Vec<EntryId> = Vec::new();
         let mut cur = parent_for_walk;
         let mut hops: usize = 0;
         while let Some(a) = cur {
@@ -163,11 +184,14 @@ impl EntryStore {
             if let Some(s) = next.descendant_total_sizes.get_mut(&a) {
                 *s = s.saturating_sub(size_contribution);
             }
+            visited_ancestors.push(a);
             cur = next.entries.get(&a).and_then(|e| e.parent_id);
             hops += 1;
         }
 
+        let prev_tree_version = next.tree_version;
         next.tree_version += 1;
+        let new_tree_version = next.tree_version;
         self.inner.store(Arc::new(next));
 
         // O(n) in path count — acceptable for Phase 1; reverse index lands in Phase 2.
@@ -179,6 +203,15 @@ impl EntryStore {
         if let Some(p) = path_to_remove {
             self.path_to_id.remove(&p);
         }
+
+        // Record the mutation in the pending ChangeSet for Phase 7 delta diff.
+        self.record_mutation(prev_tree_version, new_tree_version, |cs| {
+            cs.changed_ids.insert(id);
+            for a in &visited_ancestors {
+                cs.subtree_roots_changed.insert(*a);
+            }
+        });
+
         Some(existing)
     }
 
@@ -234,7 +267,9 @@ impl EntryStore {
             }
         }
 
+        let prev_tree_version = next.tree_version;
         next.tree_version += 1;
+        let new_tree_version = next.tree_version;
         self.inner.store(Arc::new(next));
 
         // path_to_id update trails snapshot publish, matching insert()'s ordering.
@@ -248,7 +283,34 @@ impl EntryStore {
         }
         self.path_to_id.insert(new_path, id);
 
+        // Leaf rename: parent unchanged, so reparented_ids stays empty.
+        self.record_mutation(prev_tree_version, new_tree_version, |cs| {
+            cs.changed_ids.insert(id);
+        });
+
         Ok(())
+    }
+
+    /// Push a mutation into the pending ChangeSet. Stamps `from_version` on
+    /// the first accumulation after a drain, then keeps `to_version` current.
+    fn record_mutation<F>(&self, prev_tree_version: u64, new_tree_version: u64, f: F)
+    where
+        F: FnOnce(&mut ChangeSet),
+    {
+        let mut cs = self.pending_changes.lock();
+        if cs.is_empty() && cs.from_version == 0 && cs.to_version == 0 {
+            cs.from_version = prev_tree_version;
+        }
+        cs.to_version = new_tree_version;
+        f(&mut cs);
+    }
+
+    /// Drain the pending ChangeSet, returning what accumulated since the last
+    /// call (or since construction). After this call, the internal ChangeSet
+    /// is empty and ready to accumulate again.
+    pub fn take_pending_changes(&self) -> ChangeSet {
+        let mut cs = self.pending_changes.lock();
+        std::mem::take(&mut *cs)
     }
 
     // Test-only: force the id counter near overflow so the cap can be exercised.
@@ -610,5 +672,83 @@ mod tests {
 
         s.rename(b, "/r/zzz".into()).unwrap();
         assert_eq!(s.snapshot().children_of(root), &[a, c, b]);
+    }
+
+    // --- ChangeSet producer tests (commit 4.1) ---
+
+    #[test]
+    fn insert_populates_changeset_with_id_and_ancestors() {
+        let s = EntryStore::new();
+        let a = s.insert("/a".into(), dir("a", None)).unwrap();
+        let b = s.insert("/a/b".into(), leaf("b", Some(a))).unwrap();
+        let cs = s.take_pending_changes();
+        assert!(cs.changed_ids.contains(&a));
+        assert!(cs.changed_ids.contains(&b));
+        // Inserting b walks through a as an ancestor, so a is a subtree root.
+        assert!(cs.subtree_roots_changed.contains(&a));
+        // Root a has no parent, so it doesn't contribute a subtree ancestor itself.
+        assert!(cs.reparented_ids.is_empty());
+    }
+
+    #[test]
+    fn remove_populates_changeset() {
+        let s = EntryStore::new();
+        let a = s.insert("/a".into(), dir("a", None)).unwrap();
+        let b = s.insert("/a/b".into(), leaf("b", Some(a))).unwrap();
+        // Drain post-insert to isolate the remove contribution.
+        let _ = s.take_pending_changes();
+
+        s.remove(b).unwrap();
+        let cs = s.take_pending_changes();
+        assert!(cs.changed_ids.contains(&b));
+        assert!(cs.subtree_roots_changed.contains(&a));
+    }
+
+    #[test]
+    fn rename_leaf_populates_changeset_without_reparent() {
+        let s = EntryStore::new();
+        let id = s.insert("/a".into(), leaf("a", None)).unwrap();
+        let _ = s.take_pending_changes();
+
+        s.rename(id, "/b".into()).unwrap();
+        let cs = s.take_pending_changes();
+        assert!(cs.changed_ids.contains(&id));
+        assert!(cs.reparented_ids.is_empty(), "leaf rename does not reparent");
+    }
+
+    #[test]
+    fn take_pending_changes_drains_to_empty() {
+        let s = EntryStore::new();
+        s.insert("/a".into(), leaf("a", None)).unwrap();
+        s.insert("/b".into(), leaf("b", None)).unwrap();
+        let first = s.take_pending_changes();
+        assert!(!first.is_empty());
+        let second = s.take_pending_changes();
+        assert!(second.is_empty(), "second drain should be empty");
+    }
+
+    #[test]
+    fn take_pending_changes_stamps_version_range() {
+        let s = EntryStore::new();
+        let v_before = s.tree_version();
+        s.insert("/a".into(), leaf("a", None)).unwrap();
+        s.insert("/b".into(), leaf("b", None)).unwrap();
+        let v_after = s.tree_version();
+        let cs = s.take_pending_changes();
+        assert_eq!(cs.from_version, v_before);
+        assert_eq!(cs.to_version, v_after);
+    }
+
+    #[test]
+    fn multiple_mutations_accumulate_into_one_changeset() {
+        let s = EntryStore::new();
+        let a = s.insert("/a".into(), leaf("a", None)).unwrap();
+        let b = s.insert("/b".into(), leaf("b", None)).unwrap();
+        let c = s.insert("/c".into(), leaf("c", None)).unwrap();
+        let cs = s.take_pending_changes();
+        assert!(cs.changed_ids.contains(&a));
+        assert!(cs.changed_ids.contains(&b));
+        assert!(cs.changed_ids.contains(&c));
+        assert_eq!(cs.changed_ids.len(), 3);
     }
 }

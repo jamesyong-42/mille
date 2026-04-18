@@ -46,6 +46,10 @@ pub use watcher::{
 pub mod volatile;
 pub use volatile::VolatileTracker;
 
+// Phase 3.9 — mutation intent cache (watcher echo suppression)
+pub mod intent;
+pub use intent::{IntentCache, IntentKind, MutationIntent};
+
 // TODO: Phase 10 — nucleo fuzzy search adapter
 pub mod search;
 

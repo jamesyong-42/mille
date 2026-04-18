@@ -7,6 +7,9 @@
 #[macro_use]
 extern crate napi_derive;
 
+pub mod explorer;
+pub mod types;
+
 /// Module version string. Present so the native module has at least one
 /// exported symbol and can be `require()`d end-to-end during Phase 0.
 #[napi]

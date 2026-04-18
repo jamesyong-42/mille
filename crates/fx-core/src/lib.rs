@@ -29,6 +29,11 @@ pub use changes::ChangeSet;
 pub mod snapshot;
 pub use snapshot::{StoreSnapshot, VisibleRowCount, VisibleRowOut, VisibleRowsQuery};
 
+// Phase 4.3 — crash-resume disk IO (write_snapshot / read_snapshot). The
+// diff-walk (events_since) lands in 4.4.
+pub mod resume;
+pub use resume::{read_snapshot, write_snapshot, ResumeSnapshot, RootStat, CURRENT_FORMAT_VERSION};
+
 // TODO: Phase 2 — jwalk-based walker + coalescer
 pub mod walker;
 pub use walker::{

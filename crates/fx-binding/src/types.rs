@@ -1,3 +1,194 @@
 //! JS-boundary `#[napi(object)]` mirrors of fx-core types.
 //!
-//! Populated in Phase 5 commit 5.2. See PLAN.md.
+//! Field names stay snake_case in Rust; napi-rs auto-rewrites them to
+//! camelCase on the JS side so the emitted shape matches `api.d.ts`.
+//!
+//! Core Rust types (`fx_core::Entry`, etc.) stay pure-serde for bincode.
+//! The `*Js` mirrors here are `#[napi(object)]` for the JS boundary,
+//! with `from_core` converters kept `pub(crate)` so fx-core's shape can
+//! evolve without disturbing the JS surface.
+
+use napi_derive::napi;
+
+use fx_core::{Entry, EntryId, VisibleRowCount, VisibleRowOut};
+
+/// Narrow an `EntryId(u64)` to `i64` for NAPI. The allocator caps raw ids
+/// at 2^53 (api.d.ts contract), so this assertion never fires in practice
+/// — but we keep it as a tripwire in case the invariant ever regresses.
+#[inline]
+fn entry_id_to_i64(id: EntryId) -> i64 {
+    let raw = id.raw();
+    debug_assert!(
+        raw < fx_core::entry::ENTRY_ID_MAX,
+        "EntryId exceeded 2^53 JS-safe ceiling: {raw}"
+    );
+    raw as i64
+}
+
+/// Mirror of api.d.ts `Entry`.
+#[napi(object)]
+pub struct EntryJs {
+    pub id: i64,
+    pub parent_id: Option<i64>,
+    pub name: String,
+    /// `EntryKind` numeric variant (0=File, 1=Directory, 2=Symlink, 3=Unknown).
+    pub kind: u8,
+    pub size: i64,
+    pub mtime_ms: i64,
+    pub ctime_ms: i64,
+    pub symlink_target_is_dir: Option<bool>,
+    pub path_segments: Option<Vec<String>>,
+    pub is_ignored: bool,
+    pub is_readonly: bool,
+    pub is_hidden: bool,
+}
+
+impl EntryJs {
+    pub(crate) fn from_core(e: &Entry) -> Self {
+        Self {
+            id: entry_id_to_i64(e.id),
+            parent_id: e.parent_id.map(entry_id_to_i64),
+            name: e.name.clone(),
+            kind: e.kind as u8,
+            size: e.size as i64,
+            mtime_ms: e.mtime_ms,
+            ctime_ms: e.ctime_ms,
+            symlink_target_is_dir: e.symlink_target_is_dir,
+            path_segments: e.path_segments.clone(),
+            is_ignored: e.is_ignored,
+            is_readonly: e.is_readonly,
+            is_hidden: e.is_hidden,
+        }
+    }
+}
+
+/// Mirror of api.d.ts `VisibleRow`. Extends `EntryJs` with view metadata.
+#[napi(object)]
+pub struct VisibleRowJs {
+    pub id: i64,
+    pub parent_id: Option<i64>,
+    pub name: String,
+    pub kind: u8,
+    pub size: i64,
+    pub mtime_ms: i64,
+    pub ctime_ms: i64,
+    pub symlink_target_is_dir: Option<bool>,
+    pub path_segments: Option<Vec<String>>,
+    pub is_ignored: bool,
+    pub is_readonly: bool,
+    pub is_hidden: bool,
+    pub depth: u32,
+    pub has_children: bool,
+    pub is_expanded: bool,
+    /// `true` if the row is a placeholder (real data still in flight).
+    pub pending: Option<bool>,
+}
+
+impl VisibleRowJs {
+    pub(crate) fn from_core(row: &VisibleRowOut, entry: &Entry) -> Self {
+        Self {
+            id: entry_id_to_i64(entry.id),
+            parent_id: entry.parent_id.map(entry_id_to_i64),
+            name: entry.name.clone(),
+            kind: entry.kind as u8,
+            size: entry.size as i64,
+            mtime_ms: entry.mtime_ms,
+            ctime_ms: entry.ctime_ms,
+            symlink_target_is_dir: entry.symlink_target_is_dir,
+            path_segments: entry.path_segments.clone(),
+            is_ignored: entry.is_ignored,
+            is_readonly: entry.is_readonly,
+            is_hidden: entry.is_hidden,
+            depth: row.depth as u32,
+            has_children: row.has_children,
+            is_expanded: row.is_expanded,
+            pending: None,
+        }
+    }
+}
+
+/// Mirror of api.d.ts `ListPage`.
+#[napi(object)]
+pub struct ListPageJs {
+    pub entries: Vec<EntryJs>,
+    pub total: u32,
+    pub has_more: bool,
+}
+
+/// Mirror of api.d.ts `VisibleRowCount`.
+#[napi(object)]
+pub struct VisibleRowCountJs {
+    pub known: u32,
+    pub pending_expansions: Vec<i64>,
+}
+
+impl VisibleRowCountJs {
+    pub(crate) fn from_core(c: &VisibleRowCount) -> Self {
+        Self {
+            known: c.known,
+            pending_expansions: c
+                .pending_expansions
+                .iter()
+                .copied()
+                .map(entry_id_to_i64)
+                .collect(),
+        }
+    }
+}
+
+/// Mirror of api.d.ts `Decoration`.
+#[napi(object)]
+pub struct DecorationJs {
+    pub badge: Option<String>,
+    pub color: Option<String>,
+    pub tooltip: Option<String>,
+    pub propagate: Option<bool>,
+}
+
+/// Mirror of api.d.ts `SearchHit`.
+#[napi(object)]
+pub struct SearchHitJs {
+    pub entry: EntryJs,
+    pub score: f64,
+    pub matched_indices: Vec<u32>,
+}
+
+/// Mirror of api.d.ts `FileSystemEvent` union.
+///
+/// NAPI doesn't natively render TS discriminated unions, so we emit a
+/// flat object with a `kind` discriminant and all other fields optional.
+/// A small TS wrapper in Phase 6 normalizes this back into the
+/// api.d.ts union shape for consumers.
+///
+/// `kind` is one of: 'created' | 'changed' | 'deleted' | 'renamed'
+///                 | 'error' | 'warning' | 'overflow'.
+#[napi(object)]
+pub struct FileSystemEventJs {
+    pub kind: String,
+    pub id: Option<i64>,
+    pub parent_id: Option<i64>,
+    pub old_parent_id: Option<i64>,
+    pub new_parent_id: Option<i64>,
+    pub old_name: Option<String>,
+    pub new_name: Option<String>,
+    pub entry: Option<EntryJs>,
+    pub path: Option<String>,
+    /// ErrorCode for `kind: 'error'`, WarningCode for `kind: 'warning'`.
+    pub code: Option<String>,
+    pub message: Option<String>,
+    pub detail: Option<String>,
+}
+
+/// Mirror of api.d.ts `ChangeNotice`. Fires on each 'change' /
+/// 'change:tree' / 'change:decorations' emission.
+#[napi(object)]
+pub struct ChangeNoticeJs {
+    pub tree_version: u32,
+    pub decoration_version: u32,
+    pub tree_changed: bool,
+    pub decorations_changed: bool,
+    pub changed_ids: Vec<i64>,
+    pub child_set_changed: Vec<i64>,
+    pub decoration_changed_ids: Vec<i64>,
+    pub coarse_subtrees: Vec<i64>,
+}

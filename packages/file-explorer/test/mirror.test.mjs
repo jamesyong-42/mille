@@ -179,13 +179,8 @@ test('ClientMirrorSnapshot.getDecorations returns empty array', () => {
   assert.deepEqual(snap.getDecorations(1), []);
 });
 
-test('ClientMirrorSnapshot.visibleRows throws until Phase 8.4', () => {
-  const snap = new ClientMirrorSnapshot(createMirror());
-  assert.throws(
-    () => snap.visibleRows({ expanded: new Set(), offset: 0, limit: 10 }),
-    /Phase 8\.4/,
-  );
-});
+// visibleRows lands in 8.4 — coverage in test/visible-rows.test.mjs.
+// visibleRowCount lands in 8.5 — coverage in test/visible-row-count.test.mjs.
 
 test('ClientMirrorSnapshot.visibleRowCount throws until Phase 8.5', () => {
   const snap = new ClientMirrorSnapshot(createMirror());

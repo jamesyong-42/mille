@@ -54,6 +54,33 @@ function clientEntryToEntry(c: ClientEntry): Entry {
 }
 
 /**
+ * Sort children by name for deterministic display order. The client
+ * may receive child ids out-of-order (the host sends them in
+ * id-allocation order, not sorted); sort here using the byId map so
+ * wire-order doesn't leak into the rendered tree. Falls back to id
+ * comparison when names collide.
+ */
+function sortChildrenByName(ids: number[], byId: Map<number, ClientEntry>): number[] {
+  return [...ids].sort((a, b) => {
+    const na = byId.get(a)?.name ?? '';
+    const nb = byId.get(b)?.name ?? '';
+    if (na === nb) return a - b;
+    return na < nb ? -1 : 1;
+  });
+}
+
+/**
+ * Invisibility filter matching fx-core's `entry_counts_visible`.
+ * Ignored and hidden entries drop out of the default visible set;
+ * `includeIgnored=true` disables both filters (mirroring the Rust
+ * side's single boolean).
+ */
+function isVisibleEntry(e: ClientEntry, includeIgnored: boolean): boolean {
+  if (includeIgnored) return true;
+  return !e.isIgnored && !e.isHidden;
+}
+
+/**
  * Frozen view of a MirrorWorking. Consumers receive this via
  * `PortFileExplorer.getSnapshot()` (wired in Wave 2); identity is
  * stable until the reducer publishes a new one.
@@ -110,9 +137,80 @@ export class ClientMirrorSnapshot {
     return count > 0;
   }
 
-  /** Flat-slice algorithm arrives in Phase 8.4. */
-  visibleRows(_options: VisibleRowsOptions): readonly VisibleRow[] {
-    throw new Error('ClientMirrorSnapshot.visibleRows: implemented in Phase 8.4');
+  /**
+   * Flat-slice of the visible tree, mirroring fx-core's
+   * `snapshot::visible_rows`. Iterative DFS over byId + children:
+   *
+   *   - Roots are pushed onto the stack in reverse so children pop in
+   *     left-to-right order (matches fx-core).
+   *   - Ignored / hidden entries are skipped entirely (both themselves
+   *     and their descendants), matching `entry_counts_visible`. An
+   *     invisible-but-expanded parent MUST NOT emit its children —
+   *     otherwise rows would appear at the wrong depth with no parent
+   *     above them. SPEC §4.9.2 and the earlier audit both call this out.
+   *   - Children are re-sorted by name on read: the wire delivers them
+   *     in id-allocation order, not sorted.
+   *   - offset/limit slice with early termination: once we've emitted
+   *     `limit` rows we return without traversing the rest of the tree.
+   *   - Expanded folders whose child list isn't in the mirror are
+   *     simply not descended into here — `visibleRowCount` is the
+   *     method that surfaces them as pending.
+   */
+  visibleRows(options: VisibleRowsOptions): readonly VisibleRow[] {
+    const includeIgnored = options.includeIgnored ?? false;
+    const limit = options.limit;
+    if (limit === 0) return [];
+
+    const out: VisibleRow[] = [];
+    const expanded = options.expanded;
+    let skipped = 0;
+
+    type Frame = { id: number; depth: number };
+    const stack: Frame[] = [];
+
+    // Reverse-push so DFS emits roots left-to-right.
+    for (let i = this.state.roots.length - 1; i >= 0; i--) {
+      stack.push({ id: this.state.roots[i]!, depth: 0 });
+    }
+
+    while (stack.length > 0) {
+      const frame = stack.pop()!;
+      const entry = this.state.byId.get(frame.id);
+      if (entry === undefined) continue;
+      if (!isVisibleEntry(entry, includeIgnored)) continue; // no emit, no descend
+
+      if (skipped < options.offset) {
+        skipped++;
+      } else {
+        const hasChildren = (this.state.directChildCounts.get(frame.id) ?? 0) > 0;
+        const base = clientEntryToEntry(entry);
+        const row: VisibleRow = {
+          ...base,
+          depth: frame.depth,
+          hasChildren,
+          isExpanded: expanded.has(frame.id),
+        };
+        out.push(row);
+        if (out.length >= limit) return out;
+      }
+
+      // Descend only when the expanded parent is itself visible (the
+      // invisibility check above already guaranteed that). If the
+      // children map doesn't hold this id yet (worker hasn't delivered
+      // them), skip descent — visibleRowCount reports it as pending.
+      if (expanded.has(frame.id)) {
+        const kids = this.state.children.get(frame.id);
+        if (kids !== undefined) {
+          const sorted = sortChildrenByName(kids, this.state.byId);
+          const childDepth = frame.depth + 1;
+          for (let i = sorted.length - 1; i >= 0; i--) {
+            stack.push({ id: sorted[i]!, depth: childDepth });
+          }
+        }
+      }
+    }
+
+    return out;
   }
 
   /** pendingExpansions-aware counter arrives in Phase 8.5. */

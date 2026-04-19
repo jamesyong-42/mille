@@ -155,6 +155,11 @@ export class ClientMirrorSnapshot {
    *   - Expanded folders whose child list isn't in the mirror are
    *     simply not descended into here — `visibleRowCount` is the
    *     method that surfaces them as pending.
+   *   - Cache-miss rows (SPEC §4.9.6): an id the mirror expected (via
+   *     `children[parent]` or `roots`) but whose entry hasn't arrived
+   *     yet emits a `pending: true` placeholder instead of being
+   *     skipped. The renderer shows a skeleton at the correct depth
+   *     and the row is replaced in-place once the real entry lands.
    */
   visibleRows(options: VisibleRowsOptions): readonly VisibleRow[] {
     const includeIgnored = options.includeIgnored ?? false;
@@ -176,7 +181,34 @@ export class ClientMirrorSnapshot {
     while (stack.length > 0) {
       const frame = stack.pop()!;
       const entry = this.state.byId.get(frame.id);
-      if (entry === undefined) continue;
+      if (entry === undefined) {
+        // Cache miss — emit a placeholder row so the renderer shows a
+        // skeleton at this position. Descent stops here: we don't
+        // know the children until the entry arrives. SPEC §4.9.6.
+        if (skipped < options.offset) {
+          skipped++;
+          continue;
+        }
+        const placeholder: VisibleRow = {
+          id: frame.id,
+          parentId: null,
+          name: '',
+          kind: 0,
+          size: 0,
+          mtimeMs: 0,
+          ctimeMs: 0,
+          isIgnored: false,
+          isReadonly: false,
+          isHidden: false,
+          depth: frame.depth,
+          hasChildren: false,
+          isExpanded: false,
+          pending: true,
+        };
+        out.push(placeholder);
+        if (out.length >= limit) return out;
+        continue;
+      }
       if (!isVisibleEntry(entry, includeIgnored)) continue; // no emit, no descend
 
       if (skipped < options.offset) {

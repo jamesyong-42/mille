@@ -257,3 +257,94 @@ test('visibleRows: siblings of invisible-expanded parent still render', () => {
   });
   assert.deepEqual(rows.map((r) => r.name), ['root', 'visible-sibling']);
 });
+
+// ─── 8.7: cache-miss placeholder rows ────────────────────────────────
+
+test('visibleRows: root id missing from byId emits a pending placeholder', () => {
+  // The client got a setExpanded reply that named a root id but the
+  // entry payload hasn't landed yet. The virtualizer still needs a row
+  // at that offset so scrollTop is stable; visibleRows emits a
+  // placeholder with `pending: true` at depth 0.
+  const m = createMirror();
+  m.roots.push(42); // No byId entry.
+  const snap = new ClientMirrorSnapshot(m);
+
+  const rows = snap.visibleRows({
+    expanded: new Set(),
+    offset: 0,
+    limit: 10,
+  });
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].id, 42);
+  assert.equal(rows[0].pending, true);
+  assert.equal(rows[0].depth, 0);
+  assert.equal(rows[0].hasChildren, false);
+  assert.equal(rows[0].isExpanded, false);
+});
+
+test('visibleRows: missing expanded child id emits placeholder at child depth', () => {
+  // root is known and expanded; its child list references id 99 which
+  // isn't yet in byId. The placeholder renders at depth=1 with
+  // pending: true so the skeleton indents correctly.
+  const m = createMirror();
+  seedDir(m, 1, 'root', null, 1);
+  m.children.set(1, [99]);
+  m.roots.push(1);
+  const snap = new ClientMirrorSnapshot(m);
+
+  const rows = snap.visibleRows({
+    expanded: new Set([1]),
+    offset: 0,
+    limit: 10,
+  });
+  assert.equal(rows.length, 2);
+  assert.equal(rows[0].name, 'root');
+  assert.equal(rows[1].id, 99);
+  assert.equal(rows[1].pending, true);
+  assert.equal(rows[1].depth, 1);
+});
+
+test('visibleRows: mixed real + placeholder rows interleave at correct positions', () => {
+  // Child list: [known-a, missing, known-b]. Sorted by name — but
+  // the placeholder has no name so it sorts to the top (empty string
+  // sorts before any real name). Assert we get the expected DFS
+  // shape: root, placeholder, known-a, known-b.
+  const m = createMirror();
+  seedDir(m, 1, 'root', null, 3);
+  seedFile(m, 10, 'known-a.txt', 1);
+  seedFile(m, 11, 'known-b.txt', 1);
+  // 99 is referenced but missing.
+  m.children.set(1, [10, 11, 99]);
+  m.roots.push(1);
+  const snap = new ClientMirrorSnapshot(m);
+
+  const rows = snap.visibleRows({
+    expanded: new Set([1]),
+    offset: 0,
+    limit: 10,
+  });
+  assert.equal(rows.length, 4);
+  assert.equal(rows[0].name, 'root');
+  // Real rows present, pending row present at correct depth.
+  const pendingRow = rows.find((r) => r.pending === true);
+  assert.ok(pendingRow, 'pending row emitted');
+  assert.equal(pendingRow.id, 99);
+  assert.equal(pendingRow.depth, 1);
+  const names = rows
+    .filter((r) => r.pending !== true)
+    .map((r) => r.name);
+  assert.deepEqual(names, ['root', 'known-a.txt', 'known-b.txt']);
+});
+
+test('visibleRows: placeholder respects offset + limit', () => {
+  // Two missing root ids. offset=1, limit=1 should skip the first
+  // placeholder and return the second.
+  const m = createMirror();
+  m.roots.push(50, 51);
+  const snap = new ClientMirrorSnapshot(m);
+
+  const rows = snap.visibleRows({ expanded: new Set(), offset: 1, limit: 1 });
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].id, 51);
+  assert.equal(rows[0].pending, true);
+});

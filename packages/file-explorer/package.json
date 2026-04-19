@@ -1,6 +1,6 @@
 {
   "name": "@mille/file-explorer",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "High-performance file explorer library for Electron IDEs. Native Rust core via NAPI-RS.",
   "license": "MIT",
   "type": "module",

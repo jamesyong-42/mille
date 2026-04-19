@@ -117,6 +117,14 @@ class FileExplorerHostImpl implements FileExplorerHost {
    */
   private pendingCoarseSubtrees: Set<number> = new Set();
   /**
+   * Volatile-subtree markers per SPEC §4.9.10. A root cannot ride both
+   * fields in the same delta — the mark* methods enforce the
+   * dirty-xor-resynced invariant at enqueue time so the tick never has
+   * to reconcile them.
+   */
+  private pendingSubtreeDirty: Set<number> = new Set();
+  private pendingSubtreeResynced: Set<number> = new Set();
+  /**
    * Serial promise chain all mutations hang off. SPEC §5.1's ordering
    * guarantee — delta fan-out to every session must precede the
    * initiator's mutateResult — falls out of enqueuing each mutation on
@@ -138,6 +146,20 @@ class FileExplorerHostImpl implements FileExplorerHost {
 
   markSubtreeCoarse(rootId: number): void {
     this.pendingCoarseSubtrees.add(rootId);
+  }
+
+  markSubtreeDirty(rootId: number): void {
+    this.pendingSubtreeDirty.add(rootId);
+    // A root cannot be simultaneously dirty and resynced — the pair
+    // maps to opposite transitions in VolatileTracker's flip/release
+    // state machine. If a previous resynced hadn't drained yet, the
+    // latest transition wins.
+    this.pendingSubtreeResynced.delete(rootId);
+  }
+
+  markSubtreeResynced(rootId: number): void {
+    this.pendingSubtreeResynced.add(rootId);
+    this.pendingSubtreeDirty.delete(rootId);
   }
 
   attachPort(rawPort: MessagePortLike): Disposable {
@@ -213,11 +235,22 @@ class FileExplorerHostImpl implements FileExplorerHost {
     // per session) guarantees all attached sessions see the same marker
     // set in the delta they receive this frame.
     const coarse = this.pendingCoarseSubtrees.size > 0 ? [...this.pendingCoarseSubtrees] : [];
+    const subtreeDirty =
+      this.pendingSubtreeDirty.size > 0 ? [...this.pendingSubtreeDirty] : [];
+    const subtreeResynced =
+      this.pendingSubtreeResynced.size > 0 ? [...this.pendingSubtreeResynced] : [];
     if (coarse.length > 0) this.pendingCoarseSubtrees.clear();
+    if (subtreeDirty.length > 0) this.pendingSubtreeDirty.clear();
+    if (subtreeResynced.length > 0) this.pendingSubtreeResynced.clear();
 
     // Skip the tick entirely when there's nothing to report — neither
     // a ChangeSet nor any subtree markers. Keeps idle hosts quiet.
-    if (changeSetEmpty && coarse.length === 0) {
+    if (
+      changeSetEmpty &&
+      coarse.length === 0 &&
+      subtreeDirty.length === 0 &&
+      subtreeResynced.length === 0
+    ) {
       return;
     }
 
@@ -245,8 +278,8 @@ class FileExplorerHostImpl implements FileExplorerHost {
           directChildCounts: {},
           newVisibleCount: 0,
           coarseSubtrees: coarse,
-          subtreeDirty: [],
-          subtreeResynced: [],
+          subtreeDirty,
+          subtreeResynced,
         }),
       );
     }

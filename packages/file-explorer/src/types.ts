@@ -45,5 +45,20 @@ export interface FileExplorerHost {
    * whole mirror. Wired to the native watcher in Phase 5.
    */
   markSubtreeCoarse(rootId: number): void;
+  /**
+   * Flag a subtree as volatile-dirty. The next tick's delta rides a
+   * single `subtreeDirty: [rootId]` marker; per-descendant events are
+   * suppressed on the wire until `markSubtreeResynced` fires. Per SPEC
+   * §4.9.10 — absorbs npm-install / cargo-build event storms.
+   */
+  markSubtreeDirty(rootId: number): void;
+  /**
+   * Flag a subtree as volatile-resynced. Clears any pending dirty flag
+   * on the same root (mutually exclusive transitions) and emits a
+   * single `subtreeResynced: [rootId]` marker on the next delta.
+   * Consumers re-query the subtree's children to pick up post-storm
+   * state.
+   */
+  markSubtreeResynced(rootId: number): void;
   dispose(): Promise<void>;
 }

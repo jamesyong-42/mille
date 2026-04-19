@@ -511,3 +511,115 @@ test('markSubtreeCoarse produces coarseSubtrees in the next delta', async () => 
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// ── 7.9: volatile-subtree dirty / resynced signaling ────────────────
+
+test('markSubtreeDirty fires subtreeDirty in the next delta', async () => {
+  const dir = tempRoot();
+  try {
+    const host = await createFileExplorerHost({ roots: [dir] });
+    const { port1, port2 } = new MessageChannel();
+    host.attachPort(port1);
+    const snapP = nextMatching(port2, (m) => m?.type === 'snapshot');
+    port2.postMessage({
+      v: 1,
+      type: 'handshake',
+      body: { version: 1, clientId: 't', options: {} },
+    });
+    await snapP;
+    const deltaP = nextMatching(
+      port2,
+      (m) =>
+        m?.type === 'delta' &&
+        Array.isArray(m?.body?.subtreeDirty) &&
+        m.body.subtreeDirty.length > 0,
+    );
+    host.markSubtreeDirty(7);
+    const delta = await deltaP;
+    assert.deepEqual(delta.body.subtreeDirty, [7]);
+    assert.deepEqual(delta.body.subtreeResynced, []);
+    port1.close();
+    port2.close();
+    await host.dispose();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test(
+  'markSubtreeResynced clears pending dirty state and fires resynced',
+  async () => {
+    // Dirty then Resynced before any tick drains: only the resynced
+    // marker should ride the outgoing delta — the dirty flag is
+    // dropped because the storm already ended.
+    const dir = tempRoot();
+    try {
+      const host = await createFileExplorerHost({ roots: [dir] });
+      const { port1, port2 } = new MessageChannel();
+      host.attachPort(port1);
+      const snapP = nextMatching(port2, (m) => m?.type === 'snapshot');
+      port2.postMessage({
+        v: 1,
+        type: 'handshake',
+        body: { version: 1, clientId: 't', options: {} },
+      });
+      await snapP;
+      const deltaP = nextMatching(
+        port2,
+        (m) =>
+          m?.type === 'delta' &&
+          Array.isArray(m?.body?.subtreeResynced) &&
+          m.body.subtreeResynced.length > 0,
+      );
+      host.markSubtreeDirty(7);
+      host.markSubtreeResynced(7);
+      const delta = await deltaP;
+      assert.deepEqual(delta.body.subtreeDirty, []);
+      assert.deepEqual(delta.body.subtreeResynced, [7]);
+      port1.close();
+      port2.close();
+      await host.dispose();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  'markSubtreeDirty after Resynced supersedes — dirty wins, resynced cleared',
+  async () => {
+    // Reverse order: Resynced then Dirty (e.g. a second storm starts
+    // before the first resync has drained). The outgoing delta should
+    // carry only the dirty marker.
+    const dir = tempRoot();
+    try {
+      const host = await createFileExplorerHost({ roots: [dir] });
+      const { port1, port2 } = new MessageChannel();
+      host.attachPort(port1);
+      const snapP = nextMatching(port2, (m) => m?.type === 'snapshot');
+      port2.postMessage({
+        v: 1,
+        type: 'handshake',
+        body: { version: 1, clientId: 't', options: {} },
+      });
+      await snapP;
+      const deltaP = nextMatching(
+        port2,
+        (m) =>
+          m?.type === 'delta' &&
+          Array.isArray(m?.body?.subtreeDirty) &&
+          m.body.subtreeDirty.length > 0,
+      );
+      host.markSubtreeResynced(7);
+      host.markSubtreeDirty(7);
+      const delta = await deltaP;
+      assert.deepEqual(delta.body.subtreeDirty, [7]);
+      assert.deepEqual(delta.body.subtreeResynced, []);
+      port1.close();
+      port2.close();
+      await host.dispose();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  },
+);

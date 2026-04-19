@@ -181,8 +181,3 @@ test('ClientMirrorSnapshot.getDecorations returns empty array', () => {
 
 // visibleRows lands in 8.4 — coverage in test/visible-rows.test.mjs.
 // visibleRowCount lands in 8.5 — coverage in test/visible-row-count.test.mjs.
-
-test('ClientMirrorSnapshot.visibleRowCount throws until Phase 8.5', () => {
-  const snap = new ClientMirrorSnapshot(createMirror());
-  assert.throws(() => snap.visibleRowCount(new Set()), /Phase 8\.5/);
-});

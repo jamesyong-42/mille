@@ -213,12 +213,70 @@ export class ClientMirrorSnapshot {
     return out;
   }
 
-  /** pendingExpansions-aware counter arrives in Phase 8.5. */
+  /**
+   * Count visible rows under the current expansion state, mirroring
+   * fx-core's `snapshot::visible_row_count`. Returns:
+   *
+   *   - `known`: number of rows the mirror can render right now —
+   *     matches `visibleRows(...).length` when no slicing is applied.
+   *   - `pendingExpansions`: folders the client expanded whose child
+   *     lists haven't arrived yet. Union of two sources:
+   *
+   *       a) Live DFS discovery — an expanded folder whose
+   *          `children` map entry is missing (same condition that
+   *          `visibleRows` uses to stop descending).
+   *       b) The reducer's working-state `pendingExpansions` — folders
+   *          the client marked expanded via setExpanded before the
+   *          host delivered the child payload (SPEC §4.9.2: the
+   *          virtualizer needs an honest row count even before the
+   *          first tick brings children in).
+   *
+   * Consistent with `visibleRows`: an invisible-but-expanded parent
+   * drops out of both itself AND its subtree, so `known` never counts
+   * rows that `visibleRows` wouldn't emit.
+   */
   visibleRowCount(
-    _expanded: ReadonlySet<EntryId>,
-    _includeIgnored?: boolean,
+    expanded: ReadonlySet<EntryId>,
+    includeIgnored: boolean = false,
   ): VisibleRowCount {
-    throw new Error('ClientMirrorSnapshot.visibleRowCount: implemented in Phase 8.5');
+    let known = 0;
+    const pending = new Set<EntryId>();
+
+    const stack: number[] = [];
+    for (let i = this.state.roots.length - 1; i >= 0; i--) {
+      stack.push(this.state.roots[i]!);
+    }
+
+    while (stack.length > 0) {
+      const id = stack.pop()!;
+      const entry = this.state.byId.get(id);
+      if (entry === undefined) continue;
+      if (!isVisibleEntry(entry, includeIgnored)) continue;
+      known++;
+
+      if (expanded.has(id)) {
+        const kids = this.state.children.get(id);
+        if (kids !== undefined) {
+          // Order doesn't matter for a pure count — push as-is.
+          for (let i = kids.length - 1; i >= 0; i--) {
+            stack.push(kids[i]!);
+          }
+        } else {
+          // Expanded folder whose children haven't arrived yet.
+          pending.add(id as EntryId);
+        }
+      }
+    }
+
+    // Fold in the reducer's in-flight setExpanded tracker. These are
+    // ids the client asked to expand but for which no delta has
+    // landed yet — the DFS above wouldn't even reach them if their
+    // parent is also still pending, so we report them unconditionally.
+    for (const id of this.state.pendingExpansions) {
+      pending.add(id as EntryId);
+    }
+
+    return { known, pendingExpansions: pending };
   }
 
   /** Decorations land in Phase 9; empty until then. */

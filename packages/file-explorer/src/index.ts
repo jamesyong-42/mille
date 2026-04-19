@@ -10,6 +10,8 @@ import { native } from './native.js';
 export { native };
 export { FileSystemError, isFileSystemError } from './errors.js';
 export type { ErrorCode } from './errors.js';
+export { decodeBulkRows } from './decode.js';
+export type { VisibleRow } from './decode.js';
 
 /**
  * Returns the fx-binding version string (the napi-rs crate version).

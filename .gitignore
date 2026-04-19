@@ -20,6 +20,11 @@ lerna-debug.log*
 *.node
 !packages/file-explorer-*/**/*.node
 
+# napi-rs auto-generates index.d.ts next to the .node. The checked-in
+# TypeScript surface is in packages/file-explorer/api.d.ts; the generated
+# file is a build artifact.
+packages/file-explorer/index.d.ts
+
 # napi-rs artifacts dir (output of `napi build` before distribution)
 artifacts/
 

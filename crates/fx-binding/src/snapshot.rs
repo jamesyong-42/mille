@@ -10,13 +10,25 @@
 //! visible_row_count land in wave 3 (commit 5.4). Decorations ship in
 //! Phase 9.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use napi_derive::napi;
 
 use fx_core::{EntryId, StoreSnapshot};
 
-use crate::types::EntryJs;
+use crate::types::{EntryJs, VisibleRowCountJs, VisibleRowJs};
+
+/// Input shape for `MirrorSnapshot.visibleRows()`. Flat record so JS can pass
+/// the expanded-id set + viewport window in one object. Sort options land in
+/// Phase 9 (natural sort).
+#[napi(object)]
+pub struct VisibleRowsOptionsJs {
+    pub expanded: Vec<i64>,
+    pub offset: u32,
+    pub limit: u32,
+    pub include_ignored: Option<bool>,
+}
 
 /// Immutable snapshot of the tree at a specific tree-version.
 #[napi]
@@ -71,5 +83,52 @@ impl MirrorSnapshot {
     pub fn has_children(&self, id: i64) -> bool {
         let eid = EntryId(id as u64);
         self.inner.has_children(eid)
+    }
+
+    /// Flattened viewport rows for the current expanded-set and window.
+    /// `include_ignored` defaults to false, matching SPEC §4.9.2.
+    #[napi(js_name = "visibleRows")]
+    pub fn visible_rows(&self, options: VisibleRowsOptionsJs) -> Vec<VisibleRowJs> {
+        let expanded: HashSet<EntryId> =
+            options.expanded.iter().map(|id| EntryId(*id as u64)).collect();
+
+        let query = fx_core::VisibleRowsQuery {
+            expanded: &expanded,
+            offset: options.offset,
+            limit: options.limit,
+            include_ignored: options.include_ignored.unwrap_or(false),
+        };
+
+        self.inner
+            .visible_rows(query)
+            .into_iter()
+            .map(|row| VisibleRowJs::from_core_row(&row, self.inner.as_ref(), &expanded))
+            .collect()
+    }
+
+    /// Honest scroll-height metric: `known` rows plus any expanded folders
+    /// whose children haven't arrived yet (so the UI can render a loading
+    /// badge without fudging offsets).
+    #[napi(js_name = "visibleRowCount")]
+    pub fn visible_row_count(
+        &self,
+        expanded: Vec<i64>,
+        include_ignored: Option<bool>,
+    ) -> VisibleRowCountJs {
+        let expanded_set: HashSet<EntryId> =
+            expanded.iter().map(|id| EntryId(*id as u64)).collect();
+
+        let result = self
+            .inner
+            .visible_row_count(&expanded_set, include_ignored.unwrap_or(false));
+
+        VisibleRowCountJs {
+            known: result.known,
+            pending_expansions: result
+                .pending_expansions
+                .into_iter()
+                .map(|id| id.raw() as i64)
+                .collect(),
+        }
     }
 }

@@ -105,6 +105,39 @@ impl VisibleRowJs {
             pending: None,
         }
     }
+
+    /// Build a VisibleRowJs by resolving the row's id against the snapshot.
+    /// Recomputes `is_expanded` against the input set so a stale
+    /// `VisibleRowOut::is_expanded` can't drift from the caller's view state.
+    pub(crate) fn from_core_row(
+        row: &VisibleRowOut,
+        snap: &fx_core::StoreSnapshot,
+        expanded: &std::collections::HashSet<EntryId>,
+    ) -> Self {
+        // visible_rows only emits ids whose entry is present in the snapshot.
+        let entry = snap
+            .get(row.id)
+            .expect("visible_rows emitted id without matching entry")
+            .as_ref();
+        Self {
+            id: entry_id_to_i64(entry.id),
+            parent_id: entry.parent_id.map(entry_id_to_i64),
+            name: entry.name.clone(),
+            kind: entry.kind as u8,
+            size: entry.size as i64,
+            mtime_ms: entry.mtime_ms,
+            ctime_ms: entry.ctime_ms,
+            symlink_target_is_dir: entry.symlink_target_is_dir,
+            path_segments: entry.path_segments.clone(),
+            is_ignored: entry.is_ignored,
+            is_readonly: entry.is_readonly,
+            is_hidden: entry.is_hidden,
+            depth: row.depth as u32,
+            has_children: row.has_children,
+            is_expanded: expanded.contains(&row.id),
+            pending: None,
+        }
+    }
 }
 
 /// Mirror of api.d.ts `ListPage`.

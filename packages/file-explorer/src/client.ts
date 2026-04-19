@@ -29,6 +29,7 @@ import { native } from './native.js';
 import { wrap } from './errors.js';
 import { decodeBulkRows, type VisibleRow as DecodedRow } from './decode.js';
 import type { ChangeSet } from './delta.js';
+import { DecorationStore, type DecorationProvider } from './decorations.js';
 
 // ─── Local type mirrors (subset of api.d.ts) ──────────────────────────
 //
@@ -222,6 +223,8 @@ function encodeFollowSymlinks(v: ExplorerOptions['followSymlinks']): string | un
 export class FileExplorer {
   /** @internal — exposed so tests can reach `emitReadyForTests` etc. */
   private readonly nativeFx: NativeFx;
+  /** @internal — host-side decoration merge store (Phase 9). */
+  private readonly decorations = new DecorationStore();
 
   constructor(options: ExplorerOptions) {
     const Ctor = (native as unknown as { FileExplorer: new (opts: unknown) => NativeFx })
@@ -255,11 +258,53 @@ export class FileExplorer {
 
   /** Decoration versions bump independently of the tree (Phase 9). */
   getDecorationVersion(): number {
-    return this.nativeFx.getSnapshot().decorationVersion;
+    return this.decorations.version;
   }
 
   getSnapshot(): MirrorSnapshot {
-    return new MirrorSnapshot(this.nativeFx.getSnapshot());
+    return new MirrorSnapshot(this.nativeFx.getSnapshot(), this.decorations);
+  }
+
+  /**
+   * Register a decoration provider. The provider's `onDidChange`
+   * fires with a set of affected entry ids; for each we call
+   * `provide()` and update the DecorationStore, then bump the
+   * decoration version once at the end of the batch.
+   *
+   * Provider errors during `provide()` are swallowed — a buggy
+   * provider shouldn't crash the explorer. Real deployments should
+   * log somewhere; Phase 9 keeps this minimal.
+   *
+   * Disposing the returned Disposable removes all the provider's
+   * decorations and bumps the version one more time so consumers
+   * drop the stale overlays.
+   */
+  registerDecorationProvider(provider: DecorationProvider): Disposable {
+    const sub = provider.onDidChange(async (changedIds) => {
+      const changed: number[] = [];
+      for (const id of changedIds) {
+        try {
+          const d = await provider.provide({ id });
+          if (this.decorations.setForProvider(provider.id, id, d ?? null)) {
+            changed.push(id);
+          }
+        } catch {
+          // Swallow — see method doc.
+        }
+      }
+      this.decorations.bump(changed);
+    });
+
+    let disposed = false;
+    return {
+      dispose: () => {
+        if (disposed) return;
+        disposed = true;
+        sub.dispose();
+        const affected = this.decorations.removeProvider(provider.id);
+        this.decorations.bump(affected);
+      },
+    };
   }
 
   /**
@@ -426,9 +471,12 @@ export class FileExplorer {
 export class MirrorSnapshot {
   /** @internal */
   private readonly inner: NativeSnapshot;
+  /** @internal — optional so Phase 9's wiring is backward-compatible. */
+  private readonly decorations: DecorationStore | undefined;
 
-  constructor(inner: NativeSnapshot) {
+  constructor(inner: NativeSnapshot, decorations?: DecorationStore) {
     this.inner = inner;
+    this.decorations = decorations;
   }
 
   get treeVersion(): number {
@@ -436,7 +484,9 @@ export class MirrorSnapshot {
   }
 
   get decorationVersion(): number {
-    return this.inner.decorationVersion;
+    // Host-side decorations (Phase 9) live in DecorationStore; fall
+    // back to the native decorationVersion (always 0 pre-Phase 9).
+    return this.decorations?.version ?? this.inner.decorationVersion;
   }
 
   roots(): readonly Entry[] {
@@ -520,7 +570,15 @@ export class MirrorSnapshot {
     };
   }
 
-  /** Decorations land in Phase 9; return empty until then. */
+  /**
+   * Merged decorations for `id` across all registered providers.
+   * Phase 9.4 wires this to the DecorationStore; 9.2 landed the
+   * store + registration but left snapshot reads returning `[]` so
+   * the atomic commits stay isolated. Consumers that need
+   * decorations on this commit should subscribe to the version
+   * counter (`fx.getDecorationVersion()`) and pull via the store
+   * directly.
+   */
   getDecorations(_id: EntryId): readonly Decoration[] {
     return [];
   }

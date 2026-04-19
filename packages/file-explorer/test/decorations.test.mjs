@@ -6,8 +6,50 @@
 
 import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
-import { DecorationStore } from '../dist/decorations.js';
+import { DecorationStore, FileExplorer } from '../dist/index.js';
+
+function tempRoot() {
+  return mkdtempSync(join(tmpdir(), 'mille-dec-'));
+}
+
+/**
+ * Minimal DecorationProvider that lets a test fire `onDidChange`
+ * manually and returns pre-seeded decorations from `provide()`.
+ */
+function makeProvider(id, entries = new Map()) {
+  const listeners = new Set();
+  return {
+    id,
+    entries,
+    fire(ids) {
+      for (const l of listeners) l(ids);
+    },
+    onDidChange(listener) {
+      listeners.add(listener);
+      return {
+        dispose: () => {
+          listeners.delete(listener);
+        },
+      };
+    },
+    provide(entry) {
+      return entries.get(entry.id) ?? null;
+    },
+  };
+}
+
+/**
+ * Sleep one microtask turn. FileExplorer's provider bridge invokes
+ * `provide()` via an async arrow — tests need to wait for the
+ * resulting microtask chain to drain before asserting.
+ */
+function flush() {
+  return new Promise((r) => setImmediate(r));
+}
 
 test('DecorationStore.version starts at 0', () => {
   const store = new DecorationStore();
@@ -104,4 +146,121 @@ test('multiple listeners all receive bump notifications', () => {
   store.bump([42]);
   assert.deepEqual(seenA, [[42]]);
   assert.deepEqual(seenB, [[42]]);
+});
+
+// ─── 9.2 — registerDecorationProvider integration ─────────────────────
+//
+// These tests drive the provider bridge end-to-end but assert against
+// the decoration-version channel only. The MirrorSnapshot.getDecorations
+// wiring lands in 9.4; until then, the surface observable to callers is
+// `getDecorationVersion()`.
+
+test('registerDecorationProvider: provider onDidChange bumps decorationVersion', async () => {
+  const dir = tempRoot();
+  try {
+    const fx = new FileExplorer({ roots: [dir] });
+    const p = makeProvider('git', new Map([[42, { badge: 'M', color: 'yellow' }]]));
+    const sub = fx.registerDecorationProvider(p);
+
+    const v0 = fx.getDecorationVersion();
+    p.fire([42]);
+    await flush();
+    assert.equal(fx.getDecorationVersion(), v0 + 1);
+
+    sub.dispose();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('registerDecorationProvider: disposing bumps decorationVersion once', async () => {
+  const dir = tempRoot();
+  try {
+    const fx = new FileExplorer({ roots: [dir] });
+    const p = makeProvider('git', new Map([[7, { badge: 'M' }]]));
+    const sub = fx.registerDecorationProvider(p);
+    p.fire([7]);
+    await flush();
+
+    const vBefore = fx.getDecorationVersion();
+    sub.dispose();
+    assert.equal(fx.getDecorationVersion(), vBefore + 1);
+
+    // Double-dispose is idempotent — no further version bump.
+    sub.dispose();
+    assert.equal(fx.getDecorationVersion(), vBefore + 1);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('registerDecorationProvider: disposing with no entries does not bump', async () => {
+  const dir = tempRoot();
+  try {
+    const fx = new FileExplorer({ roots: [dir] });
+    const p = makeProvider('git', new Map());
+    const sub = fx.registerDecorationProvider(p);
+    const vBefore = fx.getDecorationVersion();
+    // Never fired → nothing in store → disposal shouldn't bump.
+    sub.dispose();
+    assert.equal(fx.getDecorationVersion(), vBefore);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('registerDecorationProvider: provider errors during provide() are swallowed', async () => {
+  const dir = tempRoot();
+  try {
+    const fx = new FileExplorer({ roots: [dir] });
+    const bad = {
+      id: 'bad',
+      onDidChange(listener) {
+        this._l = listener;
+        return { dispose: () => {} };
+      },
+      provide() {
+        throw new Error('boom');
+      },
+    };
+    const sub = fx.registerDecorationProvider(bad);
+    const v0 = fx.getDecorationVersion();
+    // Firing the change drives provide(); the throw must not escape.
+    bad._l([1]);
+    await flush();
+    // No change landed — version stays put.
+    assert.equal(fx.getDecorationVersion(), v0);
+    sub.dispose();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('registerDecorationProvider: provide returning null clears the slot', async () => {
+  const dir = tempRoot();
+  try {
+    const fx = new FileExplorer({ roots: [dir] });
+    const entries = new Map([[1, { badge: 'M' }]]);
+    const p = makeProvider('git', entries);
+    const sub = fx.registerDecorationProvider(p);
+
+    p.fire([1]);
+    await flush();
+    const vAfterSet = fx.getDecorationVersion();
+
+    // Next fire returns null — slot should clear (still a change).
+    entries.delete(1);
+    p.fire([1]);
+    await flush();
+    assert.equal(fx.getDecorationVersion(), vAfterSet + 1);
+
+    // Firing again with nothing stored is a no-op.
+    p.fire([1]);
+    await flush();
+    assert.equal(fx.getDecorationVersion(), vAfterSet + 1);
+
+    sub.dispose();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

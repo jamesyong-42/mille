@@ -1,9 +1,11 @@
-// Host + session lifecycle smoke tests — Phase 7 commit 7.1.
+// Host + session lifecycle + message-routing tests — Phase 7 commits
+// 7.1 + 7.3.
 //
 // Exercises createFileExplorerHost and attachPort/dispose using Node's
 // worker_threads MessageChannel (same shape Electron's MessageChannelMain
-// produces). Protocol routing lands in 7.3; these tests only prove
-// session bookkeeping.
+// produces). 7.3 adds round-trip coverage for handshake -> snapshot,
+// setExpanded -> delta, the handshake-first sequencing guard, and a
+// mutate reqId round-trip.
 
 import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
@@ -87,6 +89,199 @@ test('dispose tears down all attached sessions', async () => {
     assert.equal(host.sessionCount, 0);
     ch1.port2.close();
     ch2.port2.close();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ── 7.3: message routing round-trips ──────────────────────────────────
+
+/** Wait for the next message on a Node MessagePort that matches `pred`. */
+function nextMatching(port, pred) {
+  return new Promise((resolve) => {
+    const onMsg = (msg) => {
+      if (pred(msg)) {
+        port.off('message', onMsg);
+        resolve(msg);
+      }
+    };
+    port.on('message', onMsg);
+  });
+}
+
+test('handshake -> snapshot reply with version + roots + empty mirror', async () => {
+  const dir = tempRoot();
+  try {
+    const host = await createFileExplorerHost({ roots: [dir] });
+    const { port1, port2 } = new MessageChannel();
+    const snapshotP = nextMatching(port2, (m) => m?.type === 'snapshot');
+    host.attachPort(port1);
+    port2.postMessage({
+      v: 1,
+      type: 'handshake',
+      body: { version: 1, clientId: 'test', options: {} },
+    });
+    const snap = await snapshotP;
+    assert.equal(snap.v, 1);
+    assert.equal(snap.type, 'snapshot');
+    assert.equal(typeof snap.body.version, 'number');
+    assert.ok(Array.isArray(snap.body.roots));
+    assert.ok(snap.body.mirror instanceof ArrayBuffer);
+    assert.equal(snap.body.mirror.byteLength, 0);
+    assert.equal(snap.body.visibleCount, 0);
+    port1.close();
+    port2.close();
+    await host.dispose();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('non-handshake before handshake yields EINVAL error frame', async () => {
+  const dir = tempRoot();
+  try {
+    const host = await createFileExplorerHost({ roots: [dir] });
+    const { port1, port2 } = new MessageChannel();
+    const errP = nextMatching(port2, (m) => m?.type === 'error');
+    host.attachPort(port1);
+    port2.postMessage({ v: 1, type: 'setViewport', body: { offset: 0, limit: 10 } });
+    const err = await errP;
+    assert.equal(err.body.code, 'EINVAL');
+    port1.close();
+    port2.close();
+    await host.dispose();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('unsupported protocol version yields EUNSUPPORTED error frame', async () => {
+  const dir = tempRoot();
+  try {
+    const host = await createFileExplorerHost({ roots: [dir] });
+    const { port1, port2 } = new MessageChannel();
+    const errP = nextMatching(port2, (m) => m?.type === 'error');
+    host.attachPort(port1);
+    port2.postMessage({ v: 999, type: 'handshake', body: {} });
+    const err = await errP;
+    assert.equal(err.body.code, 'EUNSUPPORTED');
+    port1.close();
+    port2.close();
+    await host.dispose();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('setExpanded after handshake replies with a delta frame', async () => {
+  const dir = tempRoot();
+  try {
+    const host = await createFileExplorerHost({ roots: [dir] });
+    const { port1, port2 } = new MessageChannel();
+    host.attachPort(port1);
+    const snapP = nextMatching(port2, (m) => m?.type === 'snapshot');
+    port2.postMessage({
+      v: 1,
+      type: 'handshake',
+      body: { version: 1, clientId: 't', options: {} },
+    });
+    await snapP;
+    const deltaP = nextMatching(port2, (m) => m?.type === 'delta');
+    port2.postMessage({ v: 1, type: 'setExpanded', body: { add: [1], remove: [] } });
+    const delta = await deltaP;
+    assert.equal(delta.type, 'delta');
+    assert.equal(typeof delta.body.version, 'number');
+    assert.ok(Array.isArray(delta.body.changedIds));
+    port1.close();
+    port2.close();
+    await host.dispose();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('mutate with unknown op yields mutateResult with error + reqId echo', async () => {
+  const dir = tempRoot();
+  try {
+    const host = await createFileExplorerHost({ roots: [dir] });
+    const { port1, port2 } = new MessageChannel();
+    host.attachPort(port1);
+    const snapP = nextMatching(port2, (m) => m?.type === 'snapshot');
+    port2.postMessage({
+      v: 1,
+      type: 'handshake',
+      body: { version: 1, clientId: 't', options: {} },
+    });
+    await snapP;
+    const resultP = nextMatching(port2, (m) => m?.type === 'mutateResult');
+    port2.postMessage({
+      v: 1,
+      type: 'mutate',
+      body: { reqId: 42, op: 'definitely-not-a-real-op', args: {} },
+    });
+    const res = await resultP;
+    assert.equal(res.body.reqId, 42);
+    assert.equal(res.body.result, null);
+    assert.ok(res.body.error);
+    assert.equal(typeof res.body.error.code, 'string');
+    port1.close();
+    port2.close();
+    await host.dispose();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('call getTreeVersion returns the current version via callResult', async () => {
+  const dir = tempRoot();
+  try {
+    const host = await createFileExplorerHost({ roots: [dir] });
+    const { port1, port2 } = new MessageChannel();
+    host.attachPort(port1);
+    const snapP = nextMatching(port2, (m) => m?.type === 'snapshot');
+    port2.postMessage({
+      v: 1,
+      type: 'handshake',
+      body: { version: 1, clientId: 't', options: {} },
+    });
+    await snapP;
+    const resP = nextMatching(port2, (m) => m?.type === 'callResult');
+    port2.postMessage({
+      v: 1,
+      type: 'call',
+      body: { reqId: 7, method: 'getTreeVersion', args: [] },
+    });
+    const res = await resP;
+    assert.equal(res.body.reqId, 7);
+    assert.equal(typeof res.body.result, 'number');
+    port1.close();
+    port2.close();
+    await host.dispose();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('dispose frame detaches the session on the host', async () => {
+  const dir = tempRoot();
+  try {
+    const host = await createFileExplorerHost({ roots: [dir] });
+    const { port1, port2 } = new MessageChannel();
+    host.attachPort(port1);
+    assert.equal(host.sessionCount, 1);
+    const snapP = nextMatching(port2, (m) => m?.type === 'snapshot');
+    port2.postMessage({
+      v: 1,
+      type: 'handshake',
+      body: { version: 1, clientId: 't', options: {} },
+    });
+    await snapP;
+    port2.postMessage({ v: 1, type: 'dispose', body: {} });
+    // Detach happens on message-queue tick; give it a beat.
+    await new Promise((r) => setTimeout(r, 20));
+    assert.equal(host.sessionCount, 0);
+    port2.close();
+    await host.dispose();
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

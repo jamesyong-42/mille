@@ -1,25 +1,102 @@
-// Per-platform native loader.
+// Generated-style per-platform loader. The umbrella package's
+// optionalDependencies hold the per-triple binaries; we try each
+// in turn based on host os + arch + libc.
 //
-// At runtime we try/catch require() each published per-platform package, then
-// fall back to a locally-built `.node` file sitting next to this file (dev
-// mode, before artifacts are assembled). The list below mirrors the triples
-// declared in package.json#napi.triples.additional and §6.1 of SPEC.md.
+// Convention is modelled on @napi-rs/cli's generated loader. We differ
+// in two spots:
+//   1. A dev-build fallback: if a `.node` sits next to the package root
+//      (monorepo layout, `napi build --output-dir .`), prefer it over
+//      the installed per-triple package. This keeps `pnpm run build`
+//      → `pnpm test` working without publishing platform packages.
+//   2. The musl check relies on `process.report.header.glibcVersionRuntime`
+//      being absent; alpine containers set it to an empty string which
+//      the absence-check coerces correctly.
 //
-// TODO: Phase 5 — replace this stub with the real @napi-rs/cli generated
-// loader (napi build --js-binding). The generated file will look roughly like:
-//
-//   const { version, FileExplorer, createFileExplorerHost, ... } =
-//     loadBinding(__dirname, 'file-explorer', '@mille/file-explorer');
-//
-// until then we export a dummy object so the umbrella builds cleanly.
+// The shape of the returned binding is defined by fx-binding's NAPI
+// module — `FileExplorer`, `FileReadStream`, `version`. Phase 6's
+// higher-level wrappers (commits 6.4+) layer typed surfaces on top.
 
-export interface NativeBinding {
-  version(): string;
+import { existsSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const require = createRequire(import.meta.url);
+
+function isMusl(): boolean {
+  // glibc-linked Node populates `glibcVersionRuntime` in the process
+  // report header; musl-linked Node leaves it undefined. This is the
+  // same heuristic @napi-rs/cli's loader uses.
+  try {
+    const report = (
+      process as unknown as {
+        report?: { getReport(): { header?: { glibcVersionRuntime?: string } } };
+      }
+    ).report?.getReport();
+    return !report?.header?.glibcVersionRuntime;
+  } catch {
+    return false;
+  }
 }
 
-const stub: NativeBinding = {
-  version: () => 'unreleased',
-};
+function loadLocal(): unknown | null {
+  // Dev build path: the `.node` is emitted next to api.d.ts (one dir up
+  // from dist/). The second candidate handles future restructures where
+  // src/ gets nested deeper without failing the loader silently.
+  const candidates = [
+    join(__dirname, '..', `file-explorer.${process.platform}-${process.arch}.node`),
+    join(__dirname, '..', '..', `file-explorer.${process.platform}-${process.arch}.node`),
+  ];
+  for (const c of candidates) {
+    if (existsSync(c)) return require(c);
+  }
+  return null;
+}
 
-export const native: NativeBinding = stub;
-export const version = stub.version;
+function loadFromPlatformPackage(): unknown | null {
+  // Order matters only for linux: musl must be probed before gnu
+  // because musl binaries can't dlopen into glibc Node and vice versa.
+  const triples: Record<string, Record<string, string[]>> = {
+    darwin: { arm64: ['darwin-arm64'], x64: ['darwin-x64'] },
+    win32: { x64: ['win32-x64-msvc'], arm64: ['win32-arm64-msvc'] },
+    linux: {
+      x64: isMusl() ? ['linux-x64-musl'] : ['linux-x64-gnu'],
+      arm64: isMusl() ? ['linux-arm64-musl'] : ['linux-arm64-gnu'],
+    },
+  };
+  const attempts = triples[process.platform]?.[process.arch] ?? [];
+  for (const triple of attempts) {
+    try {
+      return require(`@mille/file-explorer-${triple}`);
+    } catch {
+      // Each per-triple package is an optionalDependency, so missing
+      // modules are expected on mismatched hosts. Fall through.
+    }
+  }
+  return null;
+}
+
+const nativeModule = loadLocal() ?? loadFromPlatformPackage();
+if (!nativeModule) {
+  throw new Error(
+    `@mille/file-explorer: failed to load native binary for ` +
+      `${process.platform}-${process.arch}. Install the matching ` +
+      `@mille/file-explorer-* optional dependency or run a local dev build.`,
+  );
+}
+
+// Raw napi-rs shape. Phase 6's higher-level wrapper (commits 6.4+)
+// re-exports these with typed signatures and FX-reason decoding.
+// The `any` for classes is deliberate — their full shape is declared
+// on the TS-level wrapper and we don't want the loader to lock in a
+// type that drifts from the generated d.ts.
+export interface NativeBinding {
+  version(): string;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  FileExplorer: any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  FileReadStream: any;
+}
+
+export const native = nativeModule as NativeBinding;

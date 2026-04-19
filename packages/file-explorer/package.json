@@ -3,6 +3,7 @@
   "version": "0.0.0",
   "description": "High-performance file explorer library for Electron IDEs. Native Rust core via NAPI-RS.",
   "license": "MIT",
+  "type": "module",
   "repository": {
     "type": "git",
     "url": "https://github.com/jamesyong-42/mille"

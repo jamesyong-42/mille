@@ -55,17 +55,27 @@
   },
   "devDependencies": {
     "@napi-rs/cli": "^3.0.0",
+    "@types/react": "^18",
+    "react": "^18",
     "typescript": "~5.6.0"
+  },
+  "peerDependencies": {
+    "react": ">=18"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
   },
   "optionalDependencies": {
     "@mille/file-explorer-darwin-arm64": "workspace:*",
     "@mille/file-explorer-darwin-x64": "workspace:*",
-    "@mille/file-explorer-win32-x64-msvc": "workspace:*",
-    "@mille/file-explorer-win32-arm64-msvc": "workspace:*",
-    "@mille/file-explorer-linux-x64-gnu": "workspace:*",
     "@mille/file-explorer-linux-arm64-gnu": "workspace:*",
+    "@mille/file-explorer-linux-arm64-musl": "workspace:*",
+    "@mille/file-explorer-linux-x64-gnu": "workspace:*",
     "@mille/file-explorer-linux-x64-musl": "workspace:*",
-    "@mille/file-explorer-linux-arm64-musl": "workspace:*"
+    "@mille/file-explorer-win32-arm64-msvc": "workspace:*",
+    "@mille/file-explorer-win32-x64-msvc": "workspace:*"
   },
   "napi": {
     "name": "file-explorer",

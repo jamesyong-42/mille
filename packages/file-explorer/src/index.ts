@@ -27,6 +27,7 @@ export type {
 } from './client.js';
 export { createFileExplorerHost } from './host.js';
 export type { FileExplorerHost, MessagePortLike } from './types.js';
+export { connectFileExplorer, PortFileExplorer, PortMirrorSnapshot } from './client-port.js';
 
 /**
  * Returns the fx-binding version string (the napi-rs crate version).

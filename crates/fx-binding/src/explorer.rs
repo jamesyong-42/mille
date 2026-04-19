@@ -135,6 +135,46 @@ impl FileExplorer {
         self.store.tree_version() as u32
     }
 
+    /// Walk every configured root via `fx_core::walk` + `populate_store`
+    /// and seed the EntryStore with the resulting entries. Returns the
+    /// total number of entries inserted across all roots.
+    ///
+    /// `include_root: true` is required so the walk root itself lands in
+    /// the store — `mutations::resolve_entry_path` walks up the tree
+    /// until it hits an entry with no parent and matches that entry's
+    /// name against one of the configured roots' basenames. Without the
+    /// root-as-entry, every descendant resolves to a bare name with no
+    /// configured-root match, and every mutation fails with EINVAL.
+    ///
+    /// Deliberately NOT called in `new()` — construction stays cheap so
+    /// consumers can attach sessions before scanning begins. Tests and
+    /// host harnesses that need a populated tree (Phase 7.10's two-
+    /// client mutation-ordering integration test, for example) call
+    /// this explicitly after construction.
+    ///
+    /// Live re-walk on watcher-reported directory mutations is Phase 5's
+    /// unfinished business — tracked for the next integration pass.
+    #[napi(js_name = "populateFromRoots")]
+    pub async fn populate_from_roots(&self) -> Result<u32> {
+        use fx_core::{populate_store, walk, WalkOptions};
+
+        let mut total: u32 = 0;
+        for root in &self.roots {
+            let options = WalkOptions {
+                max_depth: None,
+                follow_symlinks: self.options.follow_symlinks,
+                include_hidden: true,
+                include_root: true,
+                parallelism: self.options.walker_concurrency,
+            };
+            let walked = walk(root, options).map_err(fx_error_to_napi)?;
+            let ids = populate_store(&self.store, root, &walked, None)
+                .map_err(fx_error_to_napi)?;
+            total = total.saturating_add(ids.len() as u32);
+        }
+        Ok(total)
+    }
+
     /// Capture an immutable view of the tree. The inner Arc is stable
     /// between deltas, so identity comparison holds on the JS side.
     #[napi(js_name = "getSnapshot")]

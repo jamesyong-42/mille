@@ -119,6 +119,7 @@ type NativeFx = {
   getTreeVersion(): number;
   getSnapshot(): NativeSnapshot;
   takePendingChanges(): NativeChangeSet;
+  populateFromRoots(): Promise<number>;
   create(parentId: number, name: string, kind: number): Promise<Entry>;
   rename(id: number, newName: string): Promise<Entry>;
   move(id: number, newParentId: number, newName?: string): Promise<Entry>;
@@ -258,6 +259,18 @@ export class FileExplorer {
 
   getSnapshot(): MirrorSnapshot {
     return new MirrorSnapshot(this.nativeFx.getSnapshot());
+  }
+
+  /**
+   * Walk every configured root and seed the EntryStore with the
+   * discovered entries. Returns the total entry count.
+   *
+   * Phase 5 intentionally keeps `new FileExplorer(...)` cheap — the
+   * constructor does not walk the filesystem. Callers (and tests) that
+   * need a populated tree invoke this method explicitly.
+   */
+  populateFromRoots(): Promise<number> {
+    return wrap(this.nativeFx.populateFromRoots());
   }
 
   /**

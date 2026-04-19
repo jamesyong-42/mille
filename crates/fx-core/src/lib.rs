@@ -66,8 +66,9 @@ pub use intent::{IntentCache, IntentKind, MutationIntent};
 pub mod inotify_limits;
 pub use inotify_limits::{advise_budget, current_limits, InotifyLimits, WatchBudget};
 
-// TODO: Phase 10 — nucleo fuzzy search adapter
+// Phase 10 — nucleo fuzzy search adapter over EntryStore snapshots.
 pub mod search;
+pub use search::{search, SearchHit, SearchOptions, SearchScore};
 
 // TODO: Phase 2 — compact-folders computation
 pub mod compact;

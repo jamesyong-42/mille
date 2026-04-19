@@ -38,7 +38,8 @@
   },
   "files": [
     "dist",
-    "api.d.ts"
+    "api.d.ts",
+    "EMBEDDING.md"
   ],
   "engines": {
     "node": ">=18"

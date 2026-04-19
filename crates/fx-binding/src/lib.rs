@@ -15,6 +15,7 @@ pub mod explorer;
 pub mod io;
 pub mod mutations;
 pub mod snapshot;
+pub mod stream;
 pub mod types;
 
 /// Module version string. Present so the native module has at least one

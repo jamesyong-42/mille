@@ -458,6 +458,19 @@ impl FileExplorer {
         crate::io::write_file(path, data.to_vec(), atomic, token).await
     }
 
+    /// Open a streaming reader. Consumers call `.next()` repeatedly until
+    /// it returns null; `.cancel()` tears down early. The Phase 6 TS
+    /// wrapper presents this as `AsyncIterable<Uint8Array>`.
+    ///
+    /// TODO(phase-6 / PLAN 13.x): accept `Option<AbortSignal>` once the
+    /// wrapper restructures onto `AsyncTask` — same `!Send` constraint
+    /// that defers it on read_file/write_file.
+    #[napi(js_name = "readFileStream")]
+    pub fn read_file_stream(&self, id: i64) -> Result<crate::stream::FileReadStream> {
+        let path = self.resolve_path_for_id(id)?;
+        Ok(crate::stream::FileReadStream::open(path))
+    }
+
     // ---- Event subscription ------------------------------------------
     //
     // api.d.ts exposes a single `on(event, listener)` overload set, but

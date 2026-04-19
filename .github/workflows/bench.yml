@@ -1,0 +1,50 @@
+name: bench
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: bench-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: short
+
+jobs:
+  bench:
+    name: Criterion benches
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      # Phase 12 iteration: archive full Criterion reports as an artifact
+      # for manual inspection. Follow-up: commit a baseline under
+      # bench-baseline/ and add a comparison step that fails the job when
+      # any metric regresses more than 20%.
+      - name: cargo bench walker
+        run: cargo bench --bench walker -p fx-bench -- --quick
+
+      - name: cargo bench search
+        run: cargo bench --bench search -p fx-bench -- --quick
+
+      - name: cargo bench watcher
+        run: cargo bench --bench watcher -p fx-bench -- --quick
+
+      - name: Upload Criterion reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: criterion-reports-${{ github.sha }}
+          path: target/criterion/
+          if-no-files-found: warn
+          retention-days: 14

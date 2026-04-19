@@ -344,6 +344,95 @@ test('disposing a change:decorations subscription stops further fanout', async (
   }
 });
 
+// ─── 9.4 — getDecorations on MirrorSnapshot ──────────────────────────
+
+test('MirrorSnapshot.getDecorations returns registered decorations', async () => {
+  const dir = tempRoot();
+  try {
+    const fx = new FileExplorer({ roots: [dir] });
+    const p = makeProvider(
+      'git',
+      new Map([
+        [1, { badge: 'M', color: 'yellow', tooltip: 'modified' }],
+      ]),
+    );
+    const sub = fx.registerDecorationProvider(p);
+
+    p.fire([1]);
+    await flush();
+
+    const snap = fx.getSnapshot();
+    const decs = snap.getDecorations(1);
+    assert.equal(decs.length, 1);
+    assert.equal(decs[0].badge, 'M');
+    assert.equal(decs[0].color, 'yellow');
+    assert.equal(decs[0].tooltip, 'modified');
+
+    // Unknown id returns empty.
+    assert.deepEqual(snap.getDecorations(9999), []);
+    sub.dispose();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('MirrorSnapshot.getDecorations merges across providers', async () => {
+  const dir = tempRoot();
+  try {
+    const fx = new FileExplorer({ roots: [dir] });
+    const git = makeProvider('git', new Map([[1, { badge: 'M' }]]));
+    const lint = makeProvider('lint', new Map([[1, { badge: '!' }]]));
+    const a = fx.registerDecorationProvider(git);
+    const b = fx.registerDecorationProvider(lint);
+
+    git.fire([1]);
+    lint.fire([1]);
+    await flush();
+
+    const decs = fx.getSnapshot().getDecorations(1);
+    assert.equal(decs.length, 2);
+    const badges = decs.map((d) => d.badge).sort();
+    assert.deepEqual(badges, ['!', 'M']);
+
+    a.dispose();
+    b.dispose();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('MirrorSnapshot.decorationVersion equals fx.getDecorationVersion()', async () => {
+  const dir = tempRoot();
+  try {
+    const fx = new FileExplorer({ roots: [dir] });
+    assert.equal(fx.getSnapshot().decorationVersion, fx.getDecorationVersion());
+
+    const p = makeProvider('git', new Map([[1, { badge: 'M' }]]));
+    const sub = fx.registerDecorationProvider(p);
+    p.fire([1]);
+    await flush();
+
+    // A fresh snapshot after the bump reflects the new version.
+    const snap = fx.getSnapshot();
+    assert.equal(snap.decorationVersion, fx.getDecorationVersion());
+    assert.ok(snap.decorationVersion > 0);
+    sub.dispose();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('MirrorSnapshot.getDecorations is empty before any providers fire', () => {
+  const dir = tempRoot();
+  try {
+    const fx = new FileExplorer({ roots: [dir] });
+    const snap = fx.getSnapshot();
+    assert.deepEqual(snap.getDecorations(1), []);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('registerDecorationProvider: provide returning null clears the slot', async () => {
   const dir = tempRoot();
   try {

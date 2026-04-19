@@ -634,15 +634,14 @@ export class MirrorSnapshot {
   }
 
   /**
-   * Merged decorations for `id` across all registered providers.
-   * Phase 9.4 wires this to the DecorationStore; 9.2 landed the
-   * store + registration but left snapshot reads returning `[]` so
-   * the atomic commits stay isolated. Consumers that need
-   * decorations on this commit should subscribe to the version
-   * counter (`fx.getDecorationVersion()`) and pull via the store
-   * directly.
+   * Merged decorations for `id` across all registered providers on
+   * the owning FileExplorer. Returns `[]` when no decorations apply,
+   * and also `[]` when no DecorationStore is wired — e.g. the
+   * client-port MirrorSnapshot (shipping decoration deltas over the
+   * wire is a Phase 10+ consideration).
    */
-  getDecorations(_id: EntryId): readonly Decoration[] {
-    return [];
+  getDecorations(id: EntryId): readonly Decoration[] {
+    if (!this.decorations) return [];
+    return this.decorations.getMerged(id) as readonly Decoration[];
   }
 }

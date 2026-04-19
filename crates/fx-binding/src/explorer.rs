@@ -6,18 +6,20 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use napi::bindgen_prelude::{Buffer, Result};
+use napi::bindgen_prelude::{Buffer, Result, Status, Unknown};
+use napi::threadsafe_function::ThreadsafeFunction;
 use napi::Error;
 use napi_derive::napi;
 
 use fx_core::{EntryId, EntryKind, EntryStore, FxError, Watcher};
 
 use crate::error::{fx_error_to_napi, io_to_fx};
+use crate::events::{Channel, EventBus};
 use crate::mutations::{
     kind_from_u8, resolve_entry_path, stat_to_entry, DeleteOptionsJs,
 };
 use crate::snapshot::MirrorSnapshot;
-use crate::types::EntryJs;
+use crate::types::{ChangeNoticeJs, EntryJs, ErrorPayloadJs, FileSystemEventJs, WarningPayloadJs};
 
 /// Local-mode capability bitmask advertised in Phase 5 wave 1.
 /// ReadWrite (1) | CaseSensitive (2) | Watch (32) = 35.
@@ -62,6 +64,10 @@ pub struct FileExplorer {
     pub(crate) watcher: Arc<std::sync::Mutex<Option<Watcher>>>,
     pub(crate) roots: Vec<PathBuf>,
     pub(crate) options: ResolvedOptions,
+    /// Event fan-out for on('change' | 'event' | 'batch' | ...). Shared
+    /// via Arc so background-thread emitters (watcher callback, walker,
+    /// coalescer in Phase 7) can clone one reference per producer.
+    pub(crate) events: Arc<EventBus>,
 }
 
 #[napi]
@@ -109,6 +115,7 @@ impl FileExplorer {
             watcher: Arc::new(std::sync::Mutex::new(None)),
             roots,
             options: resolved,
+            events: Arc::new(EventBus::new()),
         })
     }
 
@@ -426,6 +433,147 @@ impl FileExplorer {
         let path = self.resolve_path_for_id(id)?;
         let atomic = options.and_then(|o| o.atomic).unwrap_or(false);
         crate::io::write_file(path, data.to_vec(), atomic).await
+    }
+
+    // ---- Event subscription ------------------------------------------
+    //
+    // api.d.ts exposes a single `on(event, listener)` overload set, but
+    // napi-rs 3.x requires the ThreadsafeFunction payload type to be
+    // known at the FFI boundary (const-generic `CalleeHandled`, typed
+    // arg). A single Rust method handling all 8 channels would have to
+    // re-create the TSFN via match-on-string from a raw `Function`,
+    // which drags in `Env` and leaks the napi-internal builder types.
+    //
+    // Per-channel `onXxx` methods are simpler and keep payloads typed
+    // end-to-end. The Phase 6 TS wrapper unifies them behind the single
+    // `on(event, listener)` contract from api.d.ts so JS consumers never
+    // see the split surface.
+
+    /// Subscribe to the coalesced `'change'` channel — fires once per
+    /// coalescer flush regardless of whether the delta was tree-only,
+    /// decoration-only, or both.
+    #[napi(js_name = "onChange")]
+    pub fn on_change(
+        &self,
+        listener: ThreadsafeFunction<ChangeNoticeJs, Unknown<'static>, ChangeNoticeJs, Status, false>,
+    ) -> u64 {
+        self.events.subscribe_change(Channel::Change, listener)
+    }
+
+    /// Subscribe to the `'change:tree'` channel — tree-structural changes only.
+    #[napi(js_name = "onChangeTree")]
+    pub fn on_change_tree(
+        &self,
+        listener: ThreadsafeFunction<ChangeNoticeJs, Unknown<'static>, ChangeNoticeJs, Status, false>,
+    ) -> u64 {
+        self.events.subscribe_change(Channel::ChangeTree, listener)
+    }
+
+    /// Subscribe to the `'change:decorations'` channel — decoration
+    /// bumps that don't touch the tree structure.
+    #[napi(js_name = "onChangeDecorations")]
+    pub fn on_change_decorations(
+        &self,
+        listener: ThreadsafeFunction<ChangeNoticeJs, Unknown<'static>, ChangeNoticeJs, Status, false>,
+    ) -> u64 {
+        self.events
+            .subscribe_change(Channel::ChangeDecorations, listener)
+    }
+
+    /// Subscribe to the raw single-event stream. Phase 7 wires the
+    /// watcher to feed these; today the bus is quiescent until test
+    /// helpers kick it.
+    #[napi(js_name = "onEvent")]
+    pub fn on_event(
+        &self,
+        listener: ThreadsafeFunction<
+            FileSystemEventJs,
+            Unknown<'static>,
+            FileSystemEventJs,
+            Status,
+            false,
+        >,
+    ) -> u64 {
+        self.events.subscribe_event(listener)
+    }
+
+    /// Subscribe to the batched event stream. Each emission is a Vec
+    /// of events coalesced within one debounce window.
+    #[napi(js_name = "onBatch")]
+    pub fn on_batch(
+        &self,
+        listener: ThreadsafeFunction<
+            Vec<FileSystemEventJs>,
+            Unknown<'static>,
+            Vec<FileSystemEventJs>,
+            Status,
+            false,
+        >,
+    ) -> u64 {
+        self.events.subscribe_batch(listener)
+    }
+
+    /// Subscribe to soft warnings — inotify budget advisories, dropped
+    /// events, platform quirks. Non-fatal; distinct from `'error'`.
+    #[napi(js_name = "onWarning")]
+    pub fn on_warning(
+        &self,
+        listener: ThreadsafeFunction<
+            WarningPayloadJs,
+            Unknown<'static>,
+            WarningPayloadJs,
+            Status,
+            false,
+        >,
+    ) -> u64 {
+        self.events.subscribe_warning(listener)
+    }
+
+    /// Subscribe to the error channel. Engine-side failures (watcher
+    /// crash, walker panic) surface here with an ErrorCode + message.
+    #[napi(js_name = "onError")]
+    pub fn on_error(
+        &self,
+        listener: ThreadsafeFunction<
+            ErrorPayloadJs,
+            Unknown<'static>,
+            ErrorPayloadJs,
+            Status,
+            false,
+        >,
+    ) -> u64 {
+        self.events.subscribe_error(listener)
+    }
+
+    /// Subscribe to the `'ready'` channel. Fires once when the initial
+    /// scan settles; later phases may re-fire on root re-add.
+    #[napi(js_name = "onReady")]
+    pub fn on_ready(
+        &self,
+        listener: ThreadsafeFunction<(), Unknown<'static>, (), Status, false>,
+    ) -> u64 {
+        self.events.subscribe_ready(listener)
+    }
+
+    /// Remove the listener registered under `subscription_id`. Returns
+    /// true if a listener was actually removed; double-off is idempotent.
+    #[napi(js_name = "off")]
+    pub fn off(&self, subscription_id: i64) -> bool {
+        // `on*` returns u64 but napi widens unsigned 64-bit to JS bigint;
+        // the TS wrapper re-narrows to number (we stay < 2^53 in practice
+        // since subscription churn is human-scale). Accept i64 here for
+        // parity with the rest of the id surface.
+        self.events.unsubscribe(subscription_id as u64)
+    }
+
+    /// Test-only: emit a synthetic 'ready' so the Wave 7 Node harness can
+    /// verify end-to-end delivery without spinning up a real watcher.
+    /// Gated under `#[cfg(feature = "test-hooks")]` would be cleaner but
+    /// the binding crate is cdylib-only; `pub(crate)` + a thin `#[napi]`
+    /// wrapper is enough for the integration tests to reach it.
+    #[napi(js_name = "emitReadyForTests")]
+    pub fn emit_ready_for_tests(&self) {
+        self.events.emit_ready();
     }
 
     /// Teardown. Phase 5 wave 7 wires to a real shutdown sequence.

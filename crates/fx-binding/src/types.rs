@@ -212,6 +212,25 @@ pub struct FileSystemEventJs {
     pub detail: Option<String>,
 }
 
+/// Mirror of api.d.ts warning payload. Fires on the `'warning'` channel.
+/// `code` is a WarningCode (e.g. `"WNOLSNOTIFY"`); `detail` is a short
+/// human-readable follow-up — optional so cheap warnings stay cheap.
+#[napi(object)]
+pub struct WarningPayloadJs {
+    pub code: String,
+    pub detail: Option<String>,
+}
+
+/// Mirror of api.d.ts error payload. Fires on the `'error'` channel.
+/// `code` is an ErrorCode; `message` mirrors `FxError::to_string()`;
+/// `path` is the filesystem path involved when applicable.
+#[napi(object)]
+pub struct ErrorPayloadJs {
+    pub code: String,
+    pub message: String,
+    pub path: Option<String>,
+}
+
 /// Mirror of api.d.ts `ChangeNotice`. Fires on each 'change' /
 /// 'change:tree' / 'change:decorations' emission.
 #[napi(object)]

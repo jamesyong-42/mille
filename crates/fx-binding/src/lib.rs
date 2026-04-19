@@ -8,6 +8,7 @@
 extern crate napi_derive;
 
 pub mod error;
+pub mod events;
 pub mod explorer;
 pub mod io;
 pub mod mutations;

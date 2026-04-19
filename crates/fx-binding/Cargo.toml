@@ -15,6 +15,7 @@ path = "src/lib.rs"
 fx-core = { path = "../fx-core" }
 napi.workspace = true
 napi-derive.workspace = true
+parking_lot.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 

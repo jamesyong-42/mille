@@ -51,6 +51,27 @@ function flush() {
   return new Promise((r) => setImmediate(r));
 }
 
+/**
+ * Run `body` with a fresh FileExplorer + temp root, then tear
+ * everything down. Ensures `fx.dispose()` is awaited so the native
+ * watcher threads release their event-loop handles — otherwise
+ * `node --test` hangs at the end of the file.
+ */
+async function withFx(body) {
+  const dir = tempRoot();
+  const fx = new FileExplorer({ roots: [dir] });
+  try {
+    await body(fx, dir);
+  } finally {
+    try {
+      await fx.dispose();
+    } catch {
+      /* swallow — test may have already disposed */
+    }
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 test('DecorationStore.version starts at 0', () => {
   const store = new DecorationStore();
   assert.equal(store.version, 0);
@@ -156,9 +177,7 @@ test('multiple listeners all receive bump notifications', () => {
 // `getDecorationVersion()`.
 
 test('registerDecorationProvider: provider onDidChange bumps decorationVersion', async () => {
-  const dir = tempRoot();
-  try {
-    const fx = new FileExplorer({ roots: [dir] });
+  await withFx(async (fx) => {
     const p = makeProvider('git', new Map([[42, { badge: 'M', color: 'yellow' }]]));
     const sub = fx.registerDecorationProvider(p);
 
@@ -168,15 +187,11 @@ test('registerDecorationProvider: provider onDidChange bumps decorationVersion',
     assert.equal(fx.getDecorationVersion(), v0 + 1);
 
     sub.dispose();
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  });
 });
 
 test('registerDecorationProvider: disposing bumps decorationVersion once', async () => {
-  const dir = tempRoot();
-  try {
-    const fx = new FileExplorer({ roots: [dir] });
+  await withFx(async (fx) => {
     const p = makeProvider('git', new Map([[7, { badge: 'M' }]]));
     const sub = fx.registerDecorationProvider(p);
     p.fire([7]);
@@ -189,30 +204,22 @@ test('registerDecorationProvider: disposing bumps decorationVersion once', async
     // Double-dispose is idempotent — no further version bump.
     sub.dispose();
     assert.equal(fx.getDecorationVersion(), vBefore + 1);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  });
 });
 
 test('registerDecorationProvider: disposing with no entries does not bump', async () => {
-  const dir = tempRoot();
-  try {
-    const fx = new FileExplorer({ roots: [dir] });
+  await withFx(async (fx) => {
     const p = makeProvider('git', new Map());
     const sub = fx.registerDecorationProvider(p);
     const vBefore = fx.getDecorationVersion();
     // Never fired → nothing in store → disposal shouldn't bump.
     sub.dispose();
     assert.equal(fx.getDecorationVersion(), vBefore);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  });
 });
 
 test('registerDecorationProvider: provider errors during provide() are swallowed', async () => {
-  const dir = tempRoot();
-  try {
-    const fx = new FileExplorer({ roots: [dir] });
+  await withFx(async (fx) => {
     const bad = {
       id: 'bad',
       onDidChange(listener) {
@@ -231,17 +238,13 @@ test('registerDecorationProvider: provider errors during provide() are swallowed
     // No change landed — version stays put.
     assert.equal(fx.getDecorationVersion(), v0);
     sub.dispose();
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  });
 });
 
 // ─── 9.3 — scoped event channels ──────────────────────────────────────
 
 test('on("change:decorations") fires on decoration bump', async () => {
-  const dir = tempRoot();
-  try {
-    const fx = new FileExplorer({ roots: [dir] });
+  await withFx(async (fx) => {
     const p = makeProvider('git', new Map([[1, { badge: 'M' }]]));
     fx.registerDecorationProvider(p);
 
@@ -255,15 +258,11 @@ test('on("change:decorations") fires on decoration bump', async () => {
     assert.equal(seen.length, 1);
     assert.deepEqual(seen[0], [1]);
     sub.dispose();
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  });
 });
 
 test('on("change") fires on decoration bump (dimension-agnostic)', async () => {
-  const dir = tempRoot();
-  try {
-    const fx = new FileExplorer({ roots: [dir] });
+  await withFx(async (fx) => {
     const p = makeProvider('git', new Map([[1, { badge: 'M' }]]));
     fx.registerDecorationProvider(p);
 
@@ -276,15 +275,11 @@ test('on("change") fires on decoration bump (dimension-agnostic)', async () => {
     await flush();
     assert.equal(fired, 1);
     sub.dispose();
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  });
 });
 
 test('on("change:tree") does NOT fire on decoration bump', async () => {
-  const dir = tempRoot();
-  try {
-    const fx = new FileExplorer({ roots: [dir] });
+  await withFx(async (fx) => {
     const p = makeProvider('git', new Map([[1, { badge: 'M' }]]));
     fx.registerDecorationProvider(p);
 
@@ -297,15 +292,11 @@ test('on("change:tree") does NOT fire on decoration bump', async () => {
     await flush();
     assert.equal(treeFired, 0);
     sub.dispose();
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  });
 });
 
 test('decoration-only bump does not advance getTreeVersion()', async () => {
-  const dir = tempRoot();
-  try {
-    const fx = new FileExplorer({ roots: [dir] });
+  await withFx(async (fx) => {
     const p = makeProvider('git', new Map([[1, { badge: 'M' }]]));
     fx.registerDecorationProvider(p);
 
@@ -315,15 +306,11 @@ test('decoration-only bump does not advance getTreeVersion()', async () => {
     assert.equal(fx.getTreeVersion(), treeV0);
     // But decoration version did advance.
     assert.ok(fx.getDecorationVersion() > 0);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  });
 });
 
 test('disposing a change:decorations subscription stops further fanout', async () => {
-  const dir = tempRoot();
-  try {
-    const fx = new FileExplorer({ roots: [dir] });
+  await withFx(async (fx) => {
     const p = makeProvider('git', new Map([[1, { badge: 'M' }]]));
     fx.registerDecorationProvider(p);
 
@@ -339,22 +326,16 @@ test('disposing a change:decorations subscription stops further fanout', async (
     p.fire([1]); // re-fire with same decoration — store reports change.
     await flush();
     assert.equal(fired, 1);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  });
 });
 
 // ─── 9.4 — getDecorations on MirrorSnapshot ──────────────────────────
 
 test('MirrorSnapshot.getDecorations returns registered decorations', async () => {
-  const dir = tempRoot();
-  try {
-    const fx = new FileExplorer({ roots: [dir] });
+  await withFx(async (fx) => {
     const p = makeProvider(
       'git',
-      new Map([
-        [1, { badge: 'M', color: 'yellow', tooltip: 'modified' }],
-      ]),
+      new Map([[1, { badge: 'M', color: 'yellow', tooltip: 'modified' }]]),
     );
     const sub = fx.registerDecorationProvider(p);
 
@@ -371,15 +352,11 @@ test('MirrorSnapshot.getDecorations returns registered decorations', async () =>
     // Unknown id returns empty.
     assert.deepEqual(snap.getDecorations(9999), []);
     sub.dispose();
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  });
 });
 
 test('MirrorSnapshot.getDecorations merges across providers', async () => {
-  const dir = tempRoot();
-  try {
-    const fx = new FileExplorer({ roots: [dir] });
+  await withFx(async (fx) => {
     const git = makeProvider('git', new Map([[1, { badge: 'M' }]]));
     const lint = makeProvider('lint', new Map([[1, { badge: '!' }]]));
     const a = fx.registerDecorationProvider(git);
@@ -396,15 +373,11 @@ test('MirrorSnapshot.getDecorations merges across providers', async () => {
 
     a.dispose();
     b.dispose();
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  });
 });
 
 test('MirrorSnapshot.decorationVersion equals fx.getDecorationVersion()', async () => {
-  const dir = tempRoot();
-  try {
-    const fx = new FileExplorer({ roots: [dir] });
+  await withFx(async (fx) => {
     assert.equal(fx.getSnapshot().decorationVersion, fx.getDecorationVersion());
 
     const p = makeProvider('git', new Map([[1, { badge: 'M' }]]));
@@ -417,26 +390,18 @@ test('MirrorSnapshot.decorationVersion equals fx.getDecorationVersion()', async 
     assert.equal(snap.decorationVersion, fx.getDecorationVersion());
     assert.ok(snap.decorationVersion > 0);
     sub.dispose();
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  });
 });
 
-test('MirrorSnapshot.getDecorations is empty before any providers fire', () => {
-  const dir = tempRoot();
-  try {
-    const fx = new FileExplorer({ roots: [dir] });
+test('MirrorSnapshot.getDecorations is empty before any providers fire', async () => {
+  await withFx(async (fx) => {
     const snap = fx.getSnapshot();
     assert.deepEqual(snap.getDecorations(1), []);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  });
 });
 
 test('registerDecorationProvider: provide returning null clears the slot', async () => {
-  const dir = tempRoot();
-  try {
-    const fx = new FileExplorer({ roots: [dir] });
+  await withFx(async (fx) => {
     const entries = new Map([[1, { badge: 'M' }]]);
     const p = makeProvider('git', entries);
     const sub = fx.registerDecorationProvider(p);
@@ -457,7 +422,112 @@ test('registerDecorationProvider: provide returning null clears the slot', async
     assert.equal(fx.getDecorationVersion(), vAfterSet + 1);
 
     sub.dispose();
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  });
 });
+
+// ─── 9.5 — decoration-only bump preserves entry identity ─────────────
+//
+// SPEC §4.9.11's core promise: a decoration bump doesn't trigger a
+// tree re-render. Concretely:
+//   - treeVersion stays stable across decoration-only bumps
+//   - 'change:tree' listeners fire 0 times during a decoration storm
+//   - (todo) entry references are preserved across snapshot
+//     re-publishes — not testable today because MirrorSnapshot
+//     wrappers + NAPI struct-marshaling produce fresh JS objects per
+//     call. Identity preservation requires caching at the
+//     MirrorSnapshotImpl layer; tracked for later.
+
+test('decoration-only bump leaves treeVersion stable', async () => {
+  await withFx(async (fx) => {
+    const p = makeProvider('git', new Map([[1, { badge: 'M' }]]));
+    fx.registerDecorationProvider(p);
+
+    const treeV0 = fx.getTreeVersion();
+    p.fire([1]);
+    await flush();
+    assert.equal(fx.getTreeVersion(), treeV0);
+  });
+});
+
+test('500 decoration bumps fire no change:tree events', async () => {
+  await withFx(async (fx) => {
+    // Seed the provider with 500 distinct ids, each with a decoration.
+    const entries = new Map();
+    for (let i = 1; i <= 500; i++) entries.set(i, { badge: 'M' });
+    const p = makeProvider('git', entries);
+    fx.registerDecorationProvider(p);
+
+    let treeFired = 0;
+    const sub = fx.on('change:tree', () => {
+      treeFired++;
+    });
+
+    // Storm: 500 single-id fires, simulating a git checkout churning
+    // 500 modified files through the SCM provider.
+    for (let i = 1; i <= 500; i++) {
+      p.fire([i]);
+    }
+    await flush();
+
+    assert.equal(treeFired, 0);
+    // And treeVersion stayed put.
+    assert.equal(fx.getTreeVersion(), 0);
+    // Decoration version advanced (exact count depends on microtask
+    // batching, but it must be > 0).
+    assert.ok(fx.getDecorationVersion() > 0);
+
+    // Explicit sub.dispose before fx.dispose — a dangling native
+    // TSFN subscription keeps the event loop alive and hangs the
+    // test runner on shutdown.
+    sub.dispose();
+  });
+});
+
+test('500 decoration bumps fire change:decorations once per batched fire', async () => {
+  await withFx(async (fx) => {
+    const entries = new Map();
+    for (let i = 1; i <= 500; i++) entries.set(i, { badge: 'M' });
+    const p = makeProvider('git', entries);
+    fx.registerDecorationProvider(p);
+
+    let decFired = 0;
+    const sub = fx.on('change:decorations', () => {
+      decFired++;
+    });
+
+    // One fire covering all 500 ids — one bump, one decoration event.
+    p.fire([...entries.keys()]);
+    await flush();
+
+    assert.equal(decFired, 1);
+    sub.dispose();
+  });
+});
+
+test(
+  'decoration-only bump preserves entry identity across snapshots',
+  {
+    skip: true,
+    todo: 'getById + MirrorSnapshot wrapper both allocate fresh JS objects per call; identity caching is a later refinement (PLAN Phase 9.5 limitation)',
+  },
+  async () => {
+    await withFx(async (fx) => {
+      await fx.populateFromRoots();
+      const snap1 = fx.getSnapshot();
+      const rootId = snap1.roots()[0].id;
+      const e1 = snap1.getById(rootId);
+
+      const p = makeProvider('git', new Map([[rootId, { badge: 'M' }]]));
+      fx.registerDecorationProvider(p);
+      p.fire([rootId]);
+      await flush();
+
+      const snap2 = fx.getSnapshot();
+      const e2 = snap2.getById(rootId);
+      // Aspirational: same entry reference across a decoration-only
+      // bump. Currently the NAPI struct-marshaling produces a fresh
+      // JS object each call, so this assertion would fail.
+      assert.equal(e1, e2);
+    });
+  },
+);

@@ -13,9 +13,11 @@ path = "src/lib.rs"
 
 [dependencies]
 fx-core = { path = "../fx-core" }
+bincode.workspace = true
 napi.workspace = true
 napi-derive.workspace = true
 parking_lot.workspace = true
+serde.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 

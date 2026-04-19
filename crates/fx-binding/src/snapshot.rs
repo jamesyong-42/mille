@@ -13,7 +13,9 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use napi::bindgen_prelude::Buffer;
 use napi_derive::napi;
+use serde::Serialize;
 
 use fx_core::{EntryId, StoreSnapshot};
 
@@ -106,6 +108,67 @@ impl MirrorSnapshot {
             .collect()
     }
 
+    /// Bulk-path sibling of `visibleRows` — returns the enriched rows
+    /// (entry fields + viewport flags inlined) as a bincode-encoded
+    /// `Buffer` instead of marshaling each row through NAPI. For
+    /// viewports above `bulk::BINCODE_THRESHOLD` (SPEC §4.8: 100 rows),
+    /// one Buffer hop beats per-row object marshaling by a large margin;
+    /// the TS wrapper (Phase 6) sniffs the return type and decodes.
+    ///
+    /// Schema is `Vec<EnrichedRow>` with the bincode `standard()` config
+    /// — same config used by `fx_core::resume::write_snapshot`, so the
+    /// decoders can share a codec module if convenient.
+    ///
+    /// `visibleRows` (struct-marshaled) remains the preferred path for
+    /// small viewports and stays the default for API parity.
+    #[napi(js_name = "visibleRowsBin")]
+    pub fn visible_rows_bin(
+        &self,
+        options: VisibleRowsOptionsJs,
+    ) -> napi::Result<Buffer> {
+        let expanded: HashSet<EntryId> =
+            options.expanded.iter().map(|id| EntryId(*id as u64)).collect();
+
+        let query = fx_core::VisibleRowsQuery {
+            expanded: &expanded,
+            offset: options.offset,
+            limit: options.limit,
+            include_ignored: options.include_ignored.unwrap_or(false),
+        };
+
+        // VisibleRowOut carries only id + depth + has_children; the TS
+        // decoder needs the full Entry data too, so we pair each row
+        // with its Entry into a flat serde-friendly record. Drop rows
+        // whose id vanished between the query and the lookup — the
+        // snapshot is a single Arc, so this shouldn't happen, but the
+        // lookup returns Option and skipping is cheaper than unwrapping.
+        let rows = self.inner.visible_rows(query);
+        let enriched: Vec<EnrichedRow> = rows
+            .iter()
+            .filter_map(|r| {
+                self.inner.get(r.id).map(|entry| EnrichedRow {
+                    entry_raw_id: entry.id.raw(),
+                    parent_raw_id: entry.parent_id.map(|p| p.raw()),
+                    name: entry.name.clone(),
+                    kind: entry.kind as u8,
+                    size: entry.size,
+                    mtime_ms: entry.mtime_ms,
+                    ctime_ms: entry.ctime_ms,
+                    symlink_target_is_dir: entry.symlink_target_is_dir,
+                    path_segments: entry.path_segments.clone(),
+                    is_ignored: entry.is_ignored,
+                    is_readonly: entry.is_readonly,
+                    is_hidden: entry.is_hidden,
+                    depth: r.depth,
+                    has_children: r.has_children,
+                    is_expanded: expanded.contains(&r.id),
+                })
+            })
+            .collect();
+
+        crate::bulk::encode_bulk(&enriched)
+    }
+
     /// Honest scroll-height metric: `known` rows plus any expanded folders
     /// whose children haven't arrived yet (so the UI can render a loading
     /// badge without fudging offsets).
@@ -131,4 +194,37 @@ impl MirrorSnapshot {
                 .collect(),
         }
     }
+}
+
+/// Flat, serde-friendly record produced by `visibleRowsBin`. One struct
+/// per viewport row combining Entry fields with the row-specific flags
+/// (`depth`, `has_children`, `is_expanded`) so the TS decoder has
+/// everything it needs in a single pass.
+///
+/// Field order matters: bincode encodes positionally, so the TS
+/// decoder's schema must match exactly. Keep this `pub(crate)` so
+/// additions are caught at the binding boundary.
+///
+/// IDs are sent as `u64` rather than `EntryId` to keep the wire format
+/// self-contained (no dependency on fx-core's `EntryId` serde impl from
+/// the TS side). u64 is within the JS safe-integer range given the
+/// 2^53 cap enforced by `EntryId::alloc_from`.
+#[derive(Debug, Serialize)]
+pub(crate) struct EnrichedRow {
+    pub entry_raw_id: u64,
+    pub parent_raw_id: Option<u64>,
+    pub name: String,
+    /// `EntryKind as u8` — File=0 / Directory=1 / Symlink=2 / Unknown=3.
+    pub kind: u8,
+    pub size: u64,
+    pub mtime_ms: i64,
+    pub ctime_ms: i64,
+    pub symlink_target_is_dir: Option<bool>,
+    pub path_segments: Option<Vec<String>>,
+    pub is_ignored: bool,
+    pub is_readonly: bool,
+    pub is_hidden: bool,
+    pub depth: u16,
+    pub has_children: bool,
+    pub is_expanded: bool,
 }

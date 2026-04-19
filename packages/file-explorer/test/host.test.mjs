@@ -11,7 +11,7 @@
 
 import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { MessageChannel } from 'node:worker_threads';
@@ -343,16 +343,55 @@ test('host.dispose while the tick is running tears down cleanly', async () => {
   }
 });
 
-test(
-  'tick fan-out delivers delta after mutation on one session',
-  { skip: 'Wave 5 integration — walker seeding + live mutation pipeline land in commit 7.10' },
-  async () => {
-    // The native walker isn't wired into FileExplorer construction yet,
-    // so mutations from an attached session don't populate the store
-    // under a root id the session knows about — take_pending_changes()
-    // stays empty. Wave 5 re-enables this with walker-driven seeding.
-  },
-);
+test('tick fan-out delivers delta after mutation on one session', async () => {
+  // Commit 7.10 unlocked this: populateFromRoots() seeds real entries,
+  // so a mutation against one of them produces a ChangeSet that the
+  // tick loop fans out to every handshaken session.
+  const dir = tempRoot();
+  try {
+    writeFileSync(join(dir, 'target.txt'), 'seed');
+    const host = await createFileExplorerHost({ roots: [dir] });
+    await host.local.populateFromRoots();
+
+    const { port1, port2 } = new MessageChannel();
+    host.attachPort(port1);
+    const snapP = nextMatching(port2, (m) => m?.type === 'snapshot');
+    port2.postMessage({
+      v: 1,
+      type: 'handshake',
+      body: { version: 1, clientId: 't', options: {} },
+    });
+    await snapP;
+
+    // Find target.txt via the host's local explorer.
+    const snap = host.local.getSnapshot();
+    const [walkRoot] = snap.roots();
+    const rows = snap.visibleRows({
+      expanded: [walkRoot.id],
+      offset: 0,
+      limit: 1000,
+    });
+    const target = rows.find((r) => r.name === 'target.txt');
+    assert.ok(target, 'target.txt should be seeded');
+
+    // A rename on the host's local explorer populates the ChangeSet;
+    // the tick loop picks it up and posts a delta with a bumped version.
+    const startVersion = host.local.getTreeVersion();
+    const deltaP = nextMatching(
+      port2,
+      (m) => m?.type === 'delta' && m?.body?.version > startVersion,
+    );
+    await host.local.rename(target.id, 'target-renamed.txt');
+    const delta = await deltaP;
+    assert.ok(delta.body.version > startVersion);
+
+    port1.close();
+    port2.close();
+    await host.dispose();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 // ── 7.8: mutation ordering ───────────────────────────────────────────
 
@@ -467,15 +506,92 @@ test(
 
 test(
   'mutation ordering: other session observes delta before initiator receives mutateResult',
-  {
-    skip: 'Wave 5 integration — needs walker-seeded entries for a real mutation round-trip',
-  },
   async () => {
-    // When walker seeding lands (commit 7.10), this test will rename a
-    // real entry from session A and assert that session B's delta
-    // arrives on-wire before A's mutateResult resolves. That's the
-    // concrete SPEC §5.1 guarantee — the current queue + flush plumbing
-    // implements it, but proving it end-to-end requires a live entry.
+    // SPEC §5.1: on a raw-frame level, B's delta frame must be posted
+    // before A's mutateResult frame. Using postMessage ordering rather
+    // than two connectFileExplorer promises keeps this test independent
+    // of the client-side receive order — we inspect the host-to-client
+    // wire directly and assert the delta appeared on B's port before
+    // the mutateResult appeared on A's port.
+    const dir = tempRoot();
+    try {
+      writeFileSync(join(dir, 'ordering.txt'), 'x');
+      const host = await createFileExplorerHost({ roots: [dir] });
+      await host.local.populateFromRoots();
+
+      const chA = new MessageChannel();
+      const chB = new MessageChannel();
+      host.attachPort(chA.port1);
+      host.attachPort(chB.port1);
+
+      const snapA = nextMatching(chA.port2, (m) => m?.type === 'snapshot');
+      const snapB = nextMatching(chB.port2, (m) => m?.type === 'snapshot');
+      chA.port2.postMessage({
+        v: 1,
+        type: 'handshake',
+        body: { version: 1, clientId: 'A', options: {} },
+      });
+      chB.port2.postMessage({
+        v: 1,
+        type: 'handshake',
+        body: { version: 1, clientId: 'B', options: {} },
+      });
+      await Promise.all([snapA, snapB]);
+
+      // Look up the target via the host's local explorer.
+      const snap = host.local.getSnapshot();
+      const [walkRoot] = snap.roots();
+      const rows = snap.visibleRows({
+        expanded: [walkRoot.id],
+        offset: 0,
+        limit: 1000,
+      });
+      const target = rows.find((r) => r.name === 'ordering.txt');
+      assert.ok(target);
+
+      // Record the order frames land on A vs B.
+      const order = [];
+      chA.port2.on('message', (m) => {
+        if (m?.type === 'mutateResult') order.push('A:mutateResult');
+      });
+      chB.port2.on('message', (m) => {
+        if (m?.type === 'delta') order.push('B:delta');
+      });
+
+      const mutateResultP = nextMatching(
+        chA.port2,
+        (m) => m?.type === 'mutateResult',
+      );
+      chA.port2.postMessage({
+        v: 1,
+        type: 'mutate',
+        body: {
+          reqId: 1,
+          op: 'rename',
+          args: { id: target.id, newName: 'ordering-v2.txt' },
+        },
+      });
+      await mutateResultP;
+      // Let any tail event drain before we inspect order.
+      await new Promise((r) => setTimeout(r, 20));
+
+      const firstMutateResult = order.indexOf('A:mutateResult');
+      const firstBDelta = order.indexOf('B:delta');
+      assert.ok(firstBDelta !== -1, 'B should have received a delta');
+      assert.ok(firstMutateResult !== -1, 'A should have received mutateResult');
+      assert.ok(
+        firstBDelta < firstMutateResult,
+        `SPEC §5.1: B:delta should fire before A:mutateResult (order: ${order.join(',')})`,
+      );
+
+      chA.port1.close();
+      chA.port2.close();
+      chB.port1.close();
+      chB.port2.close();
+      await host.dispose();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   },
 );
 

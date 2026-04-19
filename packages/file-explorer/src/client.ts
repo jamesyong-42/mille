@@ -170,6 +170,7 @@ type NativeSnapshot = {
   getById(id: number): Entry | null;
   directChildCount(id: number): number | null;
   hasChildren(id: number): boolean;
+  childrenOf(id: number): number[];
   visibleRows(options: {
     expanded: number[];
     offset: number;
@@ -299,6 +300,21 @@ export class FileExplorer {
       fromVersion: cs.fromVersion,
       toVersion: cs.toVersion,
     };
+  }
+
+  /**
+   * Local-mode expansion is a consumer-side concern — the snapshot
+   * serves every subtree unconditionally. Kept on the surface for
+   * API parity with PortFileExplorer so consumers can swap back-ends
+   * without editing call sites.
+   */
+  setExpanded(_diff: { add?: readonly EntryId[]; remove?: readonly EntryId[] }): void {
+    /* no-op: local MirrorSnapshot is direct. */
+  }
+
+  /** Local-mode viewport is likewise a consumer concern. */
+  setViewport(_window: { offset: number; limit: number; overscan?: number }): void {
+    /* no-op */
   }
 
   // ─── Mutations ──────────────────────────────────────────────────────
@@ -438,6 +454,16 @@ export class MirrorSnapshot {
 
   hasChildren(id: EntryId): boolean {
     return this.inner.hasChildren(id);
+  }
+
+  /**
+   * Immediate children of `id` in wire order. Used by the IPC host to
+   * walk the tree for snapshot serialization (Phase 8 commit 8.6) —
+   * consumers at the public surface normally route through
+   * `visibleRows` instead.
+   */
+  childrenOf(id: EntryId): readonly EntryId[] {
+    return this.inner.childrenOf(id);
   }
 
   /**

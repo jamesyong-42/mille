@@ -87,6 +87,20 @@ impl MirrorSnapshot {
         self.inner.has_children(eid)
     }
 
+    /// Immediate children of a directory id, in wire (id-allocation) order.
+    /// Empty when the id is unknown or not a container. The host walks
+    /// the tree via this to serialize the full entry set into the
+    /// snapshot frame (Phase 8 commit 8.6).
+    #[napi(js_name = "childrenOf")]
+    pub fn children_of(&self, id: i64) -> Vec<i64> {
+        let eid = EntryId(id as u64);
+        self.inner
+            .children_of(eid)
+            .iter()
+            .map(|i| i.raw() as i64)
+            .collect()
+    }
+
     /// Flattened viewport rows for the current expanded-set and window.
     /// `include_ignored` defaults to false, matching SPEC §4.9.2.
     #[napi(js_name = "visibleRows")]

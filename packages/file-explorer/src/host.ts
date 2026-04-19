@@ -14,7 +14,7 @@
 // enforced; malformed or wrong-version frames produce an `error` frame.
 // Bulk mirror/delta payloads land in wave 3 via a shared encoder.
 
-import { FileExplorer } from './client.js';
+import { FileExplorer, type Entry, type MirrorSnapshot } from './client.js';
 import type { EntryId, ExplorerOptions } from './client.js';
 import {
   applyDeltaToSession,
@@ -22,12 +22,59 @@ import {
   type SessionView,
 } from './delta.js';
 import { isFileSystemError } from './errors.js';
+import type { ClientEntry } from './mirror.js';
 import {
   frame,
   isCompatibleVersion,
   validateFrameVersion,
 } from './protocol.js';
 import type { Disposable, FileExplorerHost, MessagePortLike } from './types.js';
+
+/**
+ * Project a public `Entry` into the mirror-local `ClientEntry` shape.
+ * The public Entry uses `undefined`-holes for optional fields; the
+ * wire (JSON) representation needs explicit `null` so round-trips
+ * don't lose the distinction between "absent" and "present-undefined".
+ */
+function entryToClient(e: Entry): ClientEntry {
+  return {
+    id: e.id,
+    parentId: e.parentId,
+    name: e.name,
+    kind: e.kind,
+    size: e.size,
+    mtimeMs: e.mtimeMs,
+    ctimeMs: e.ctimeMs,
+    symlinkTargetIsDir: e.symlinkTargetIsDir ?? null,
+    pathSegments: e.pathSegments !== undefined ? [...e.pathSegments] : null,
+    isIgnored: e.isIgnored,
+    isReadonly: e.isReadonly,
+    isHidden: e.isHidden,
+  };
+}
+
+/**
+ * Walk the snapshot from the roots down and collect every entry. For
+ * Phase 8 this ships the whole tree in the initial snapshot frame —
+ * test trees are small enough that the JSON overhead is irrelevant.
+ * Phase 12 will bound the walk by viewport + expansion.
+ */
+function collectAllEntries(snap: MirrorSnapshot): ClientEntry[] {
+  const out: ClientEntry[] = [];
+  const visited = new Set<number>();
+  const stack: number[] = snap.roots().map((r) => r.id);
+  while (stack.length > 0) {
+    const id = stack.pop()!;
+    if (visited.has(id)) continue;
+    visited.add(id);
+    const e = snap.getById(id);
+    if (!e) continue;
+    out.push(entryToClient(e));
+    const kids = snap.childrenOf(id);
+    for (const kid of kids) stack.push(kid);
+  }
+  return out;
+}
 
 /**
  * Per-connection session state. Owned by the host, one per attached port.
@@ -254,6 +301,10 @@ class FileExplorerHostImpl implements FileExplorerHost {
       return;
     }
 
+    // Freshest snapshot — used to lift ClientEntry records for any id
+    // that moved (changed, added, or reparented) this tick.
+    const snap = this.explorer.getSnapshot();
+
     for (const session of this.sessions.values()) {
       if (!session.handshook) continue;
       const view: SessionView = {
@@ -269,13 +320,48 @@ class FileExplorerHostImpl implements FileExplorerHost {
       for (const rootId of coarse) {
         session.knownIds.delete(rootId);
       }
+
+      // Bundle the ClientEntry payloads for every id whose record
+      // changed. Also sweep in children of `childSetChanged` parents
+      // that the session doesn't know about — expanded folders get live
+      // updates when their child list grows (SPEC §4.9.5).
+      const outEntries: ClientEntry[] = [];
+      const outDirectChildCounts: Record<string, number> = {};
+      const emitted = new Set<number>();
+      for (const id of delta.changedIds) {
+        if (emitted.has(id)) continue;
+        const entry = snap.getById(id);
+        if (!entry) continue;
+        outEntries.push(entryToClient(entry));
+        emitted.add(id);
+        const c = snap.directChildCount(id);
+        if (c !== null) outDirectChildCounts[String(id)] = c;
+      }
+      for (const parentId of delta.childSetChanged) {
+        const pc = snap.directChildCount(parentId);
+        if (pc !== null) outDirectChildCounts[String(parentId)] = pc;
+        if (!session.expanded.has(parentId)) continue;
+        for (const kidId of snap.childrenOf(parentId)) {
+          if (session.knownIds.has(kidId) || emitted.has(kidId)) continue;
+          const entry = snap.getById(kidId);
+          if (!entry) continue;
+          outEntries.push(entryToClient(entry));
+          emitted.add(kidId);
+          session.knownIds.add(kidId);
+          const cc = snap.directChildCount(kidId);
+          if (cc !== null) outDirectChildCounts[String(kidId)] = cc;
+        }
+      }
+
       this.send(
         session,
         frame('delta', {
           version: delta.version,
           changedIds: delta.changedIds,
+          entriesJson: outEntries.length > 0 ? JSON.stringify(outEntries) : undefined,
+          childSetChanged: delta.childSetChanged,
           removedIds: delta.removedIds,
-          directChildCounts: {},
+          directChildCounts: outDirectChildCounts,
           newVisibleCount: 0,
           coarseSubtrees: coarse,
           subtreeDirty,
@@ -336,21 +422,31 @@ class FileExplorerHostImpl implements FileExplorerHost {
     session.handshook = true;
     const snap = this.explorer.getSnapshot();
     const roots = snap.roots().map((e) => e.id);
+    // Walk the whole tree so the client mirror starts hydrated. For
+    // Phase 8 this is adequate — test trees have <100 entries. Phase
+    // 12 bounds the walk by viewport (SPEC §4.9.1).
+    const allEntries = collectAllEntries(snap);
+    // Emit a directChildCount entry for every id we're shipping — the
+    // twisty caret renders against this map on the client.
     const directChildCounts: Record<string, number> = {};
-    for (const rid of roots) {
-      const c = snap.directChildCount(rid);
-      if (c !== null) directChildCounts[String(rid)] = c;
+    for (const e of allEntries) {
+      const c = snap.directChildCount(e.id);
+      if (c !== null) directChildCounts[String(e.id)] = c;
+      session.knownIds.add(e.id);
     }
     this.send(
       session,
       frame('snapshot', {
         version: snap.treeVersion,
         roots,
-        // Wave 3 encodes real rows here via the shared bincode encoder.
+        // Legacy ArrayBuffer payloads kept for wire-shape compatibility;
+        // entriesJson carries the real data for Phase 8 (bincode lands
+        // in Phase 12 with benchmarks).
         mirror: new ArrayBuffer(0),
+        entriesJson: allEntries.length > 0 ? JSON.stringify(allEntries) : undefined,
         directChildCounts,
         viewport: new ArrayBuffer(0),
-        visibleCount: 0,
+        visibleCount: allEntries.length,
       }),
     );
   }
@@ -361,16 +457,38 @@ class FileExplorerHostImpl implements FileExplorerHost {
   ): void {
     for (const id of body.add ?? []) session.expanded.add(id);
     for (const id of body.remove ?? []) session.expanded.delete(id);
-    // Wave 2: empty delta — real row diffs land in wave 3 once the
-    // shared encoder exists. The version bump still lets the client
-    // know the session state moved.
+
+    // Ship child entries the client doesn't yet know about for each
+    // newly-expanded folder. Phase 8 sends the whole tree at handshake
+    // time so these are typically already covered — but newly-arrived
+    // children (post-handshake walker discoveries) still need to land.
+    const snap = this.explorer.getSnapshot();
+    const addedEntries: ClientEntry[] = [];
+    const newDirectChildCounts: Record<string, number> = {};
+    const childSetIds: number[] = [];
+    for (const id of body.add ?? []) {
+      const kids = snap.childrenOf(id);
+      if (kids.length > 0) childSetIds.push(id);
+      for (const kidId of kids) {
+        if (session.knownIds.has(kidId)) continue;
+        const entry = snap.getById(kidId);
+        if (!entry) continue;
+        addedEntries.push(entryToClient(entry));
+        session.knownIds.add(kidId);
+        const c = snap.directChildCount(kidId);
+        if (c !== null) newDirectChildCounts[String(kidId)] = c;
+      }
+    }
+
     this.send(
       session,
       frame('delta', {
         version: this.explorer.getTreeVersion(),
         changedIds: [],
+        entriesJson: addedEntries.length > 0 ? JSON.stringify(addedEntries) : undefined,
+        childSetChanged: childSetIds,
         removedIds: [],
-        directChildCounts: {},
+        directChildCounts: newDirectChildCounts,
         newVisibleCount: 0,
         coarseSubtrees: [],
         subtreeDirty: [],

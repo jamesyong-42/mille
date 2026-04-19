@@ -1,4 +1,4 @@
-// Port-backed FileExplorer client — Phase 7 commit 7.4.
+// Port-backed FileExplorer client — Phase 7 commit 7.4 + Phase 8 wave 3.
 //
 // Companion to createFileExplorerHost. `connectFileExplorer(port)` attaches
 // to a MessagePort-shaped transport (Node worker_threads, Electron
@@ -6,17 +6,30 @@
 // handshake, and returns a PortFileExplorer whose surface mirrors the
 // typed FileExplorer class — but every method tunnels through the wire.
 //
-// Wave 2 scope:
-//   - handshake handshake/snapshot wiring + treeVersion tracking
-//   - mutate / call reqId multiplexing with typed FileSystemError on reject
-//   - on('change') fires on every delta arrival
-//   - dispose() rejects outstanding requests with ECANCELED
+// Phase 8 wiring (commit 8.6) replaces the minimal PortMirrorSnapshot
+// stub with the real mirror:
+//   - PortFileExplorer holds a MirrorWorking state
+//   - snapshot/delta messages flow through the applySnapshot / applyDelta
+//     reducer (src/mirror-reducer.ts)
+//   - getSnapshot() returns a ClientMirrorSnapshot whose identity is
+//     stable between deltas (useSyncExternalStore-friendly)
+//   - setExpanded / setViewport route to the host; pendingExpansions on
+//     the mirror tracks in-flight expansions until the delta reply lands
 //
-// Wave 3 fills in real mirror decoding so `getSnapshot().visibleRows()`
-// and `getById()` return real data; the current MirrorSnapshot stub just
-// exposes the handshake's `roots` list.
+// SPEC §4.9.1: identity-stable snapshots. Reducer produces a fresh
+// MirrorWorking on every apply; we wrap it in a new
+// ClientMirrorSnapshot before publishing so `getSnapshot()` returns
+// `===`-equal references between ticks that didn't change anything.
 
 import { FileSystemError, type ErrorCode } from './errors.js';
+import {
+  applyDelta,
+  applySnapshot,
+  type InboundDelta,
+  type InboundSnapshot,
+} from './mirror-reducer.js';
+import { ClientMirrorSnapshot } from './mirror-snapshot.js';
+import { createMirror, type MirrorWorking } from './mirror.js';
 import { frame, PROTOCOL_VERSION, validateFrameVersion } from './protocol.js';
 import type { Disposable, MessagePortLike } from './types.js';
 
@@ -25,8 +38,9 @@ interface PendingRequest {
   reject: (reason: unknown) => void;
 }
 
-interface ClientOptions {
+export interface ClientOptions {
   readonly prefetchRows?: number;
+  /** Max entries the mirror retains before LRU eviction (SPEC §4.9.7). Default 4096. */
   readonly mirrorCap?: number;
 }
 
@@ -64,22 +78,13 @@ function adaptPort(port: unknown): MessagePortLike {
   throw new Error('port does not satisfy MessagePortLike (no addEventListener or on)');
 }
 
-/** Stub snapshot for wave 2 — just carries the roots list + treeVersion. */
-export class PortMirrorSnapshot {
-  constructor(
-    readonly treeVersion: number,
-    private readonly rootsList: readonly number[],
-  ) {}
-
-  get decorationVersion(): number {
-    return 0;
-  }
-
-  /** Wave 3 returns real Entry records from the decoded mirror. */
-  roots(): readonly { id: number }[] {
-    return this.rootsList.map((id) => ({ id }));
-  }
-}
+/**
+ * Back-compat alias: older consumers `import { PortMirrorSnapshot }`.
+ * Phase 8 swaps the implementation to ClientMirrorSnapshot — the
+ * public shape (treeVersion, roots, getById, visibleRows, …) is a
+ * superset of the old stub.
+ */
+export { ClientMirrorSnapshot as PortMirrorSnapshot } from './mirror-snapshot.js';
 
 /**
  * Renderer-side FileExplorer proxy. Every mutation routes through the
@@ -91,8 +96,8 @@ export class PortFileExplorer {
   private readonly pending = new Map<number, PendingRequest>();
   private readonly changeListeners = new Set<ChangeListener>();
   private nextReqId = 1;
-  private treeVersion = 0;
-  private rootIds: readonly number[] = [];
+  private working: MirrorWorking = createMirror();
+  private publishedSnapshot: ClientMirrorSnapshot = new ClientMirrorSnapshot(this.working);
   private readonly handshakeReady: Promise<void>;
   private handshakeResolve!: () => void;
   private handshakeReject!: (reason: unknown) => void;
@@ -121,16 +126,22 @@ export class PortFileExplorer {
   }
 
   getTreeVersion(): number {
-    return this.treeVersion;
-  }
-
-  getSnapshot(): PortMirrorSnapshot {
-    return new PortMirrorSnapshot(this.treeVersion, this.rootIds);
+    return this.working.treeVersion;
   }
 
   /**
-   * Subscribe to change bumps. Wave 2 fires on delta arrivals only;
-   * other channels (event/batch/warning/error/ready) land in wave 3+.
+   * Current client-mirror snapshot. Identity is stable across ticks
+   * that didn't deliver a new delta, so useSyncExternalStore can gate
+   * re-renders on `===`.
+   */
+  getSnapshot(): ClientMirrorSnapshot {
+    return this.publishedSnapshot;
+  }
+
+  /**
+   * Subscribe to change bumps. Fires on every published snapshot —
+   * handshake, delta, and future channels (event/batch/warning/error/
+   * ready arrive in wave 3+).
    */
   on(event: string, listener: (...args: unknown[]) => void): Disposable {
     if (event === 'change') {
@@ -145,12 +156,35 @@ export class PortFileExplorer {
     return { dispose: () => undefined };
   }
 
-  /** Push a fresh expansion diff to the host. */
+  /**
+   * Push a fresh expansion diff to the host and record pending
+   * expansions locally so `visibleRowCount` can surface a loading
+   * indicator before the child entries arrive (SPEC §4.9.2).
+   */
   setExpanded(diff: { add?: readonly number[]; remove?: readonly number[] }): void {
+    const add = diff.add ?? [];
+    const remove = diff.remove ?? [];
+    if (add.length === 0 && remove.length === 0) return;
+
+    // Track pending on the working mirror. The reducer clears them
+    // when a delta lands; we publish immediately so consumers see the
+    // change count even before the host replies.
+    let touched = false;
+    for (const id of add) {
+      if (!this.working.pendingExpansions.has(id)) {
+        this.working.pendingExpansions.add(id);
+        touched = true;
+      }
+    }
+    for (const id of remove) {
+      if (this.working.pendingExpansions.delete(id)) touched = true;
+    }
+    if (touched) this.publishSnapshot();
+
     this.sendAfterReady(
       frame('setExpanded', {
-        add: diff.add ? [...diff.add] : [],
-        remove: diff.remove ? [...diff.remove] : [],
+        add: [...add],
+        remove: [...remove],
       }),
     );
   }
@@ -285,12 +319,10 @@ export class PortFileExplorer {
     if (!f) return;
     switch (f.type) {
       case 'snapshot':
-        this.handleSnapshot(
-          f.body as { version: number; roots: number[] },
-        );
+        this.handleSnapshot(f.body as InboundSnapshot);
         return;
       case 'delta':
-        this.handleDelta(f.body as { version: number });
+        this.handleDelta(f.body as InboundDelta);
         return;
       case 'mutateResult':
       case 'callResult':
@@ -311,15 +343,24 @@ export class PortFileExplorer {
     }
   }
 
-  private handleSnapshot(body: { version: number; roots: number[] }): void {
-    this.treeVersion = body.version;
-    this.rootIds = body.roots;
+  private handleSnapshot(body: InboundSnapshot): void {
+    this.working = applySnapshot(this.working, body);
+    this.publishSnapshot();
     this.handshakeResolve();
-    this.fireChange();
   }
 
-  private handleDelta(body: { version: number }): void {
-    this.treeVersion = body.version;
+  private handleDelta(body: InboundDelta): void {
+    this.working = applyDelta(this.working, body);
+    this.publishSnapshot();
+  }
+
+  /**
+   * Freeze the current MirrorWorking into a new ClientMirrorSnapshot
+   * and wake up change listeners. Identity advances every publish —
+   * consumers relying on `===` semantics re-render automatically.
+   */
+  private publishSnapshot(): void {
+    this.publishedSnapshot = new ClientMirrorSnapshot(this.working);
     this.fireChange();
   }
 

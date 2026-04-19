@@ -6,7 +6,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use napi::bindgen_prelude::Result;
+use napi::bindgen_prelude::{Buffer, Result};
 use napi::Error;
 use napi_derive::napi;
 
@@ -397,12 +397,67 @@ impl FileExplorer {
         Ok(EntryJs::from_core(arc.as_ref()))
     }
 
+    /// Read a file's contents by id. Returns a `Buffer` — JS receives a
+    /// zero-copy view over the bytes (standard Node builds).
+    #[napi(js_name = "readFile")]
+    pub async fn read_file(&self, id: i64) -> Result<Buffer> {
+        let path = self.resolve_path_for_id(id)?;
+        crate::io::read_file(path).await
+    }
+
+    /// Read a file as text. Only UTF-8 is supported in v0.1; pass
+    /// `encoding: "utf-8"` (or omit) — anything else returns EUNSUPPORTED.
+    #[napi(js_name = "readText")]
+    pub async fn read_text(&self, id: i64, encoding: Option<String>) -> Result<String> {
+        let path = self.resolve_path_for_id(id)?;
+        crate::io::read_text(path, encoding).await
+    }
+
+    /// Write `data` to a file by id. When `options.atomic` is true, writes
+    /// through a sibling `.mille.tmp` file + rename — safe against partial
+    /// writes on same-filesystem targets.
+    #[napi(js_name = "writeFile")]
+    pub async fn write_file(
+        &self,
+        id: i64,
+        data: Buffer,
+        options: Option<WriteFileOptionsJs>,
+    ) -> Result<()> {
+        let path = self.resolve_path_for_id(id)?;
+        let atomic = options.and_then(|o| o.atomic).unwrap_or(false);
+        crate::io::write_file(path, data.to_vec(), atomic).await
+    }
+
     /// Teardown. Phase 5 wave 7 wires to a real shutdown sequence.
     #[napi]
     pub async fn dispose(&self) -> Result<()> {
         // TODO: Phase 5.4+ — stop watcher, flush pending changes, write snapshot.
         Ok(())
     }
+}
+
+impl FileExplorer {
+    /// Shared path-resolution helper for read/write and mutation methods.
+    /// Returns a ready-to-fx_error EINVAL when the id isn't in the current
+    /// snapshot — same shape mutations use, so the TS wrapper can key off
+    /// `FX|EINVAL|...` uniformly.
+    pub(crate) fn resolve_path_for_id(&self, id: i64) -> Result<std::path::PathBuf> {
+        let eid = EntryId(id as u64);
+        let snap = self.store.snapshot();
+        resolve_entry_path(snap.as_ref(), &self.roots, eid).ok_or_else(|| {
+            fx_error_to_napi(FxError::InvalidInput(format!(
+                "id {} not found in snapshot",
+                id
+            )))
+        })
+    }
+}
+
+/// Mirror of api.d.ts `WriteFileOptions`.
+#[napi(object)]
+pub struct WriteFileOptionsJs {
+    /// When true, write to a sibling temp file and rename into place.
+    pub atomic: Option<bool>,
 }
 
 /// SPEC §4.3 caps the walker budget at 8 threads. `std` has no num_cpus,

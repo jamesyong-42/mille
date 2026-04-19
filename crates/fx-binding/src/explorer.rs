@@ -404,20 +404,42 @@ impl FileExplorer {
         Ok(EntryJs::from_core(arc.as_ref()))
     }
 
+    // ---- File I/O ----------------------------------------------------
+    //
+    // Each I/O method plumbs a `CancellationToken` through `crate::io`
+    // even though the JS-visible surface doesn't yet accept an
+    // `AbortSignal` parameter. Reason: napi-rs 3.8's `AbortSignal` is
+    // backed by `Rc<RefCell<..>>` and is therefore `!Send`; the
+    // `#[napi]` macro wraps `async fn` bodies into `tokio::spawn`-able
+    // futures that must be `Send`, so AbortSignal can't appear as a
+    // direct parameter. The supported pattern is `AsyncTask` +
+    // `Task::with_signal`, which means restructuring these methods
+    // around a `Task` impl — that belongs in Phase 6 when the TS
+    // wrapper lands and can front a unified signal-aware surface.
+    //
+    // In the meantime `signal_to_token(None)` yields a never-fires
+    // token, so the token checks inside `crate::io` are effectively
+    // no-ops but ready to bite once the signal path is wired.
+    // SPEC §4.6 flags AbortSignal as advisory in Phase 5.
+
     /// Read a file's contents by id. Returns a `Buffer` — JS receives a
     /// zero-copy view over the bytes (standard Node builds).
     #[napi(js_name = "readFile")]
     pub async fn read_file(&self, id: i64) -> Result<Buffer> {
+        // TODO(phase-6): accept `Option<AbortSignal>` once the wrapper
+        // restructures I/O onto `AsyncTask` (napi-rs 3.8 limitation).
+        let token = crate::cancel::signal_to_token(None);
         let path = self.resolve_path_for_id(id)?;
-        crate::io::read_file(path).await
+        crate::io::read_file(path, token).await
     }
 
     /// Read a file as text. Only UTF-8 is supported in v0.1; pass
     /// `encoding: "utf-8"` (or omit) — anything else returns EUNSUPPORTED.
     #[napi(js_name = "readText")]
     pub async fn read_text(&self, id: i64, encoding: Option<String>) -> Result<String> {
+        let token = crate::cancel::signal_to_token(None);
         let path = self.resolve_path_for_id(id)?;
-        crate::io::read_text(path, encoding).await
+        crate::io::read_text(path, encoding, token).await
     }
 
     /// Write `data` to a file by id. When `options.atomic` is true, writes
@@ -430,9 +452,10 @@ impl FileExplorer {
         data: Buffer,
         options: Option<WriteFileOptionsJs>,
     ) -> Result<()> {
+        let token = crate::cancel::signal_to_token(None);
         let path = self.resolve_path_for_id(id)?;
         let atomic = options.and_then(|o| o.atomic).unwrap_or(false);
-        crate::io::write_file(path, data.to_vec(), atomic).await
+        crate::io::write_file(path, data.to_vec(), atomic, token).await
     }
 
     // ---- Event subscription ------------------------------------------

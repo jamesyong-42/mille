@@ -17,24 +17,38 @@
 use std::path::PathBuf;
 
 use napi::bindgen_prelude::{Buffer, Result};
+use tokio_util::sync::CancellationToken;
 
 use fx_core::FxError;
 
+use crate::cancel::check_cancelled;
 use crate::error::{fx_error_to_napi, io_to_fx};
 
 /// Read the full contents of `path` into a `Buffer`.
 /// On the JS side `Buffer` is a zero-copy view for the standard Node build.
-pub(crate) async fn read_file(path: PathBuf) -> Result<Buffer> {
+///
+/// `token` is checked immediately (cheap early-out when the caller already
+/// aborted before we were scheduled) and again after the read lands —
+/// `tokio::fs::read` can't be interrupted mid-syscall, so in-flight cancel
+/// remains advisory per SPEC §4.6.
+pub(crate) async fn read_file(path: PathBuf, token: CancellationToken) -> Result<Buffer> {
+    check_cancelled(&token)?;
     let bytes = tokio::fs::read(&path)
         .await
         .map_err(|e| fx_error_to_napi(io_to_fx(e, path.clone())))?;
+    check_cancelled(&token)?;
     Ok(Buffer::from(bytes))
 }
 
 /// Read the contents of `path` as a UTF-8 string. `encoding` must be
 /// `None`, `"utf-8"`, or `"utf8"`; anything else returns EUNSUPPORTED.
 /// Non-UTF-8 bytes yield EINVAL with the decode error attached.
-pub(crate) async fn read_text(path: PathBuf, encoding: Option<String>) -> Result<String> {
+pub(crate) async fn read_text(
+    path: PathBuf,
+    encoding: Option<String>,
+    token: CancellationToken,
+) -> Result<String> {
+    check_cancelled(&token)?;
     let enc = encoding.as_deref().unwrap_or("utf-8").to_ascii_lowercase();
     if enc != "utf-8" && enc != "utf8" {
         return Err(fx_error_to_napi(FxError::Unsupported(format!(
@@ -45,6 +59,7 @@ pub(crate) async fn read_text(path: PathBuf, encoding: Option<String>) -> Result
     let bytes = tokio::fs::read(&path)
         .await
         .map_err(|e| fx_error_to_napi(io_to_fx(e, path.clone())))?;
+    check_cancelled(&token)?;
     String::from_utf8(bytes).map_err(|e| {
         fx_error_to_napi(FxError::InvalidInput(format!(
             "file contents are not valid UTF-8: {e}"
@@ -55,7 +70,13 @@ pub(crate) async fn read_text(path: PathBuf, encoding: Option<String>) -> Result
 /// Write `data` to `path`. When `atomic` is true, write to a sibling
 /// `<path>.mille.tmp` first, then `rename` into place — rename is atomic
 /// on same-filesystem targets across macOS / Linux / Windows.
-pub(crate) async fn write_file(path: PathBuf, data: Vec<u8>, atomic: bool) -> Result<()> {
+pub(crate) async fn write_file(
+    path: PathBuf,
+    data: Vec<u8>,
+    atomic: bool,
+    token: CancellationToken,
+) -> Result<()> {
+    check_cancelled(&token)?;
     if atomic {
         let tmp = tmp_sibling(&path);
         tokio::fs::write(&tmp, &data)

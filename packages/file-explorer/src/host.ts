@@ -16,6 +16,11 @@
 
 import { FileExplorer } from './client.js';
 import type { EntryId, ExplorerOptions } from './client.js';
+import {
+  applyDeltaToSession,
+  computeSessionDelta,
+  type SessionView,
+} from './delta.js';
 import { isFileSystemError } from './errors.js';
 import {
   frame,
@@ -89,11 +94,21 @@ function adaptPort(port: unknown): MessagePortLike {
   throw new Error('port does not satisfy MessagePortLike (no addEventListener or on)');
 }
 
+/**
+ * 16ms ≈ one render frame. SPEC §4.9 sizes the coalescer + fan-out tick
+ * so the host never spends more than one frame between draining changes
+ * and posting deltas. Adjusting this in tests is intentionally not
+ * supported — the tick is an implementation detail.
+ */
+const TICK_MS = 16;
+
 class FileExplorerHostImpl implements FileExplorerHost {
   private readonly explorer: FileExplorer;
   private readonly sessions = new Map<number, Session>();
   private nextSessionId = 1;
   private disposed = false;
+  /** setInterval handle for the fan-out tick. Null when idle. */
+  private tickHandle: ReturnType<typeof setInterval> | null = null;
 
   constructor(options: ExplorerOptions) {
     this.explorer = new FileExplorer(options);
@@ -137,7 +152,69 @@ class FileExplorerHostImpl implements FileExplorerHost {
       port.close?.();
     };
     this.sessions.set(id, session);
+    this.ensureTick();
     return { dispose: () => this.detachSession(id) };
+  }
+
+  /** Start the 16ms fan-out tick if it isn't already running. */
+  private ensureTick(): void {
+    if (this.tickHandle !== null || this.disposed) return;
+    this.tickHandle = setInterval(() => this.tick(), TICK_MS);
+    // Don't keep the process alive just for the tick. Node's default
+    // setInterval ref() behaviour would otherwise prevent graceful
+    // shutdown in host harnesses that rely on the event loop draining.
+    const h = this.tickHandle as unknown as { unref?: () => void };
+    h.unref?.();
+  }
+
+  /** Stop the tick if it's running — called once sessionCount hits 0. */
+  private stopTick(): void {
+    if (this.tickHandle === null) return;
+    clearInterval(this.tickHandle);
+    this.tickHandle = null;
+  }
+
+  /**
+   * Drain one ChangeSet from the native and fan out per-session deltas.
+   *
+   * No-op fast path when the ChangeSet is empty (quiet ticks): Phase 7's
+   * tick loop runs at 60Hz, so idle hosts pay only a single NAPI call
+   * per 16ms. Wave 4 adds a dirty-flag bypass if even that shows up on a
+   * flame graph.
+   */
+  private tick(): void {
+    if (this.disposed || this.sessions.size === 0) return;
+    const cs = this.explorer.takePendingChanges();
+    if (
+      cs.changedIds.length === 0 &&
+      cs.childSetChanged.length === 0 &&
+      cs.subtreeRootsChanged.length === 0 &&
+      cs.reparentedIds.length === 0
+    ) {
+      return;
+    }
+    for (const session of this.sessions.values()) {
+      if (!session.handshook) continue;
+      const view: SessionView = {
+        expanded: session.expanded,
+        knownIds: session.knownIds,
+      };
+      const delta = computeSessionDelta(cs, view);
+      applyDeltaToSession(delta, view);
+      this.send(
+        session,
+        frame('delta', {
+          version: delta.version,
+          changedIds: delta.changedIds,
+          removedIds: delta.removedIds,
+          directChildCounts: {},
+          newVisibleCount: 0,
+          coarseSubtrees: [],
+          subtreeDirty: [],
+          subtreeResynced: [],
+        }),
+      );
+    }
   }
 
   private handleMessage(session: Session, data: unknown): void {
@@ -358,11 +435,13 @@ class FileExplorerHostImpl implements FileExplorerHost {
     if (!session) return;
     session.detach();
     this.sessions.delete(id);
+    if (this.sessions.size === 0) this.stopTick();
   }
 
   async dispose(): Promise<void> {
     if (this.disposed) return;
     this.disposed = true;
+    this.stopTick();
     for (const id of [...this.sessions.keys()]) {
       this.detachSession(id);
     }

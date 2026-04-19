@@ -28,6 +28,7 @@
 import { native } from './native.js';
 import { wrap } from './errors.js';
 import { decodeBulkRows, type VisibleRow as DecodedRow } from './decode.js';
+import type { ChangeSet } from './delta.js';
 
 // ─── Local type mirrors (subset of api.d.ts) ──────────────────────────
 //
@@ -117,6 +118,7 @@ type NativeFx = {
   readonly capabilities: number;
   getTreeVersion(): number;
   getSnapshot(): NativeSnapshot;
+  takePendingChanges(): NativeChangeSet;
   create(parentId: number, name: string, kind: number): Promise<Entry>;
   rename(id: number, newName: string): Promise<Entry>;
   move(id: number, newParentId: number, newName?: string): Promise<Entry>;
@@ -142,6 +144,22 @@ type NativeFx = {
 type NativeReadStream = {
   next(): Promise<Buffer | null>;
   cancel(): void;
+};
+
+// napi-rs `#[napi(object)]` emits camelCase field names on the JS side;
+// the Rust source is snake_case. Keep this mirror aligned with
+// crates/fx-binding/src/types.rs::ChangeSetJs.
+type NativeChangeSet = {
+  changedIds: number[];
+  subtreeRootsChanged: number[];
+  childSetChanged: number[];
+  reparentedIds: Array<{
+    id: number;
+    oldParentId: number | null;
+    newParentId: number | null;
+  }>;
+  fromVersion: number;
+  toVersion: number;
 };
 
 type NativeSnapshot = {
@@ -240,6 +258,34 @@ export class FileExplorer {
 
   getSnapshot(): MirrorSnapshot {
     return new MirrorSnapshot(this.nativeFx.getSnapshot());
+  }
+
+  /**
+   * Drain the native store's pending ChangeSet. The host's 16ms tick
+   * loop (commit 7.6) calls this once per tick and fans the result out
+   * to each attached session via `computeSessionDelta`.
+   *
+   * Returning a plain JS object (not a class) keeps this a zero-copy
+   * NAPI struct marshal — a cleared `ChangeSet` is only six empty vecs
+   * and two u32s so the allocation cost on quiet ticks is negligible.
+   */
+  takePendingChanges(): ChangeSet {
+    const cs = this.nativeFx.takePendingChanges();
+    // napi-rs already rewrites fields to camelCase, so the shape matches
+    // ChangeSet as-is. The spread normalizes the prototype and strips any
+    // non-own properties the binding might add in future versions.
+    return {
+      changedIds: cs.changedIds,
+      subtreeRootsChanged: cs.subtreeRootsChanged,
+      childSetChanged: cs.childSetChanged,
+      reparentedIds: cs.reparentedIds.map((r) => ({
+        id: r.id,
+        oldParentId: r.oldParentId,
+        newParentId: r.newParentId,
+      })),
+      fromVersion: cs.fromVersion,
+      toVersion: cs.toVersion,
+    };
   }
 
   // ─── Mutations ──────────────────────────────────────────────────────

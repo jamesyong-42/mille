@@ -1,11 +1,13 @@
 // Host + session lifecycle + message-routing tests — Phase 7 commits
-// 7.1 + 7.3.
+// 7.1 + 7.3 + 7.6.
 //
 // Exercises createFileExplorerHost and attachPort/dispose using Node's
 // worker_threads MessageChannel (same shape Electron's MessageChannelMain
 // produces). 7.3 adds round-trip coverage for handshake -> snapshot,
 // setExpanded -> delta, the handshake-first sequencing guard, and a
-// mutate reqId round-trip.
+// mutate reqId round-trip. 7.6 adds the tick-loop coverage — the live
+// delta-fan-out integration test lands in 7.10 once walker seeding is
+// wired in.
 
 import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
@@ -14,6 +16,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { MessageChannel } from 'node:worker_threads';
 import { createFileExplorerHost } from '../dist/host.js';
+import { FileExplorer } from '../dist/client.js';
 
 function tempRoot() {
   return mkdtempSync(join(tmpdir(), 'mille-host-'));
@@ -286,3 +289,67 @@ test('dispose frame detaches the session on the host', async () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// ── 7.6: takePendingChanges pass-through + tick lifecycle ─────────────
+
+test('FileExplorer.takePendingChanges returns an empty ChangeSet on a fresh explorer', async () => {
+  const dir = tempRoot();
+  try {
+    const fx = new FileExplorer({ roots: [dir] });
+    const cs = fx.takePendingChanges();
+    assert.deepEqual(cs.changedIds, []);
+    assert.deepEqual(cs.subtreeRootsChanged, []);
+    assert.deepEqual(cs.childSetChanged, []);
+    assert.deepEqual(cs.reparentedIds, []);
+    assert.equal(typeof cs.fromVersion, 'number');
+    assert.equal(typeof cs.toVersion, 'number');
+    await fx.dispose();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('takePendingChanges drains — second call is still empty with no activity', async () => {
+  const dir = tempRoot();
+  try {
+    const fx = new FileExplorer({ roots: [dir] });
+    fx.takePendingChanges();
+    const second = fx.takePendingChanges();
+    assert.deepEqual(second.changedIds, []);
+    assert.deepEqual(second.childSetChanged, []);
+    await fx.dispose();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('host.dispose while the tick is running tears down cleanly', async () => {
+  // Indirectly exercises the tick lifecycle: attachPort starts it,
+  // dispose stops it. Regression guard for a stuck interval leaking
+  // past host.dispose().
+  const dir = tempRoot();
+  try {
+    const host = await createFileExplorerHost({ roots: [dir] });
+    const { port1, port2 } = new MessageChannel();
+    host.attachPort(port1);
+    // Let the tick fire at least once.
+    await new Promise((r) => setTimeout(r, 40));
+    await host.dispose();
+    assert.equal(host.sessionCount, 0);
+    port1.close();
+    port2.close();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test(
+  'tick fan-out delivers delta after mutation on one session',
+  { skip: 'Wave 5 integration — walker seeding + live mutation pipeline land in commit 7.10' },
+  async () => {
+    // The native walker isn't wired into FileExplorer construction yet,
+    // so mutations from an attached session don't populate the store
+    // under a root id the session knows about — take_pending_changes()
+    // stays empty. Wave 5 re-enables this with walker-driven seeding.
+  },
+);

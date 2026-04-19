@@ -18,8 +18,8 @@ importers:
         specifier: ^3.3.0
         version: 3.8.3
       typescript:
-        specifier: ~5.6.0
-        version: 5.6.3
+        specifier: ~6.0.3
+        version: 6.0.3
 
   packages/file-explorer:
     optionalDependencies:
@@ -61,8 +61,8 @@ importers:
         specifier: ^18
         version: 18.3.1
       typescript:
-        specifier: ~5.6.0
-        version: 5.6.3
+        specifier: ~6.0.3
+        version: 6.0.3
 
   packages/file-explorer-darwin-arm64: {}
 
@@ -743,8 +743,8 @@ packages:
   typanion@3.14.0:
     resolution: {integrity: sha512-ZW/lVMRabETuYCd9O9ZvMhAh8GslSqaUjxmK/JLPCh6l73CvLBiuXswj/+7LdnWOgYsQ130FqLzFz5aGT4I3Ug==}
 
-  typescript@5.6.3:
-    resolution: {integrity: sha512-hjcS1mhfuyi4WW8IWtjP7brDrG2cuDZukyrYrSauoXGNgx0S7zceP07adYkJycEr56BOUTNPzbInooiN3fn1qw==}
+  typescript@6.0.3:
+    resolution: {integrity: sha512-y2TvuxSZPDyQakkFRPZHKFm+KKVqIisdg9/CZwm9ftvKXLP8NRWj38/ODjNbr43SsoXqNuAisEf1GdCxqWcdBw==}
     engines: {node: '>=14.17'}
     hasBin: true
 
@@ -1317,7 +1317,7 @@ snapshots:
 
   typanion@3.14.0: {}
 
-  typescript@5.6.3: {}
+  typescript@6.0.3: {}
 
   undici-types@6.21.0: {}
 

@@ -8,6 +8,8 @@
 import { native } from './native.js';
 
 export { native };
+export { FileSystemError, isFileSystemError } from './errors.js';
+export type { ErrorCode } from './errors.js';
 
 /**
  * Returns the fx-binding version string (the napi-rs crate version).

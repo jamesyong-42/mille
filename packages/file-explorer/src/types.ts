@@ -38,5 +38,12 @@ export interface FileExplorerHost {
   attachPort(port: MessagePortLike): Disposable;
   readonly sessionCount: number;
   readonly local: FileExplorer;
+  /**
+   * Flag a subtree root as coarse (e.g. watcher Overflow). The next
+   * tick's delta will include the root in its `coarseSubtrees` field so
+   * attached sessions can invalidate just that subtree rather than the
+   * whole mirror. Wired to the native watcher in Phase 5.
+   */
+  markSubtreeCoarse(rootId: number): void;
   dispose(): Promise<void>;
 }

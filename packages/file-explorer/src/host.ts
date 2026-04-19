@@ -109,6 +109,13 @@ class FileExplorerHostImpl implements FileExplorerHost {
   private disposed = false;
   /** setInterval handle for the fan-out tick. Null when idle. */
   private tickHandle: ReturnType<typeof setInterval> | null = null;
+  /**
+   * Subtree roots flagged for coarse invalidation since the last tick.
+   * Drained into each session's outgoing delta as `coarseSubtrees`.
+   * Wired to the native watcher's Overflow signal in Phase 5 — exposed
+   * now via `markSubtreeCoarse` so the protocol end is testable.
+   */
+  private pendingCoarseSubtrees: Set<number> = new Set();
 
   constructor(options: ExplorerOptions) {
     this.explorer = new FileExplorer(options);
@@ -120,6 +127,10 @@ class FileExplorerHostImpl implements FileExplorerHost {
 
   get sessionCount(): number {
     return this.sessions.size;
+  }
+
+  markSubtreeCoarse(rootId: number): void {
+    this.pendingCoarseSubtrees.add(rootId);
   }
 
   attachPort(rawPort: MessagePortLike): Disposable {
@@ -185,14 +196,24 @@ class FileExplorerHostImpl implements FileExplorerHost {
   private tick(): void {
     if (this.disposed || this.sessions.size === 0) return;
     const cs = this.explorer.takePendingChanges();
-    if (
+    const changeSetEmpty =
       cs.changedIds.length === 0 &&
       cs.childSetChanged.length === 0 &&
       cs.subtreeRootsChanged.length === 0 &&
-      cs.reparentedIds.length === 0
-    ) {
+      cs.reparentedIds.length === 0;
+
+    // Drain pending subtree markers. Doing this once per tick (not once
+    // per session) guarantees all attached sessions see the same marker
+    // set in the delta they receive this frame.
+    const coarse = this.pendingCoarseSubtrees.size > 0 ? [...this.pendingCoarseSubtrees] : [];
+    if (coarse.length > 0) this.pendingCoarseSubtrees.clear();
+
+    // Skip the tick entirely when there's nothing to report — neither
+    // a ChangeSet nor any subtree markers. Keeps idle hosts quiet.
+    if (changeSetEmpty && coarse.length === 0) {
       return;
     }
+
     for (const session of this.sessions.values()) {
       if (!session.handshook) continue;
       const view: SessionView = {
@@ -201,6 +222,13 @@ class FileExplorerHostImpl implements FileExplorerHost {
       };
       const delta = computeSessionDelta(cs, view);
       applyDeltaToSession(delta, view);
+      // Prune coarse roots from this session's knownIds. Minimum viable
+      // behaviour: drop the root itself so the client's subsequent
+      // setExpanded re-query repopulates. Full subtree pruning requires
+      // host-side parent-chain tracking (Phase 8).
+      for (const rootId of coarse) {
+        session.knownIds.delete(rootId);
+      }
       this.send(
         session,
         frame('delta', {
@@ -209,7 +237,7 @@ class FileExplorerHostImpl implements FileExplorerHost {
           removedIds: delta.removedIds,
           directChildCounts: {},
           newVisibleCount: 0,
-          coarseSubtrees: [],
+          coarseSubtrees: coarse,
           subtreeDirty: [],
           subtreeResynced: [],
         }),

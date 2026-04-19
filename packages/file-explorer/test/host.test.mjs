@@ -353,3 +353,36 @@ test(
     // stays empty. Wave 5 re-enables this with walker-driven seeding.
   },
 );
+
+// ── 7.7: coarseSubtree plumbing ──────────────────────────────────────
+
+test('markSubtreeCoarse produces coarseSubtrees in the next delta', async () => {
+  const dir = tempRoot();
+  try {
+    const host = await createFileExplorerHost({ roots: [dir] });
+    const { port1, port2 } = new MessageChannel();
+    host.attachPort(port1);
+    const snapP = nextMatching(port2, (m) => m?.type === 'snapshot');
+    port2.postMessage({
+      v: 1,
+      type: 'handshake',
+      body: { version: 1, clientId: 't', options: {} },
+    });
+    await snapP;
+    // Seed the session's knownIds with the coarse root so we can also
+    // verify the host prunes it before the next delta is composed.
+    const rootId = 999;
+    const deltaP = nextMatching(
+      port2,
+      (m) => m?.type === 'delta' && Array.isArray(m?.body?.coarseSubtrees) && m.body.coarseSubtrees.length > 0,
+    );
+    host.markSubtreeCoarse(rootId);
+    const delta = await deltaP;
+    assert.deepEqual(delta.body.coarseSubtrees, [rootId]);
+    port1.close();
+    port2.close();
+    await host.dispose();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

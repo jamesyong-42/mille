@@ -116,6 +116,13 @@ class FileExplorerHostImpl implements FileExplorerHost {
    * now via `markSubtreeCoarse` so the protocol end is testable.
    */
   private pendingCoarseSubtrees: Set<number> = new Set();
+  /**
+   * Serial promise chain all mutations hang off. SPEC §5.1's ordering
+   * guarantee — delta fan-out to every session must precede the
+   * initiator's mutateResult — falls out of enqueuing each mutation on
+   * this single chain and awaiting inside the entry.
+   */
+  private mutationQueue: Promise<void> = Promise.resolve();
 
   constructor(options: ExplorerOptions) {
     this.explorer = new FileExplorer(options);
@@ -273,7 +280,7 @@ class FileExplorerHostImpl implements FileExplorerHost {
         );
         return;
       case 'mutate':
-        void this.handleMutate(
+        this.handleMutate(
           session,
           f.body as { reqId: number; op: string; args: Record<string, unknown> },
         );
@@ -352,20 +359,62 @@ class FileExplorerHostImpl implements FileExplorerHost {
     // viewport-patch delta if the window moved enough to matter.
   }
 
-  private async handleMutate(
+  private handleMutate(
     session: Session,
     body: { reqId: number; op: string; args: Record<string, unknown> },
-  ): Promise<void> {
-    try {
-      const result = await this.dispatchMutation(body.op, body.args);
-      this.send(session, frame('mutateResult', { reqId: body.reqId, result }));
-    } catch (e: unknown) {
-      const err = toErrorPayload(e);
-      this.send(
-        session,
-        frame('mutateResult', { reqId: body.reqId, result: null, error: err }),
-      );
-    }
+  ): void {
+    // SPEC §5.1 ordering: serialize every mutation on a single promise
+    // chain. Inside the chain entry we
+    //   1. dispatch the op against the local FileExplorer
+    //   2. flush a delta to every session synchronously (before step 3)
+    //   3. THEN post mutateResult back to the initiator
+    // so a remote session observes the state change before the
+    // initiator's own resolve — windows never disagree about "did that
+    // rename happen yet?".
+    //
+    // The outer .catch() is essential: without it, a rejection inside
+    // the entry would poison the chain and block every subsequent
+    // mutation forever. We swallow (log) chain-level rejections but
+    // keep the next mutation unblocked.
+    this.mutationQueue = this.mutationQueue.then(async () => {
+      try {
+        const result = await this.dispatchMutation(body.op, body.args);
+        // Fan out first, reply second.
+        await this.flushTickNow();
+        this.send(session, frame('mutateResult', { reqId: body.reqId, result }));
+      } catch (e: unknown) {
+        const err = toErrorPayload(e);
+        // Still flush a delta: partial state (e.g. a rename that
+        // created the target before failing on the source) may have
+        // landed and other sessions need to see it.
+        await this.flushTickNow();
+        this.send(
+          session,
+          frame('mutateResult', { reqId: body.reqId, result: null, error: err }),
+        );
+      }
+    }).catch((e: unknown) => {
+      // Queue-level failure (e.g. flushTickNow threw). Don't let it
+      // poison the chain for subsequent mutations from any session.
+      // eslint-disable-next-line no-console
+      console.error('[mille] mutation queue error:', e);
+    });
+  }
+
+  /**
+   * Immediate, out-of-band delta flush. Used by the mutation queue so
+   * fan-out happens synchronously with the op rather than waiting for
+   * the next 16ms tick boundary. A microtask yield after `tick()` lets
+   * queued `postMessage` calls land before we reply to the initiator.
+   */
+  private async flushTickNow(): Promise<void> {
+    this.tick();
+    await new Promise<void>((resolve) => {
+      // setImmediate is preferable to setTimeout(0) — it fires after
+      // the current I/O phase, which is when MessagePort-postMessage
+      // actually drops the message onto the peer's queue.
+      setImmediate(resolve);
+    });
   }
 
   private async dispatchMutation(op: string, args: Record<string, unknown>): Promise<unknown> {

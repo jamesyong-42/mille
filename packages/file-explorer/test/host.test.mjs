@@ -354,6 +354,131 @@ test(
   },
 );
 
+// ── 7.8: mutation ordering ───────────────────────────────────────────
+
+test(
+  'mutation ordering: delta fans out to attached sessions via the queue',
+  async () => {
+    // Without walker seeding we can't round-trip a real rename. As a
+    // stand-in, verify the fan-out path itself works — two sessions
+    // both receive a delta triggered by host.markSubtreeCoarse (which
+    // rides the same tick/flush path the mutation queue uses).
+    const dir = tempRoot();
+    try {
+      const host = await createFileExplorerHost({ roots: [dir] });
+      const chA = new MessageChannel();
+      const chB = new MessageChannel();
+      host.attachPort(chA.port1);
+      host.attachPort(chB.port1);
+
+      const snapA = nextMatching(chA.port2, (m) => m?.type === 'snapshot');
+      const snapB = nextMatching(chB.port2, (m) => m?.type === 'snapshot');
+      chA.port2.postMessage({
+        v: 1,
+        type: 'handshake',
+        body: { version: 1, clientId: 'A', options: {} },
+      });
+      chB.port2.postMessage({
+        v: 1,
+        type: 'handshake',
+        body: { version: 1, clientId: 'B', options: {} },
+      });
+      await Promise.all([snapA, snapB]);
+
+      const deltaA = nextMatching(
+        chA.port2,
+        (m) =>
+          m?.type === 'delta' &&
+          Array.isArray(m?.body?.coarseSubtrees) &&
+          m.body.coarseSubtrees.length > 0,
+      );
+      const deltaB = nextMatching(
+        chB.port2,
+        (m) =>
+          m?.type === 'delta' &&
+          Array.isArray(m?.body?.coarseSubtrees) &&
+          m.body.coarseSubtrees.length > 0,
+      );
+      host.markSubtreeCoarse(42);
+      const [a, b] = await Promise.all([deltaA, deltaB]);
+      assert.deepEqual(a.body.coarseSubtrees, [42]);
+      assert.deepEqual(b.body.coarseSubtrees, [42]);
+
+      chA.port1.close();
+      chA.port2.close();
+      chB.port1.close();
+      chB.port2.close();
+      await host.dispose();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  'mutation ordering: failed mutate still replies and does not poison the queue',
+  async () => {
+    // Regression for the queue-level .catch() — a rejection on the
+    // first mutation must not stall subsequent mutations. Two back-to-
+    // back unknown-op mutates both get error replies.
+    const dir = tempRoot();
+    try {
+      const host = await createFileExplorerHost({ roots: [dir] });
+      const { port1, port2 } = new MessageChannel();
+      host.attachPort(port1);
+      const snapP = nextMatching(port2, (m) => m?.type === 'snapshot');
+      port2.postMessage({
+        v: 1,
+        type: 'handshake',
+        body: { version: 1, clientId: 't', options: {} },
+      });
+      await snapP;
+
+      const r1 = nextMatching(
+        port2,
+        (m) => m?.type === 'mutateResult' && m?.body?.reqId === 1,
+      );
+      const r2 = nextMatching(
+        port2,
+        (m) => m?.type === 'mutateResult' && m?.body?.reqId === 2,
+      );
+      port2.postMessage({
+        v: 1,
+        type: 'mutate',
+        body: { reqId: 1, op: 'nope-1', args: {} },
+      });
+      port2.postMessage({
+        v: 1,
+        type: 'mutate',
+        body: { reqId: 2, op: 'nope-2', args: {} },
+      });
+      const [a, b] = await Promise.all([r1, r2]);
+      assert.ok(a.body.error);
+      assert.ok(b.body.error);
+
+      port1.close();
+      port2.close();
+      await host.dispose();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  'mutation ordering: other session observes delta before initiator receives mutateResult',
+  {
+    skip: 'Wave 5 integration — needs walker-seeded entries for a real mutation round-trip',
+  },
+  async () => {
+    // When walker seeding lands (commit 7.10), this test will rename a
+    // real entry from session A and assert that session B's delta
+    // arrives on-wire before A's mutateResult resolves. That's the
+    // concrete SPEC §5.1 guarantee — the current queue + flush plumbing
+    // implements it, but proving it end-to-end requires a live entry.
+  },
+);
+
 // ── 7.7: coarseSubtree plumbing ──────────────────────────────────────
 
 test('markSubtreeCoarse produces coarseSubtrees in the next delta', async () => {

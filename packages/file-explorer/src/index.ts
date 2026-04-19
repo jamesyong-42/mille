@@ -25,6 +25,8 @@ export type {
   VisibleRowCount,
   VisibleRowsOptions,
 } from './client.js';
+export { DecorationStore } from './decorations.js';
+export type { DecorationProvider } from './decorations.js';
 export { createFileExplorerHost } from './host.js';
 export type { FileExplorerHost, MessagePortLike } from './types.js';
 export { connectFileExplorer, PortFileExplorer, PortMirrorSnapshot } from './client-port.js';

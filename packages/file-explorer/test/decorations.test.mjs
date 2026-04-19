@@ -236,6 +236,114 @@ test('registerDecorationProvider: provider errors during provide() are swallowed
   }
 });
 
+// ─── 9.3 — scoped event channels ──────────────────────────────────────
+
+test('on("change:decorations") fires on decoration bump', async () => {
+  const dir = tempRoot();
+  try {
+    const fx = new FileExplorer({ roots: [dir] });
+    const p = makeProvider('git', new Map([[1, { badge: 'M' }]]));
+    fx.registerDecorationProvider(p);
+
+    const seen = [];
+    const sub = fx.on('change:decorations', (ids) => {
+      seen.push([...ids]);
+    });
+
+    p.fire([1]);
+    await flush();
+    assert.equal(seen.length, 1);
+    assert.deepEqual(seen[0], [1]);
+    sub.dispose();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('on("change") fires on decoration bump (dimension-agnostic)', async () => {
+  const dir = tempRoot();
+  try {
+    const fx = new FileExplorer({ roots: [dir] });
+    const p = makeProvider('git', new Map([[1, { badge: 'M' }]]));
+    fx.registerDecorationProvider(p);
+
+    let fired = 0;
+    const sub = fx.on('change', () => {
+      fired++;
+    });
+
+    p.fire([1]);
+    await flush();
+    assert.equal(fired, 1);
+    sub.dispose();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('on("change:tree") does NOT fire on decoration bump', async () => {
+  const dir = tempRoot();
+  try {
+    const fx = new FileExplorer({ roots: [dir] });
+    const p = makeProvider('git', new Map([[1, { badge: 'M' }]]));
+    fx.registerDecorationProvider(p);
+
+    let treeFired = 0;
+    const sub = fx.on('change:tree', () => {
+      treeFired++;
+    });
+
+    p.fire([1]);
+    await flush();
+    assert.equal(treeFired, 0);
+    sub.dispose();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('decoration-only bump does not advance getTreeVersion()', async () => {
+  const dir = tempRoot();
+  try {
+    const fx = new FileExplorer({ roots: [dir] });
+    const p = makeProvider('git', new Map([[1, { badge: 'M' }]]));
+    fx.registerDecorationProvider(p);
+
+    const treeV0 = fx.getTreeVersion();
+    p.fire([1]);
+    await flush();
+    assert.equal(fx.getTreeVersion(), treeV0);
+    // But decoration version did advance.
+    assert.ok(fx.getDecorationVersion() > 0);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('disposing a change:decorations subscription stops further fanout', async () => {
+  const dir = tempRoot();
+  try {
+    const fx = new FileExplorer({ roots: [dir] });
+    const p = makeProvider('git', new Map([[1, { badge: 'M' }]]));
+    fx.registerDecorationProvider(p);
+
+    let fired = 0;
+    const sub = fx.on('change:decorations', () => {
+      fired++;
+    });
+    p.fire([1]);
+    await flush();
+    assert.equal(fired, 1);
+
+    sub.dispose();
+    p.fire([1]); // re-fire with same decoration — store reports change.
+    await flush();
+    assert.equal(fired, 1);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('registerDecorationProvider: provide returning null clears the slot', async () => {
   const dir = tempRoot();
   try {

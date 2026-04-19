@@ -225,6 +225,12 @@ export class FileExplorer {
   private readonly nativeFx: NativeFx;
   /** @internal — host-side decoration merge store (Phase 9). */
   private readonly decorations = new DecorationStore();
+  /** JS-side listeners for the decoration-scoped channels (Phase 9.3). */
+  private readonly decorationListeners = new Set<(ids: readonly number[]) => void>();
+  /** JS-side listeners for 'change' (fires on either dimension). */
+  private readonly changeAnyListeners = new Set<(ids: readonly number[]) => void>();
+  /** @internal — unsubscribe from the store's onChange when disposed. */
+  private readonly decorationStoreSub: { dispose(): void };
 
   constructor(options: ExplorerOptions) {
     const Ctor = (native as unknown as { FileExplorer: new (opts: unknown) => NativeFx })
@@ -246,6 +252,17 @@ export class FileExplorer {
       nativeOpts.maxCachedEntries = options.maxCachedEntries;
 
     this.nativeFx = new Ctor(nativeOpts);
+
+    // Route DecorationStore bumps to the JS-only 'change:decorations'
+    // channel and to 'change' (the dimension-agnostic aggregate).
+    // 'change:tree' deliberately does NOT fire here — that's the core
+    // promise of SPEC §4.9.11: decoration churn doesn't invalidate
+    // tree-keyed caches. Tree bumps still arrive on 'change:tree' via
+    // the native binding.
+    this.decorationStoreSub = this.decorations.onChange((ids) => {
+      for (const l of this.decorationListeners) l(ids);
+      for (const l of this.changeAnyListeners) l(ids);
+    });
   }
 
   get capabilities(): number {
@@ -437,8 +454,51 @@ export class FileExplorer {
   /**
    * Subscribe to one of the eight event channels. Returns a Disposable
    * whose `dispose()` detaches the listener (idempotent on the native).
+   *
+   * Decoration channels (Phase 9.3):
+   *   - 'change:decorations' is JS-only. Native never fires it; the
+   *     DecorationStore does, via an internal bridge.
+   *   - 'change' is a union: fires on BOTH the native's onChange
+   *     (tree bumps) AND on decoration bumps.
+   *   - 'change:tree' routes to the native onChangeTree as before —
+   *     decoration-only bumps deliberately do not fan out here.
    */
   on(event: EventName, listener: (...args: unknown[]) => void): Disposable {
+    if (event === 'change:decorations') {
+      // JS-only channel; no native wiring.
+      const wrapped = (ids: readonly number[]) => {
+        (listener as (ids: readonly number[]) => void)(ids);
+      };
+      this.decorationListeners.add(wrapped);
+      let active = true;
+      return {
+        dispose: () => {
+          if (!active) return;
+          active = false;
+          this.decorationListeners.delete(wrapped);
+        },
+      };
+    }
+
+    if (event === 'change') {
+      // 'change' fires on either dimension. Wire both the native
+      // aggregate (tree bumps) and the JS-only decoration bridge.
+      const wrapped = (ids: readonly number[]) => {
+        (listener as (ids: readonly number[]) => void)(ids);
+      };
+      this.changeAnyListeners.add(wrapped);
+      const nativeSubId = this.nativeFx.onChange(listener);
+      let active = true;
+      return {
+        dispose: () => {
+          if (!active) return;
+          active = false;
+          this.changeAnyListeners.delete(wrapped);
+          this.nativeFx.off(Number(nativeSubId));
+        },
+      };
+    }
+
     const method = ON_METHOD[event];
     if (!method) {
       throw new Error(`unknown event channel: ${String(event)}`);
@@ -459,6 +519,9 @@ export class FileExplorer {
   }
 
   dispose(): Promise<void> {
+    this.decorationStoreSub.dispose();
+    this.decorationListeners.clear();
+    this.changeAnyListeners.clear();
     return wrap(this.nativeFx.dispose());
   }
 }

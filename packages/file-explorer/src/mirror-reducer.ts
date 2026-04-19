@@ -27,6 +27,77 @@
 import { cloneMirror, type ClientEntry, type MirrorWorking } from './mirror.js';
 
 /**
+ * Default ceiling for the client mirror (SPEC §4.9.7). Keeps idle
+ * session memory bounded on long-running renderers that scroll
+ * through large monorepos — the first 4096 entries are plenty for
+ * the common case (viewport + overscan + the surrounding expansion
+ * tree), and eviction beyond that pulls cold folders' entries back
+ * across the wire on demand.
+ */
+export const DEFAULT_MIRROR_CAP = 4096;
+
+/**
+ * Trim `state.byId` (and the aliased child/count maps) back to
+ * `cap` entries by evicting the oldest lruTouch timestamps first.
+ * Entries pinned by activeIds (current expansion set + roots)
+ * always survive — the viewport would otherwise thrash on every
+ * tick. Phase 9 layers in viewport-scoped pinning on top.
+ */
+export function evictToCap(
+  state: MirrorWorking,
+  cap: number,
+  activeIds: ReadonlySet<number>,
+): void {
+  if (state.byId.size <= cap) return;
+  // Candidate pool: everything in byId that isn't active.
+  const candidates: Array<{ id: number; touch: number }> = [];
+  for (const id of state.byId.keys()) {
+    if (activeIds.has(id)) continue;
+    const touch = state.lruTouch.get(id) ?? 0;
+    candidates.push({ id, touch });
+  }
+  // Oldest first. Ties break by id to keep eviction deterministic.
+  candidates.sort((a, b) => a.touch - b.touch || a.id - b.id);
+
+  let toEvict = state.byId.size - cap;
+  for (const c of candidates) {
+    if (toEvict <= 0) break;
+    state.byId.delete(c.id);
+    state.children.delete(c.id);
+    state.directChildCounts.delete(c.id);
+    state.pendingExpansions.delete(c.id);
+    state.volatileSubtrees.delete(c.id);
+    state.lruTouch.delete(c.id);
+    toEvict--;
+  }
+  // If we couldn't evict enough (everything is active), just stop —
+  // better to overrun the cap than evict the viewport out from under
+  // the renderer. Phase 9's viewport-scoped pinning tightens this.
+}
+
+/** Compute the "active" set — entries that must never be evicted. */
+function activeSet(state: MirrorWorking): Set<number> {
+  const active = new Set<number>();
+  for (const id of state.roots) active.add(id);
+  for (const id of state.pendingExpansions) active.add(id);
+  return active;
+}
+
+/** Bump an id's LRU touch. Called on every insert/update. */
+function touch(state: MirrorWorking, id: number): void {
+  state.lruCounter++;
+  // Guard against overflow on very-long-running sessions. Extremely
+  // unlikely (would need ~9e15 updates) but cheap to handle.
+  if (state.lruCounter >= Number.MAX_SAFE_INTEGER) {
+    state.lruCounter = state.byId.size;
+    // Rebuild a compressed timeline so cap eviction still works.
+    let i = 0;
+    for (const k of state.lruTouch.keys()) state.lruTouch.set(k, ++i);
+  }
+  state.lruTouch.set(id, state.lruCounter);
+}
+
+/**
  * Inbound snapshot frame body. The host serializes ClientEntry
  * records as JSON inside `entriesJson` so the wire doesn't need a
  * schema negotiation for Phase 8.
@@ -76,8 +147,15 @@ export interface InboundDelta {
  * doesn't ship a separate children map — every (entry, parent) pair
  * reaches us as the entry's own parentId, and snapshots are total so
  * grouping byId is sufficient to recover the full child set.
+ *
+ * `mirrorCap` bounds the post-apply byId size (SPEC §4.9.7). Exceeds
+ * the cap evict oldest-touch entries first until we're back under.
  */
-export function applySnapshot(_prev: MirrorWorking, msg: InboundSnapshot): MirrorWorking {
+export function applySnapshot(
+  _prev: MirrorWorking,
+  msg: InboundSnapshot,
+  mirrorCap: number = DEFAULT_MIRROR_CAP,
+): MirrorWorking {
   const next: MirrorWorking = {
     byId: new Map(),
     children: new Map(),
@@ -87,12 +165,15 @@ export function applySnapshot(_prev: MirrorWorking, msg: InboundSnapshot): Mirro
     treeVersion: msg.version,
     decorationVersion: 0,
     volatileSubtrees: new Set(),
+    lruTouch: new Map(),
+    lruCounter: 0,
   };
 
   if (msg.entriesJson !== undefined && msg.entriesJson.length > 0) {
     const entries = JSON.parse(msg.entriesJson) as ClientEntry[];
     for (const e of entries) {
       next.byId.set(e.id, e);
+      touch(next, e.id);
     }
     // Rebuild children from parentId. A fresh map guarantees no stale
     // child lists leak through — snapshot is authoritative.
@@ -111,15 +192,22 @@ export function applySnapshot(_prev: MirrorWorking, msg: InboundSnapshot): Mirro
     next.directChildCounts.set(Number(k), v);
   }
 
+  evictToCap(next, mirrorCap, activeSet(next));
   return next;
 }
 
 /**
  * Incremental merge. Produces a fresh MirrorWorking (via
  * cloneMirror) so the previous snapshot's view of the data stays
- * stable for its lifetime.
+ * stable for its lifetime. `mirrorCap` bounds the post-merge byId
+ * size — entries in folders not currently expanded are evicted
+ * oldest-touch-first when we overflow (SPEC §4.9.7).
  */
-export function applyDelta(state: MirrorWorking, msg: InboundDelta): MirrorWorking {
+export function applyDelta(
+  state: MirrorWorking,
+  msg: InboundDelta,
+  mirrorCap: number = DEFAULT_MIRROR_CAP,
+): MirrorWorking {
   const next = cloneMirror(state);
   next.treeVersion = msg.version;
 
@@ -135,6 +223,7 @@ export function applyDelta(state: MirrorWorking, msg: InboundDelta): MirrorWorki
     for (const e of entries) {
       const prev = next.byId.get(e.id);
       next.byId.set(e.id, e);
+      touch(next, e.id);
       // Reparented? mark both old + new parent for rebuild.
       if (prev !== undefined && prev.parentId !== e.parentId) {
         if (prev.parentId !== null) parentsToRebuild.add(prev.parentId);
@@ -201,5 +290,10 @@ export function applyDelta(state: MirrorWorking, msg: InboundDelta): MirrorWorki
   for (const id of msg.subtreeDirty) next.volatileSubtrees.add(id);
   for (const id of msg.subtreeResynced) next.volatileSubtrees.delete(id);
 
+  // Drop removed ids from lruTouch so they don't skew eviction
+  // ordering on the next tick.
+  for (const id of msg.removedIds) next.lruTouch.delete(id);
+
+  evictToCap(next, mirrorCap, activeSet(next));
   return next;
 }

@@ -25,6 +25,7 @@ import { FileSystemError, type ErrorCode } from './errors.js';
 import {
   applyDelta,
   applySnapshot,
+  DEFAULT_MIRROR_CAP,
   type InboundDelta,
   type InboundSnapshot,
 } from './mirror-reducer.js';
@@ -98,6 +99,7 @@ export class PortFileExplorer {
   private nextReqId = 1;
   private working: MirrorWorking = createMirror();
   private publishedSnapshot: ClientMirrorSnapshot = new ClientMirrorSnapshot(this.working);
+  private readonly mirrorCap: number;
   private readonly handshakeReady: Promise<void>;
   private handshakeResolve!: () => void;
   private handshakeReject!: (reason: unknown) => void;
@@ -105,6 +107,7 @@ export class PortFileExplorer {
 
   constructor(rawPort: MessagePortLike, options?: ClientOptions) {
     this.port = adaptPort(rawPort);
+    this.mirrorCap = options?.mirrorCap ?? DEFAULT_MIRROR_CAP;
     this.handshakeReady = new Promise((resolve, reject) => {
       this.handshakeResolve = resolve;
       this.handshakeReject = reject;
@@ -344,13 +347,13 @@ export class PortFileExplorer {
   }
 
   private handleSnapshot(body: InboundSnapshot): void {
-    this.working = applySnapshot(this.working, body);
+    this.working = applySnapshot(this.working, body, this.mirrorCap);
     this.publishSnapshot();
     this.handshakeResolve();
   }
 
   private handleDelta(body: InboundDelta): void {
-    this.working = applyDelta(this.working, body);
+    this.working = applyDelta(this.working, body, this.mirrorCap);
     this.publishSnapshot();
   }
 

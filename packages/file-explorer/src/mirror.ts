@@ -61,6 +61,16 @@ export interface MirrorWorking {
   decorationVersion: number;
   /** Subtrees flagged volatile (SPEC §4.9.10). */
   volatileSubtrees: Set<number>;
+  /**
+   * LRU timestamp per entry id. Bumped on every insert/update; the
+   * evictor (SPEC §4.9.7) drops the lowest-timestamp entries first
+   * when byId.size exceeds mirrorCap. Map iteration order doesn't
+   * make strong guarantees on cross-engine semantics, so we keep
+   * explicit counters.
+   */
+  lruTouch: Map<number, number>;
+  /** Monotonic counter for lruTouch. Wraps at Number.MAX_SAFE_INTEGER. */
+  lruCounter: number;
 }
 
 /** Construct an empty working state. */
@@ -74,6 +84,8 @@ export function createMirror(): MirrorWorking {
     treeVersion: 0,
     decorationVersion: 0,
     volatileSubtrees: new Set(),
+    lruTouch: new Map(),
+    lruCounter: 0,
   };
 }
 
@@ -93,5 +105,7 @@ export function cloneMirror(m: MirrorWorking): MirrorWorking {
     treeVersion: m.treeVersion,
     decorationVersion: m.decorationVersion,
     volatileSubtrees: new Set(m.volatileSubtrees),
+    lruTouch: new Map(m.lruTouch),
+    lruCounter: m.lruCounter,
   };
 }

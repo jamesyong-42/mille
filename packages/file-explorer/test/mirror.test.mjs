@@ -9,6 +9,12 @@ import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
 import { createMirror, cloneMirror } from '../dist/mirror.js';
 import { ClientMirrorSnapshot } from '../dist/mirror-snapshot.js';
+import {
+  applySnapshot,
+  applyDelta,
+  evictToCap,
+  DEFAULT_MIRROR_CAP,
+} from '../dist/mirror-reducer.js';
 
 function entry(overrides = {}) {
   return {
@@ -181,3 +187,136 @@ test('ClientMirrorSnapshot.getDecorations returns empty array', () => {
 
 // visibleRows lands in 8.4 — coverage in test/visible-rows.test.mjs.
 // visibleRowCount lands in 8.5 — coverage in test/visible-row-count.test.mjs.
+
+// ─── 8.8: mirrorCap eviction ──────────────────────────────────────────
+
+test('DEFAULT_MIRROR_CAP is 4096', () => {
+  assert.equal(DEFAULT_MIRROR_CAP, 4096);
+});
+
+test('applySnapshot respects mirrorCap — 5000 entries trimmed to cap', () => {
+  const entries = [];
+  for (let i = 1; i <= 5000; i++) {
+    entries.push(entry({ id: i, name: `f${i}`, kind: 0 }));
+  }
+  const next = applySnapshot(createMirror(), {
+    version: 1,
+    roots: [],
+    entriesJson: JSON.stringify(entries),
+    directChildCounts: {},
+    visibleCount: 5000,
+  });
+  assert.ok(next.byId.size <= 4096, `byId.size=${next.byId.size}`);
+});
+
+test('applySnapshot: roots are pinned and never evicted', () => {
+  // 100 non-root entries + 2 roots; cap at 10. The two roots must
+  // survive even though they'd otherwise get evicted by touch order.
+  const entries = [entry({ id: 1, name: 'root-a', kind: 1 })];
+  entries.push(entry({ id: 2, name: 'root-b', kind: 1 }));
+  for (let i = 10; i < 110; i++) {
+    entries.push(entry({ id: i, name: `f${i}`, kind: 0 }));
+  }
+  const next = applySnapshot(
+    createMirror(),
+    {
+      version: 1,
+      roots: [1, 2],
+      entriesJson: JSON.stringify(entries),
+      directChildCounts: {},
+      visibleCount: entries.length,
+    },
+    10,
+  );
+  assert.ok(next.byId.size <= 10);
+  assert.ok(next.byId.has(1), 'root-a retained');
+  assert.ok(next.byId.has(2), 'root-b retained');
+});
+
+test('applyDelta: pendingExpansions are pinned across cap eviction', () => {
+  const state = createMirror();
+  state.pendingExpansions.add(500);
+  // Seed with an old entry for id 500.
+  state.byId.set(500, entry({ id: 500, name: 'pinned', kind: 1 }));
+  state.lruTouch.set(500, 1);
+  state.lruCounter = 1;
+  // Now flood with 50 fresh entries at cap=10.
+  const entries = [];
+  for (let i = 600; i < 650; i++) {
+    entries.push(entry({ id: i, name: `f${i}`, kind: 0 }));
+  }
+  const next = applyDelta(
+    state,
+    {
+      version: 2,
+      changedIds: entries.map((e) => e.id),
+      entriesJson: JSON.stringify(entries),
+      removedIds: [],
+      directChildCounts: {},
+      coarseSubtrees: [],
+      subtreeDirty: [],
+      subtreeResynced: [],
+    },
+    10,
+  );
+  assert.ok(next.byId.size <= 10);
+  assert.ok(next.byId.has(500), 'pending-expansion target retained');
+});
+
+test('applyDelta: explicit mirrorCap honored', () => {
+  const entries = [];
+  for (let i = 1; i <= 200; i++) {
+    entries.push(entry({ id: i, name: `f${i}`, kind: 0 }));
+  }
+  const next = applyDelta(
+    createMirror(),
+    {
+      version: 1,
+      changedIds: entries.map((e) => e.id),
+      entriesJson: JSON.stringify(entries),
+      removedIds: [],
+      directChildCounts: {},
+      coarseSubtrees: [],
+      subtreeDirty: [],
+      subtreeResynced: [],
+    },
+    50,
+  );
+  assert.ok(next.byId.size <= 50, `byId.size=${next.byId.size}`);
+});
+
+test('evictToCap: no-op when under cap', () => {
+  const m = createMirror();
+  m.byId.set(1, entry({ id: 1, name: 'a' }));
+  m.lruTouch.set(1, 1);
+  evictToCap(m, 10, new Set());
+  assert.equal(m.byId.size, 1);
+});
+
+test('evictToCap: oldest touches evicted first', () => {
+  const m = createMirror();
+  m.byId.set(1, entry({ id: 1, name: 'oldest' }));
+  m.byId.set(2, entry({ id: 2, name: 'mid' }));
+  m.byId.set(3, entry({ id: 3, name: 'newest' }));
+  m.lruTouch.set(1, 1);
+  m.lruTouch.set(2, 2);
+  m.lruTouch.set(3, 3);
+  evictToCap(m, 2, new Set());
+  assert.equal(m.byId.size, 2);
+  assert.equal(m.byId.has(1), false, 'oldest evicted');
+  assert.ok(m.byId.has(3), 'newest retained');
+});
+
+test('evictToCap: purges aliased caches', () => {
+  const m = createMirror();
+  m.byId.set(1, entry({ id: 1, name: 'a' }));
+  m.byId.set(2, entry({ id: 2, name: 'b' }));
+  m.children.set(1, [10, 11]);
+  m.directChildCounts.set(1, 2);
+  m.lruTouch.set(1, 1);
+  m.lruTouch.set(2, 2);
+  evictToCap(m, 1, new Set());
+  assert.equal(m.children.has(1), false);
+  assert.equal(m.directChildCounts.has(1), false);
+  assert.equal(m.lruTouch.has(1), false);
+});

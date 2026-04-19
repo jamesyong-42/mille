@@ -9,6 +9,7 @@ extern crate napi_derive;
 
 pub mod error;
 pub mod explorer;
+pub mod mutations;
 pub mod snapshot;
 pub mod types;
 

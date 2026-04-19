@@ -12,9 +12,17 @@
 //! - Phase 6's TS wrapper parses this back into `FileSystemError { code,
 //!   path, message }` and re-throws with the stack preserved.
 
+use std::path::PathBuf;
+
 use napi::bindgen_prelude::{Error, Status};
 
-use fx_core::FxError;
+use fx_core::{ErrorCode, FxError};
+
+/// Wrap a `std::io::Error` in an `FxError::Io`, preserving the path we were
+/// operating on. Use at mutation call sites where the path is already known.
+pub(crate) fn io_to_fx(err: std::io::Error, path: PathBuf) -> FxError {
+    ErrorCode::from_io_error(&err, path)
+}
 
 /// Encode an `FxError` as a `napi::Error` whose `reason` carries the
 /// structured payload the TS wrapper unpacks.

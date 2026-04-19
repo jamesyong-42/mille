@@ -2,9 +2,9 @@
 
 ## 0.1.0 — 2026-04-19
 
-First release. Local-mode `@mille/file-explorer` with:
+First release. Local-mode `@vibecook/mille` with:
 
-### Rust core (`fx-core`)
+### Rust core (`mille-core`)
 
 - `EntryStore` with `ArcSwap` snapshot rotation, `BTreeMap` + summary caches
 - Cross-platform walker (`jwalk` + `ignore` + compact folders)
@@ -13,7 +13,7 @@ First release. Local-mode `@mille/file-explorer` with:
 - Fuzzy search via `nucleo`
 - `ChangeSet` accumulator for Phase 7 session deltas
 
-### NAPI binding (`fx-binding`)
+### NAPI binding (`mille-binding`)
 
 - `FileExplorer` class with typed `ExplorerOptions`
 - `MirrorSnapshot` with `roots` / `getById` / `directChildCount` /
@@ -24,7 +24,7 @@ First release. Local-mode `@mille/file-explorer` with:
 - `AbortSignal` plumbing (partial — see v0.1.x)
 - Bincode `Buffer` bulk-return path
 
-### TS client (`@mille/file-explorer`)
+### TS client (`@vibecook/mille`)
 
 - Per-platform optional-deps loader
 - `FileSystemError` + `isFileSystemError`
@@ -41,7 +41,7 @@ First release. Local-mode `@mille/file-explorer` with:
 
 ### Tests
 
-- 204 `fx-core` tests (unit + integration + proptests)
+- 204 `mille-core` tests (unit + integration + proptests)
 - 197 package tests (unit + integration + `fast-check` proptests)
 
 ### Known gaps (tracked for v0.1.x / v0.2)

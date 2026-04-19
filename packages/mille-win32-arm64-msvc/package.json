@@ -1,0 +1,19 @@
+{
+  "name": "@vibecook/mille-win32-arm64-msvc",
+  "version": "0.1.0",
+  "description": "Prebuilt native binary for @vibecook/mille on win32-arm64-msvc.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jamesyong-42/mille"
+  },
+  "main": "mille.win32-arm64-msvc.node",
+  "files": [
+    "mille.*.node"
+  ],
+  "os": ["win32"],
+  "cpu": ["arm64"],
+  "engines": {
+    "node": ">=18"
+  }
+}

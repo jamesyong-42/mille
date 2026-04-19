@@ -1,0 +1,99 @@
+{
+  "name": "@vibecook/mille",
+  "version": "0.1.0",
+  "description": "High-performance file explorer library for Electron IDEs. Native Rust core via NAPI-RS.",
+  "license": "MIT",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jamesyong-42/mille"
+  },
+  "homepage": "https://github.com/jamesyong-42/mille#readme",
+  "bugs": {
+    "url": "https://github.com/jamesyong-42/mille/issues"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./host": {
+      "types": "./dist/host.d.ts",
+      "import": "./dist/host.js",
+      "require": "./dist/host.cjs"
+    },
+    "./client": {
+      "types": "./dist/client.d.ts",
+      "import": "./dist/client.js",
+      "require": "./dist/client.cjs"
+    },
+    "./react": {
+      "types": "./dist/react.d.ts",
+      "import": "./dist/react.js",
+      "require": "./dist/react.cjs"
+    }
+  },
+  "files": [
+    "dist",
+    "api.d.ts",
+    "EMBEDDING.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "pnpm run build:napi && pnpm run build:ts",
+    "build:napi": "napi build --platform --release --manifest-path ../../crates/mille-binding/Cargo.toml --output-dir . --no-js",
+    "build:napi:debug": "napi build --platform --manifest-path ../../crates/mille-binding/Cargo.toml --output-dir . --no-js",
+    "build:ts": "tsc --build",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test \"test/*.test.mjs\"",
+    "artifacts": "napi artifacts",
+    "prepublishOnly": "napi prepublish -t npm"
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "^3.6.2",
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.2.0",
+    "fast-check": "^4.7.0",
+    "react": "^19.2.0",
+    "typescript": "~6.0.0"
+  },
+  "peerDependencies": {
+    "react": ">=18"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
+  },
+  "optionalDependencies": {
+    "@vibecook/mille-darwin-arm64": "workspace:*",
+    "@vibecook/mille-darwin-x64": "workspace:*",
+    "@vibecook/mille-linux-arm64-gnu": "workspace:*",
+    "@vibecook/mille-linux-arm64-musl": "workspace:*",
+    "@vibecook/mille-linux-x64-gnu": "workspace:*",
+    "@vibecook/mille-linux-x64-musl": "workspace:*",
+    "@vibecook/mille-win32-arm64-msvc": "workspace:*",
+    "@vibecook/mille-win32-x64-msvc": "workspace:*"
+  },
+  "napi": {
+    "name": "mille",
+    "triples": {
+      "defaults": false,
+      "additional": [
+        "aarch64-apple-darwin",
+        "x86_64-apple-darwin",
+        "x86_64-pc-windows-msvc",
+        "aarch64-pc-windows-msvc",
+        "x86_64-unknown-linux-gnu",
+        "aarch64-unknown-linux-gnu",
+        "x86_64-unknown-linux-musl",
+        "aarch64-unknown-linux-musl"
+      ]
+    }
+  }
+}

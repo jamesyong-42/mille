@@ -1,0 +1,31 @@
+[package]
+name = "mille-bench"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Criterion benches + fixture generators for mille-core."
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+mille-core = { path = "../mille-core" }
+tempfile.workspace = true
+
+[dev-dependencies]
+criterion = { version = "0.8", features = ["html_reports"] }
+
+[[bench]]
+name = "walker"
+harness = false
+
+[[bench]]
+name = "watcher"
+harness = false
+
+[[bench]]
+name = "search"
+harness = false

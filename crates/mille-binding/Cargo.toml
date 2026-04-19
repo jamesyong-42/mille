@@ -1,0 +1,25 @@
+[package]
+name = "mille-binding"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Thin napi-rs binding for mille-core."
+
+[lib]
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[dependencies]
+mille-core = { path = "../mille-core" }
+bincode.workspace = true
+napi.workspace = true
+napi-derive.workspace = true
+parking_lot.workspace = true
+serde.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+
+[build-dependencies]
+napi-build.workspace = true

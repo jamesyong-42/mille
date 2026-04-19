@@ -7,6 +7,7 @@ Cargo.lock.bak
 node_modules/
 dist/
 .turbo/
+*.tsbuildinfo
 *.log
 npm-debug.log*
 yarn-debug.log*
@@ -18,12 +19,12 @@ lerna-debug.log*
 # Ignore .node binaries everywhere *except* inside the published per-platform
 # packages, which legitimately contain real .node files.
 *.node
-!packages/file-explorer-*/**/*.node
+!packages/mille-*/**/*.node
 
 # napi-rs auto-generates index.d.ts next to the .node. The checked-in
-# TypeScript surface is in packages/file-explorer/api.d.ts; the generated
+# TypeScript surface is in packages/mille/api.d.ts; the generated
 # file is a build artifact.
-packages/file-explorer/index.d.ts
+packages/mille/index.d.ts
 
 # napi-rs artifacts dir (output of `napi build` before distribution)
 artifacts/

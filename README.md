@@ -4,7 +4,7 @@ High-performance native primitives for Electron IDEs.
 
 ## Components
 
-### @mille/file-explorer
+### @vibecook/mille
 
 Embeddable file-explorer engine: a Rust core drives walking, watching, and
 ignore matching; a thin NAPI binding exposes it to Node; a TypeScript client
@@ -22,16 +22,16 @@ snapshots, and a React adapter.
 ## Status
 
 v0.1 in-development. 401 tests green (204 Rust + 197 TypeScript).
-See `SPEC.md`, `PLAN.md`, and `packages/file-explorer/EMBEDDING.md`.
+See `SPEC.md`, `PLAN.md`, and `packages/mille/EMBEDDING.md`.
 
 ## Quickstart
 
 ```bash
-npm install @mille/file-explorer
+npm install @vibecook/mille
 ```
 
 ```ts
-import { FileExplorer } from '@mille/file-explorer';
+import { FileExplorer } from '@vibecook/mille';
 
 const fx = new FileExplorer({ roots: ['/path/to/workspace'] });
 await fx.populateFromRoots();
@@ -40,12 +40,12 @@ await fx.populateFromRoots();
 ## Repo layout
 
 ```
-crates/fx-core/        Pure-Rust engine (no NAPI)
-crates/fx-binding/     napi-rs bindings (cdylib)
-crates/fx-bench/       Criterion benches
-packages/file-explorer/          TS client + React adapter + EMBEDDING.md
-packages/file-explorer-{triple}/ Per-platform .node binaries
-research/file-explorer/          SPEC.md, PLAN.md, audit notes
+crates/mille-core/        Pure-Rust engine (no NAPI)
+crates/mille-binding/     napi-rs bindings (cdylib)
+crates/mille-bench/       Criterion benches
+packages/mille/           TS client + React adapter + EMBEDDING.md
+packages/mille-{triple}/  Per-platform .node binaries
+research/file-explorer/   SPEC.md, PLAN.md, audit notes
 ```
 
 ## Development
@@ -61,14 +61,14 @@ pnpm -r test
 
 | Platform          | Package |
 | ---               | ---     |
-| macOS arm64       | `@mille/file-explorer-darwin-arm64` |
-| macOS x64         | `@mille/file-explorer-darwin-x64` |
-| Windows x64       | `@mille/file-explorer-win32-x64-msvc` |
-| Windows arm64     | `@mille/file-explorer-win32-arm64-msvc` |
-| Linux x64 glibc   | `@mille/file-explorer-linux-x64-gnu` |
-| Linux arm64 glibc | `@mille/file-explorer-linux-arm64-gnu` |
-| Linux x64 musl    | `@mille/file-explorer-linux-x64-musl` |
-| Linux arm64 musl  | `@mille/file-explorer-linux-arm64-musl` |
+| macOS arm64       | `@vibecook/mille-darwin-arm64` |
+| macOS x64         | `@vibecook/mille-darwin-x64` |
+| Windows x64       | `@vibecook/mille-win32-x64-msvc` |
+| Windows arm64     | `@vibecook/mille-win32-arm64-msvc` |
+| Linux x64 glibc   | `@vibecook/mille-linux-x64-gnu` |
+| Linux arm64 glibc | `@vibecook/mille-linux-arm64-gnu` |
+| Linux x64 musl    | `@vibecook/mille-linux-x64-musl` |
+| Linux arm64 musl  | `@vibecook/mille-linux-arm64-musl` |
 
 The umbrella package resolves the correct binary via `optionalDependencies`.
 
@@ -76,8 +76,8 @@ The umbrella package resolves the correct binary via `optionalDependencies`.
 
 - SPEC: `research/file-explorer/SPEC.md`
 - PLAN: `research/file-explorer/PLAN.md`
-- Embedding guide: `packages/file-explorer/EMBEDDING.md`
-- Public API: `packages/file-explorer/api.d.ts`
+- Embedding guide: `packages/mille/EMBEDDING.md`
+- Public API: `packages/mille/api.d.ts`
 
 ## License
 

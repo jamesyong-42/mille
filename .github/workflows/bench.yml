@@ -33,13 +33,13 @@ jobs:
       # bench-baseline/ and add a comparison step that fails the job when
       # any metric regresses more than 20%.
       - name: cargo bench walker
-        run: cargo bench --bench walker -p fx-bench -- --quick
+        run: cargo bench --bench walker -p mille-bench -- --quick
 
       - name: cargo bench search
-        run: cargo bench --bench search -p fx-bench -- --quick
+        run: cargo bench --bench search -p mille-bench -- --quick
 
       - name: cargo bench watcher
-        run: cargo bench --bench watcher -p fx-bench -- --quick
+        run: cargo bench --bench watcher -p mille-bench -- --quick
 
       - name: Upload Criterion reports
         uses: actions/upload-artifact@v4

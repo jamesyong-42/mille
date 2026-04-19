@@ -1,0 +1,20 @@
+{
+  "name": "@vibecook/mille-linux-arm64-musl",
+  "version": "0.1.0",
+  "description": "Prebuilt native binary for @vibecook/mille on linux-arm64-musl.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jamesyong-42/mille"
+  },
+  "main": "mille.linux-arm64-musl.node",
+  "files": [
+    "mille.*.node"
+  ],
+  "os": ["linux"],
+  "cpu": ["arm64"],
+  "libc": ["musl"],
+  "engines": {
+    "node": ">=18"
+  }
+}

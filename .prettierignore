@@ -2,6 +2,6 @@ dist/
 target/
 node_modules/
 *.node
-packages/file-explorer-*/
+packages/mille-*/
 artifacts/
 pnpm-lock.yaml

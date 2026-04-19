@@ -1,0 +1,894 @@
+# Embedding `@vibecook/mille`
+
+This document is the one-stop integration guide. It walks from a zero-knowledge
+Node script to a production Electron + React integration. Every code sample is
+copy-pasteable; patterns assume v0.1 (see section 9 for what v0.1 deliberately
+does not ship).
+
+For the authoritative public type surface see `api.d.ts` at the package root.
+For architecture & design, see the monorepo `README.md`.
+
+---
+
+## Table of contents
+
+1. [Minimum viable usage (Node)](#1-minimum-viable-usage-node)
+2. [Electron integration (UtilityProcess pattern)](#2-electron-integration-utilityprocess-pattern)
+3. [React integration](#3-react-integration)
+4. [Decoration providers](#4-decoration-providers)
+5. [Error handling](#5-error-handling)
+6. [Packaging for distribution](#6-packaging-for-distribution)
+7. [Performance tuning](#7-performance-tuning)
+8. [Troubleshooting](#8-troubleshooting)
+9. [What is not in v0.1 (roadmap)](#9-what-is-not-in-v01-roadmap)
+
+---
+
+## 1. Minimum viable usage (Node)
+
+The library is usable from a plain Node script. The native `.node` binary loads
+eagerly the first time the package is imported; every subsequent call is
+in-process and cheap.
+
+```ts
+import { FileExplorer } from '@vibecook/mille';
+
+const fx = new FileExplorer({
+  roots: ['/absolute/path/to/workspace'],
+  respectIgnore: true,          // parse .gitignore/.ignore/.rgignore
+  followSymlinks: 'smart',      // canonicalize + dedupe; see api.d.ts
+  watchDebounceMs: 75,          // default
+});
+
+// Constructor does NOT walk the filesystem. Call populateFromRoots()
+// exactly once to seed the EntryStore. Returns total entry count.
+const total = await fx.populateFromRoots();
+console.log(`loaded ${total} entries`);
+
+// Every read goes through an immutable snapshot. Identity is stable
+// until the tree or decoration version bumps.
+const snap = fx.getSnapshot();
+for (const root of snap.roots()) {
+  console.log(root.id, root.name);
+}
+
+// Always dispose. Stops the watcher thread and releases Rust resources.
+await fx.dispose();
+```
+
+### Line-by-line
+
+- `new FileExplorer({ roots })` — cheap constructor; no I/O. Rejects non-absolute
+  root paths via `FileSystemError` only when you later read or mutate.
+- `await fx.populateFromRoots()` — performs the parallel walk, populates the
+  EntryStore, and returns the total entry count. May throw `FileSystemError`
+  (`ENOENT`, `EACCES`, `ELOOP`) on a dead root; partial walks are committed —
+  entries found before the error remain in the store.
+- `fx.getSnapshot()` — returns a `MirrorSnapshot`. Cheap (struct handle, no
+  copy). Safe to cache in refs; safe to read during React render; safe to diff
+  with `===`.
+- `snap.roots()` — returns a fresh `readonly Entry[]` each call. Cache at a
+  call-site if you iterate repeatedly.
+- `fx.dispose()` — idempotent. Stops the watcher, drains outstanding async
+  tasks, then releases the native handle. Further method calls throw.
+
+### Getting by id
+
+The snapshot is the read surface; the explorer is the write surface.
+
+```ts
+const snap = fx.getSnapshot();
+const entry = snap.getById(42);            // null if unknown
+const count = snap.directChildCount(42);   // null if folder not yet walked
+const hasKids = snap.hasChildren(42);
+const firstLevelIds = snap.childrenOf(42); // in id-allocation order
+```
+
+### Iterating visible rows
+
+For virtualizers, prefer `visibleRows`. The snapshot computes the flat slice
+from your expansion set + viewport window:
+
+```ts
+const expanded = new Set<number>([1, 5, 9]);
+const rows = snap.visibleRows({
+  expanded,
+  offset: 0,
+  limit: 100,
+  includeIgnored: false,
+});
+for (const row of rows) {
+  const indent = '  '.repeat(row.depth);
+  const caret = row.hasChildren ? (row.isExpanded ? 'v ' : '> ') : '  ';
+  console.log(`${indent}${caret}${row.name}`);
+}
+```
+
+For viewports larger than ~100 rows, use the bincode bulk path:
+
+```ts
+const rowsBulk = snap.visibleRowsBulk({ expanded, offset: 0, limit: 1000 });
+// One Buffer hop, decoded in TS. Same row shape, same fields.
+```
+
+See `src/mirror-snapshot.ts` for the exact slicing semantics; cache-miss rows
+emit `pending: true` placeholders at the correct depth.
+
+---
+
+## 2. Electron integration (UtilityProcess pattern)
+
+The native `.node` binary must load in a process that can spawn threads and
+talk to the filesystem. **Don't load it in the renderer.** The supported
+deployment shape is:
+
+```
+Electron main   ── spawns ──▶  UtilityProcess (runs fx-host.js)
+     │                                │
+     │    MessagePort (transferred)   │
+     └────────────────────────────────┘
+                  │
+                  │  postMessage / MessageChannelMain
+                  │
+            BrowserWindow renderer
+                  (runs connectFileExplorer(port))
+```
+
+The UtilityProcess owns the single native `FileExplorer`; each renderer window
+gets its own `MessagePort` into the host and its own session (expansion set,
+viewport, knownIds). Four files total: `main.ts`, `fx-host.js`, `preload.ts`,
+`renderer.ts`.
+
+### 2.1 Spawn the UtilityProcess from main
+
+```ts
+// main.ts
+import {
+  app,
+  BrowserWindow,
+  MessageChannelMain,
+  utilityProcess,
+} from 'electron';
+import { join } from 'node:path';
+
+app.whenReady().then(async () => {
+  // Fork the utility — this process loads the native .node binary.
+  const fxProcess = utilityProcess.fork(join(__dirname, 'fx-host.js'), [], {
+    serviceName: 'mille-file-explorer',
+    env: {
+      ...process.env,
+      WORKSPACE_ROOT: '/absolute/path/to/workspace',
+    },
+  });
+
+  fxProcess.on('exit', (code) => {
+    console.error(`[mille] fx utility exited with code ${code}`);
+  });
+
+  const win = new BrowserWindow({
+    webPreferences: {
+      preload: join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      sandbox: true,
+    },
+  });
+  await win.loadFile('index.html');
+
+  // One MessageChannel per renderer. Transfer port1 into the utility
+  // and port2 into the renderer; the two ends talk directly afterwards.
+  const { port1, port2 } = new MessageChannelMain();
+  fxProcess.postMessage({ type: 'attach' }, [port1]);
+  win.webContents.postMessage('fx-port', null, [port2]);
+});
+```
+
+### 2.2 UtilityProcess host script
+
+The utility script receives ports from main and attaches each to the host.
+
+```js
+// fx-host.js (runs inside the UtilityProcess — plain CJS for simplicity)
+const { createFileExplorerHost } = require('@vibecook/mille/host');
+
+let host;
+
+(async () => {
+  host = await createFileExplorerHost({
+    roots: [process.env.WORKSPACE_ROOT],
+    respectIgnore: true,
+    followSymlinks: 'smart',
+    watchDebounceMs: 75,
+  });
+  // Populate eagerly so the first renderer handshake returns a full tree.
+  // For very large workspaces, defer this and let `setExpanded` drive it.
+  await host.local.populateFromRoots();
+
+  process.parentPort.on('message', (evt) => {
+    const msg = evt.data;
+    if (msg && msg.type === 'attach' && evt.ports && evt.ports.length > 0) {
+      // Each attached port becomes its own renderer session.
+      host.attachPort(evt.ports[0]);
+    }
+  });
+})().catch((err) => {
+  console.error('[mille] fx-host bootstrap failed:', err);
+  process.exit(1);
+});
+
+// Clean shutdown — main sends SIGTERM on quit.
+process.on('exit', () => {
+  if (host) void host.dispose();
+});
+```
+
+Note: `host.local` is the same `FileExplorer` instance; same-process consumers
+(SCM extensions, indexers) running alongside the host in the utility can use it
+directly without going through a port.
+
+### 2.3 Preload receives the port
+
+The preload script bridges `ipcRenderer.on('fx-port', …)` into a promise the
+renderer can `await`.
+
+```ts
+// preload.ts
+import { contextBridge, ipcRenderer } from 'electron';
+
+// Resolve with the MessagePort main sent via postMessage.
+let portResolver: ((port: MessagePort) => void) | null = null;
+const portReady = new Promise<MessagePort>((resolve) => {
+  portResolver = resolve;
+});
+
+ipcRenderer.on('fx-port', (event) => {
+  // event.ports is (MessagePort | MessagePortMain)[]; cast to DOM shape.
+  portResolver?.(event.ports[0] as unknown as MessagePort);
+  portResolver = null;
+});
+
+contextBridge.exposeInMainWorld('mille', {
+  getFilePort: (): Promise<MessagePort> => portReady,
+});
+```
+
+`contextBridge` strips prototypes, so exposing the bare promise works but
+methods are a cleaner surface to evolve.
+
+### 2.4 Renderer connects
+
+```ts
+// renderer.ts
+import { connectFileExplorer } from '@vibecook/mille/client';
+
+declare global {
+  interface Window {
+    mille: { getFilePort(): Promise<MessagePort> };
+  }
+}
+
+async function main(): Promise<void> {
+  const port = await window.mille.getFilePort();
+  const fx = await connectFileExplorer(port, {
+    mirrorCap: 20_000,   // LRU size for the renderer-side mirror
+    prefetchRows: 200,   // overscan hint for the host
+  });
+
+  console.log('tree version', fx.getTreeVersion());
+
+  fx.on('change', () => {
+    const snap = fx.getSnapshot();
+    // Re-render from snap. Identity advances on every delta; gate with `===`.
+  });
+
+  // Typical expansion — ids come from a previous snapshot read.
+  fx.setExpanded({ add: [1, 7, 42] });
+
+  // Viewport hint. Fire-and-forget; the host uses it to bound which
+  // child payloads land in subsequent deltas.
+  fx.setViewport({ offset: 0, limit: 200, overscan: 50 });
+}
+
+void main();
+```
+
+`connectFileExplorer` resolves once the host completes the handshake and the
+initial snapshot lands. The returned `PortFileExplorer` exposes the same
+mutation surface as the local `FileExplorer` (rename, move, delete, readText,
+writeFile, …); every call round-trips over the port and resolves on the
+matching `mutateResult` frame. Rejections arrive as typed `FileSystemError`.
+
+---
+
+## 3. React integration
+
+Consumers of the local `FileExplorer` (e.g. scripts or same-process extensions)
+can drive React via the built-in `useFileExplorerSnapshot` hook. The hook is a
+thin `useSyncExternalStore` wrapper — the snapshot is the external store value.
+
+### 3.1 Hook import
+
+Hooks live on the `/react` subpath so the main entry stays free of the React
+peer dependency.
+
+```ts
+import {
+  useFileExplorerSnapshot,
+  useFileExplorerTreeSnapshot,
+} from '@vibecook/mille/react';
+```
+
+- `useFileExplorerSnapshot(fx)` — re-renders on tree OR decoration bumps.
+  Default for viewport renderers.
+- `useFileExplorerTreeSnapshot(fx)` — re-renders on tree bumps only. Useful
+  for scanners/indexers that do not show decoration overlays.
+
+### 3.2 Virtualized tree view
+
+This example uses `@tanstack/react-virtual` with the snapshot's `visibleRows`
+slice. Expansion state lives in React; everything else lives in the mirror.
+
+```tsx
+// TreeView.tsx
+import { useFileExplorerSnapshot } from '@vibecook/mille/react';
+import type { FileExplorer } from '@vibecook/mille';
+import { useVirtualizer } from '@tanstack/react-virtual';
+import { useMemo, useRef, useState } from 'react';
+
+const ROW_HEIGHT = 24;
+
+export function TreeView({ fx }: { fx: FileExplorer }): JSX.Element {
+  const snap = useFileExplorerSnapshot(fx);
+  const [expanded, setExpanded] = useState<ReadonlySet<number>>(() => new Set());
+
+  const count = useMemo(
+    () => snap.visibleRowCount(expanded),
+    [snap, expanded],
+  );
+  const total = count.known + count.pendingExpansions.size;
+
+  const parentRef = useRef<HTMLDivElement>(null);
+  const virtualizer = useVirtualizer({
+    count: total,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => ROW_HEIGHT,
+    overscan: 10,
+  });
+
+  const virtualItems = virtualizer.getVirtualItems();
+  const firstVisible = virtualItems[0]?.index ?? 0;
+  const lastVisible = virtualItems[virtualItems.length - 1]?.index ?? 0;
+  const windowOffset = firstVisible;
+  const windowLimit = Math.max(1, lastVisible - firstVisible + 1);
+
+  const rows = useMemo(
+    () =>
+      snap.visibleRows({
+        expanded,
+        offset: windowOffset,
+        limit: windowLimit,
+      }),
+    [snap, expanded, windowOffset, windowLimit],
+  );
+
+  const toggle = (id: number): void => {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  return (
+    <div
+      ref={parentRef}
+      style={{ height: 600, overflow: 'auto', fontFamily: 'monospace' }}
+    >
+      <div
+        style={{
+          height: virtualizer.getTotalSize(),
+          width: '100%',
+          position: 'relative',
+        }}
+      >
+        {virtualItems.map((vrow) => {
+          const row = rows[vrow.index - windowOffset];
+          if (!row) return null;
+          const caret = row.hasChildren
+            ? row.isExpanded
+              ? 'v'
+              : '>'
+            : ' ';
+          return (
+            <div
+              key={row.id}
+              onClick={() => toggle(row.id)}
+              style={{
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                width: '100%',
+                transform: `translateY(${vrow.start}px)`,
+                height: ROW_HEIGHT,
+                paddingLeft: row.depth * 16,
+                cursor: 'pointer',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              <span style={{ opacity: 0.6, marginRight: 4 }}>{caret}</span>
+              <span>{row.name}</span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+```
+
+Notes:
+
+- `visibleRowCount` returns `{ known, pendingExpansions }`. Adding the two
+  gives the virtualizer an honest total even when some expanded children
+  haven't arrived yet; the slice emits `pending: true` placeholder rows at
+  those positions (see `row.pending` to render a skeleton).
+- Sorting: the snapshot sorts children by name with id tiebreak. Custom sort
+  is a v0.2 concern — render-side re-sort is fine for now.
+- The hook returns a `MirrorSnapshot`. Identity changes only when the tree or
+  decoration version advances; React's `useSyncExternalStore` gates re-renders
+  on that identity via `===`.
+
+### 3.3 Port-backed React (renderer-side)
+
+The `PortFileExplorer` returned from `connectFileExplorer` exposes
+`on('change', listener)` and `getSnapshot(): ClientMirrorSnapshot`. Wire it up
+via plain `useSyncExternalStore` — there is no dedicated hook for the port
+variant in v0.1:
+
+```tsx
+import { useSyncExternalStore } from 'react';
+import type { PortFileExplorer } from '@vibecook/mille';
+
+export function usePortSnapshot(fx: PortFileExplorer) {
+  return useSyncExternalStore(
+    (cb) => {
+      const sub = fx.on('change', cb);
+      return () => sub.dispose();
+    },
+    () => fx.getSnapshot(),
+    () => fx.getSnapshot(),
+  );
+}
+```
+
+The returned `ClientMirrorSnapshot` implements the same read surface as
+`MirrorSnapshot`: `roots()`, `getById`, `hasChildren`, `directChildCount`,
+`visibleRows`, `visibleRowCount`, `getDecorations`.
+
+---
+
+## 4. Decoration providers
+
+Decorations are provider-supplied overlays (git status, lint problems, etc).
+Each provider is identified by a string id; the store merges every provider's
+contribution per-entry. Providers are driven by their own change source; the
+explorer calls `provide()` only for the ids the provider reports as changed.
+
+`getDecorations(id)` on the snapshot returns the merged list for one entry.
+
+### 4.1 Wiring a git decorator
+
+```ts
+import type { DecorationProvider, FileExplorer } from '@vibecook/mille';
+
+// Assume gitWatcher is your own watcher: emits 'status' with paths and
+// supports `getStatus(path): 'modified' | 'added' | 'clean' | ...`.
+declare const gitWatcher: {
+  getStatus(path: string): Promise<string>;
+  on(
+    event: 'status',
+    listener: (paths: readonly string[]) => void,
+  ): { dispose(): void };
+};
+
+// Map from absolute path -> EntryId. Maintain this alongside tree
+// deltas: snapshot.getById doesn't support path lookups in v0.1.
+declare const pathToId: Map<string, number>;
+
+function buildGitDecorator(fx: FileExplorer): DecorationProvider {
+  return {
+    id: 'git',
+    onDidChange(listener) {
+      // Called by FileExplorer once at register time with a listener
+      // that expects an array of changed EntryIds. Forward git events
+      // through that listener.
+      const sub = gitWatcher.on('status', (paths) => {
+        const ids: number[] = [];
+        for (const p of paths) {
+          const id = pathToId.get(p);
+          if (id !== undefined) ids.push(id);
+        }
+        if (ids.length > 0) listener(ids);
+      });
+      return { dispose: () => sub.dispose() };
+    },
+    async provide({ id }) {
+      // Find the path for this id via your own map.
+      const entry = fx.getSnapshot().getById(id);
+      if (!entry) return null;
+      // Reconstruct the path however you track it — out of scope here.
+      const path = /* your mapping */ '';
+      const status = await gitWatcher.getStatus(path);
+      switch (status) {
+        case 'modified':
+          return { badge: 'M', color: 'scm.modified', propagate: true };
+        case 'added':
+          return { badge: 'A', color: 'scm.added', propagate: true };
+        default:
+          return null; // clears this provider's contribution for the id
+      }
+    },
+  };
+}
+
+const sub = fx.registerDecorationProvider(buildGitDecorator(fx));
+
+// Read decorations from the snapshot — fast, precomputed.
+const decos = fx.getSnapshot().getDecorations(42); // readonly Decoration[]
+
+// Stop and clear all decorations contributed by this provider.
+sub.dispose();
+```
+
+### 4.2 Semantics
+
+- `provide()` may return `null` to clear this provider's slot for the entry.
+- `provide()` errors are swallowed — a buggy provider cannot crash the explorer.
+- `fx.getDecorationVersion()` bumps once per batch. Subscribe to
+  `'change:decorations'` to react to decoration-only churn without
+  re-rendering the tree:
+
+  ```ts
+  const s = fx.on('change:decorations', (ids: readonly number[]) => {
+    // re-render overlays for `ids` only
+  });
+  ```
+
+- The client-port side does not yet ship decorations over the wire. If your
+  decorator runs in the renderer (e.g. a git status stream from the main
+  process), register it against a `FileExplorer` in the same process; the
+  `PortFileExplorer`'s snapshot returns an empty decoration list.
+
+---
+
+## 5. Error handling
+
+Expected filesystem failures surface as `FileSystemError`, a subclass of
+`Error` shaped after VS Code's. Unexpected failures (bugs, native panics)
+surface as plain `Error` — rethrow those.
+
+```ts
+import { FileSystemError, isFileSystemError } from '@vibecook/mille';
+
+try {
+  await fx.rename(entryId, 'new-name.txt');
+} catch (e) {
+  if (isFileSystemError(e)) {
+    console.error(
+      `[fs] code=${e.code} path=${e.path ?? '(none)'} message=${e.message}`,
+    );
+    if (e.code === 'EEXIST') {
+      // handle collision
+    }
+  } else {
+    throw e; // unknown — rethrow
+  }
+}
+```
+
+### 5.1 Error codes
+
+| Code           | Fires when                                                                     |
+| -------------- | ------------------------------------------------------------------------------ |
+| `EACCES`       | Permission denied on read/write/delete/rename.                                 |
+| `ENOENT`       | Path does not exist. Common on stale ids after external deletion.              |
+| `EEXIST`       | Target already exists on create/copy/move without overwrite.                   |
+| `EISDIR`       | Operation expected a file but found a directory (e.g. `readFile` on a dir).   |
+| `ENOTDIR`      | Operation expected a directory but found a file.                               |
+| `ELOOP`        | Symlink cycle detected during traversal or canonicalization.                   |
+| `ENOSPC`       | Write failed — disk full.                                                      |
+| `EROFS`        | Write attempted on a read-only filesystem or mount.                            |
+| `EBUSY`        | Resource locked (Windows: file in use by another process).                     |
+| `EINVAL`       | Bad arguments (invalid name, wrong kind for op, malformed frame on the wire). |
+| `ECANCELED`    | Operation cancelled — disposed explorer, cancelled stream, closed session.    |
+| `EUNSUPPORTED` | Capability not advertised (e.g. stream read on a provider without `Stream`).  |
+| `EUNKNOWN`     | Catch-all for anything the binding couldn't classify.                          |
+
+### 5.2 PortFileExplorer
+
+`PortFileExplorer`'s methods reject with `FileSystemError` the same way. On a
+session-level failure (e.g. malformed handshake) the handshake promise rejects
+and every pending request rejects with `ECANCELED` or the originating code.
+
+---
+
+## 6. Packaging for distribution
+
+### 6.1 electron-builder config
+
+The native binary must remain outside the ASAR archive and the macOS hardened
+runtime needs the JIT entitlement (napi-rs uses `mmap` + dynamic loading).
+
+```json
+// electron-builder.json — excerpt
+{
+  "asar": true,
+  "asarUnpack": ["**/*.node"],
+  "mac": {
+    "hardenedRuntime": true,
+    "entitlements": "build/entitlements.mac.plist",
+    "entitlementsInherit": "build/entitlements.mac.plist",
+    "gatekeeperAssess": false
+  },
+  "win": {
+    "target": "nsis",
+    "signAndEditExecutable": true
+  },
+  "linux": {
+    "target": ["AppImage", "deb"]
+  }
+}
+```
+
+```xml
+<!-- build/entitlements.mac.plist -->
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+  </dict>
+</plist>
+```
+
+Notary: the native `.node` file inside `app.asar.unpacked` is signed as part
+of the Electron bundle signing step. No separate codesign invocation is
+needed when `hardenedRuntime: true`.
+
+### 6.2 Per-platform optional-deps
+
+`@vibecook/mille` distributes the native binary via napi-rs's
+optional-dependencies pattern. The main package's `optionalDependencies`
+declare every supported triple; `npm install` resolves only the ones whose
+`os`/`cpu`/`libc` constraints match the host.
+
+Supported triples:
+
+| Triple                      | Platform       | Arch   | libc  |
+| --------------------------- | -------------- | ------ | ----- |
+| `darwin-arm64`              | macOS          | arm64  | —     |
+| `darwin-x64`                | macOS          | x64    | —     |
+| `linux-arm64-gnu`           | Linux          | arm64  | glibc |
+| `linux-arm64-musl`          | Linux (Alpine) | arm64  | musl  |
+| `linux-x64-gnu`             | Linux          | x64    | glibc |
+| `linux-x64-musl`            | Linux (Alpine) | x64    | musl  |
+| `win32-arm64-msvc`          | Windows        | arm64  | msvc  |
+| `win32-x64-msvc`            | Windows        | x64    | msvc  |
+
+Install simply with:
+
+```
+npm install @vibecook/mille
+```
+
+npm/pnpm/yarn all support optional-deps resolution. For CI cross-compilation
+(e.g. building a Linux AppImage from macOS), force all triples:
+
+```
+npm install --include=optional @vibecook/mille
+```
+
+The loader in `src/native.ts` picks the right triple at runtime by
+inspecting `process.platform` + `process.arch` + libc flavor.
+
+---
+
+## 7. Performance tuning
+
+Sensible defaults ship for every knob; start there. Reach for these only after
+profiling.
+
+### 7.1 Construction options
+
+- `watchDebounceMs` — default **75ms**. Lower (≈25ms) for editor-like latency;
+  raise (≈200ms) on battery-sensitive laptops. The value caps how quickly a
+  burst of filesystem events becomes observable on the wire.
+- `maxCachedEntries` — default **500_000**. Caps the EntryStore. When
+  exceeded, the least-recently-touched subtree becomes lazy-only — reads
+  still work; they just take an extra walk. Drop to ~50k for a background
+  indexer that only needs shallow metadata.
+- `walkerConcurrency` — defaults to `num_cpus`. Pin lower on shared CI.
+- `compactFolders` — default **true**. Collapses `a/b/c` single-child chains
+  into one row; the row's `pathSegments` field carries the original segments.
+  Disable only if you need per-level UI.
+
+### 7.2 Snapshot reads
+
+- For viewports ≤ 100 rows, `visibleRows` is the right call. Each row is
+  marshaled as a NAPI struct.
+- For viewports > 100 rows, switch to `visibleRowsBulk`. One Buffer hop, one
+  TS decode pass (see `src/decode.ts`). Identical row shape.
+- `directChildCount` is O(1) off a precomputed cache on the snapshot. Prefer
+  it over `childrenOf(id).length` when you only need the number.
+
+### 7.3 Expansion & viewport
+
+- `fx.setExpanded({ add, remove })` — batch every toggle inside a single tick;
+  the port sends one frame per call.
+- `fx.setViewport({ offset, limit, overscan })` — fire-and-forget. The host
+  uses it to bound which child payloads land in subsequent deltas; keeping it
+  up-to-date with your virtualizer's window reduces wire chatter.
+
+### 7.4 Large monorepos
+
+`populateFromRoots` walks every root eagerly. For a 200k-entry monorepo that's
+~200-400ms on an M1. If that's too long for your startup budget:
+
+- Keep `populateFromRoots` in the utility process, not the main process — it
+  won't block the UI in either case.
+- Or skip the eager walk entirely and drive it lazily: render from the roots
+  only, call `fx.setExpanded({ add: [id] })` when the user expands a folder,
+  and let the host's delta stream bring children in. Viability depends on
+  how much of the tree your UI shows by default.
+
+---
+
+## 8. Troubleshooting
+
+### 8.1 `Error: failed to load native binary`
+
+The optional-dep for your triple was not installed. Symptoms:
+
+- `npm install` ran on a machine whose triple isn't in the supported list.
+- `--ignore-optional` or `--no-optional` was set in CI.
+- A lockfile from a different platform was reused without reinstalling.
+
+Fix: `npm install --include=optional @vibecook/mille`, or add the right
+triple via `--force-install-optional` in your package manager.
+
+### 8.2 `FileSystemError ENOTSUP encoding`
+
+`readText` in v0.1 only supports UTF-8. Pass no `encoding` argument, or use
+`readFile` and decode yourself:
+
+```ts
+const bytes = await fx.readFile(id);
+const text = new TextDecoder('utf-16le').decode(bytes);
+```
+
+### 8.3 Slow or missing events on Linux with > 8k files
+
+The inotify `max_user_watches` limit is hit. The explorer emits a
+`'warning'` event with `code: 'INOTIFY_LIMIT'` when it detects the condition:
+
+```ts
+fx.on('warning', (w: { code: string; detail?: string }) => {
+  if (w.code === 'INOTIFY_LIMIT') {
+    // surface to the user — they likely need to raise the sysctl
+  }
+});
+```
+
+Remediation (on the host): raise the limit.
+
+```
+sudo sysctl fs.inotify.max_user_watches=524288
+```
+
+### 8.4 Renderer hangs on `connectFileExplorer`
+
+The handshake never completed. Most common causes:
+
+- The utility process crashed on boot. Check `fxProcess.on('exit', ...)` in
+  main — usually an unhandled rejection in `fx-host.js`.
+- The preload never forwarded the port. Verify `ipcRenderer.on('fx-port', …)`
+  actually fires and receives `event.ports[0]`.
+- `contextIsolation: false` + sandbox inconsistencies. Keep
+  `contextIsolation: true` and the `contextBridge.exposeInMainWorld` pattern.
+
+### 8.5 `ENOENT` on an id that just existed
+
+Another process (or your own code) deleted the entry between snapshot read
+and method call. Ids are stable across renames but not resurrection: after
+`ENOENT` on a stale id, re-read `getSnapshot()` and query the path by a
+fresh traversal.
+
+---
+
+## 9. What is not in v0.1 (roadmap)
+
+The following are explicitly **deferred** for v0.1. Do not build around them
+yet — shape may change.
+
+- **Remote FS providers** — SSH, zip, memfs. The `FileSystemProvider` +
+  `registerProvider` surface in `api.d.ts` is stable for v0.2; the runtime
+  wiring lives behind the scheme dispatch and is not yet implemented.
+- **Watchman optional backend** — v0.1 uses notify-rs's per-platform default
+  (inotify / FSEvents / ReadDirectoryChangesW). A Watchman adapter is
+  tracked for later.
+- **Full `AbortSignal` on every async method** — `signal` is accepted on the
+  TS signatures but currently ignored for native I/O (`readFile`, `readText`,
+  `readFileStream`). napi-rs 3.x has a `!Send` constraint on async fns with
+  references that is blocking the restructure. Streams already cancel on
+  generator close; explicit-signal support lands once the constraint is
+  resolved.
+- **Content search** — filename search ships in this package; content search
+  (ripgrep-style) will be a separate `@vibecook/mille-search` package that
+  consumes this one.
+- **Full example Electron app** — a minimal `examples/electron` scaffold (the
+  patterns in section 2 turned into a runnable app) lands in a post-v0.1 PR.
+- **Sort on the snapshot** — `sort`/`sortDir` on `VisibleRowsOptions` is
+  declared in `api.d.ts` but not yet honored by the client-side slice. Sort
+  renderer-side in the meantime.
+- **Path-keyed lookups on the snapshot** — `getByPath` does not exist yet.
+  Maintain your own path↔id map by listening to the delta stream.
+- **Decorations over the wire** — `PortFileExplorer.getSnapshot().getDecorations`
+  always returns `[]`. Register providers in the same process that owns the
+  `FileExplorer` (utility process or local Node).
+- **`writeSnapshot` / crash-resume** — `snapshotPath` is accepted on
+  `ExplorerOptions` but the resume path is a Phase 12 concern.
+
+---
+
+## Appendix: import cheatsheet
+
+```ts
+// Local-mode (Node, utility process)
+import { FileExplorer, MirrorSnapshot } from '@vibecook/mille';
+import {
+  FileSystemError,
+  isFileSystemError,
+  type ErrorCode,
+} from '@vibecook/mille';
+import type {
+  Entry,
+  EntryId,
+  VisibleRow,
+  VisibleRowCount,
+  VisibleRowsOptions,
+  Decoration,
+  DecorationProvider,
+  ExplorerOptions,
+  Disposable,
+  EventName,
+  SearchHit,
+  SearchOptions,
+  Uri,
+} from '@vibecook/mille';
+
+// UtilityProcess host
+import { createFileExplorerHost } from '@vibecook/mille/host';
+import type {
+  FileExplorerHost,
+  MessagePortLike,
+} from '@vibecook/mille';
+
+// Renderer
+import {
+  connectFileExplorer,
+  PortFileExplorer,
+  PortMirrorSnapshot,
+} from '@vibecook/mille/client';
+
+// React
+import {
+  useFileExplorerSnapshot,
+  useFileExplorerTreeSnapshot,
+} from '@vibecook/mille/react';
+```

@@ -3,13 +3,13 @@
   "private": true,
   "version": "0.0.0",
   "description": "Monorepo root for mille — high-performance native primitives for Electron IDEs.",
-  "packageManager": "pnpm@9.15.0",
+  "packageManager": "pnpm@10.33.0",
   "engines": {
-    "node": ">=18"
+    "node": ">=20"
   },
   "scripts": {
     "build": "pnpm -r build",
-    "build:napi": "pnpm --filter @mille/file-explorer build:napi",
+    "build:napi": "pnpm --filter @vibecook/mille build:napi",
     "test": "pnpm -r --if-present test",
     "bench": "echo \"TODO: criterion + NAPI round-trip bench harness\"",
     "lint": "pnpm -r --if-present lint",
@@ -18,9 +18,9 @@
     "typecheck": "pnpm -r --if-present typecheck"
   },
   "devDependencies": {
-    "@napi-rs/cli": "^3.0.0",
-    "@types/node": "^20.12.0",
-    "prettier": "^3.3.0",
-    "typescript": "~5.6.0"
+    "@napi-rs/cli": "^3.6.2",
+    "@types/node": "^24.0.0",
+    "prettier": "^3.8.3",
+    "typescript": "~6.0.0"
   }
 }

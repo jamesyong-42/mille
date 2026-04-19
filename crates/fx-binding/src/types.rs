@@ -244,3 +244,61 @@ pub struct ChangeNoticeJs {
     pub decoration_changed_ids: Vec<i64>,
     pub coarse_subtrees: Vec<i64>,
 }
+
+/// Mirror of fx_core::ChangeSet. Drained once per coalescer tick via
+/// `FileExplorer.takePendingChanges()` and consumed by the per-session
+/// delta diff (SPEC §4.9.9). Fields are camelCase on the JS side.
+#[napi(object)]
+pub struct ChangeSetJs {
+    pub changed_ids: Vec<i64>,
+    pub subtree_roots_changed: Vec<i64>,
+    pub child_set_changed: Vec<i64>,
+    pub reparented_ids: Vec<ReparentJs>,
+    pub from_version: u32,
+    pub to_version: u32,
+}
+
+/// One reparent entry: id plus old/new parent (either may be `null` for
+/// root transitions).
+#[napi(object)]
+pub struct ReparentJs {
+    pub id: i64,
+    pub old_parent_id: Option<i64>,
+    pub new_parent_id: Option<i64>,
+}
+
+impl ChangeSetJs {
+    pub(crate) fn from_core(cs: &fx_core::ChangeSet) -> Self {
+        Self {
+            changed_ids: cs
+                .changed_ids
+                .iter()
+                .copied()
+                .map(entry_id_to_i64)
+                .collect(),
+            subtree_roots_changed: cs
+                .subtree_roots_changed
+                .iter()
+                .copied()
+                .map(entry_id_to_i64)
+                .collect(),
+            child_set_changed: cs
+                .child_set_changed
+                .iter()
+                .copied()
+                .map(entry_id_to_i64)
+                .collect(),
+            reparented_ids: cs
+                .reparented_ids
+                .iter()
+                .map(|(id, (old, new))| ReparentJs {
+                    id: entry_id_to_i64(*id),
+                    old_parent_id: old.map(entry_id_to_i64),
+                    new_parent_id: new.map(entry_id_to_i64),
+                })
+                .collect(),
+            from_version: cs.from_version as u32,
+            to_version: cs.to_version as u32,
+        }
+    }
+}

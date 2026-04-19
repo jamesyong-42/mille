@@ -19,7 +19,9 @@ use crate::mutations::{
     kind_from_u8, resolve_entry_path, stat_to_entry, DeleteOptionsJs,
 };
 use crate::snapshot::MirrorSnapshot;
-use crate::types::{ChangeNoticeJs, EntryJs, ErrorPayloadJs, FileSystemEventJs, WarningPayloadJs};
+use crate::types::{
+    ChangeNoticeJs, ChangeSetJs, EntryJs, ErrorPayloadJs, FileSystemEventJs, WarningPayloadJs,
+};
 
 /// Local-mode capability bitmask advertised in Phase 5 wave 1.
 /// ReadWrite (1) | CaseSensitive (2) | Watch (32) = 35.
@@ -140,6 +142,16 @@ impl FileExplorer {
         MirrorSnapshot {
             inner: self.store.snapshot(),
         }
+    }
+
+    /// Drain the store's pending ChangeSet, atomically resetting it. Called
+    /// once per coalescer tick (Phase 7.6) to feed the per-session delta
+    /// diff. Empty ChangeSets are cheap — fields are zero-length vecs and
+    /// `to_version == from_version`.
+    #[napi(js_name = "takePendingChanges")]
+    pub fn take_pending_changes(&self) -> ChangeSetJs {
+        let cs = self.store.take_pending_changes();
+        ChangeSetJs::from_core(&cs)
     }
 
     /// Create a file or directory under `parent_id`. Phase 5 scope: leaf only.

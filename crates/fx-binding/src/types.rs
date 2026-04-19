@@ -186,6 +186,17 @@ pub struct SearchHitJs {
     pub matched_indices: Vec<u32>,
 }
 
+/// Mirror of api.d.ts `SearchOptions`. `signal` and `kinds` on the
+/// public surface are deferred — the Phase 10 engine only wires
+/// limit / includeIgnored / caseSensitive. Extra fields land when
+/// downstream phases justify them.
+#[napi(object)]
+pub struct SearchOptionsJs {
+    pub limit: Option<u32>,
+    pub include_ignored: Option<bool>,
+    pub case_sensitive: Option<bool>,
+}
+
 /// Mirror of api.d.ts `FileSystemEvent` union.
 ///
 /// NAPI doesn't natively render TS discriminated unions, so we emit a

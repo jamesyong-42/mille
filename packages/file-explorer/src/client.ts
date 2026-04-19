@@ -80,6 +80,18 @@ export interface Decoration {
   readonly propagate?: boolean;
 }
 
+export interface SearchOptions {
+  readonly limit?: number;
+  readonly includeIgnored?: boolean;
+  readonly caseSensitive?: boolean;
+}
+
+export interface SearchHit {
+  readonly entry: Entry;
+  readonly score: number;
+  readonly matchedIndices: readonly number[];
+}
+
 export interface Disposable {
   dispose(): void;
 }
@@ -140,6 +152,10 @@ type NativeFx = {
   onReady(listener: () => void): bigint;
   off(subscriptionId: number): boolean;
   emitReadyForTests(): void;
+  search(
+    query: string,
+    options?: { limit?: number; includeIgnored?: boolean; caseSensitive?: boolean },
+  ): Array<{ entry: Entry; score: number; matchedIndices: number[] }>;
   dispose(): Promise<void>;
 };
 
@@ -447,6 +463,33 @@ export class FileExplorer {
         }
       },
     };
+  }
+
+  // ─── Search ─────────────────────────────────────────────────────────
+
+  /**
+   * Filename fuzzy search (Phase 10). Matches `query` against every
+   * entry's `name` in the current snapshot via the nucleo matcher.
+   * Returns hits sorted by score descending (ties broken by entry id).
+   *
+   * Local-mode only: runs synchronously on the main thread. The
+   * `AbortSignal` field on api.d.ts `SearchOptions` is accepted but
+   * ignored here — nothing to abort in a sub-millisecond sync call.
+   * The client-port path would front this with a 'call' message over
+   * the wire; not wired in this commit.
+   */
+  search(query: string, options?: SearchOptions): readonly SearchHit[] {
+    const nativeOpts: {
+      limit?: number;
+      includeIgnored?: boolean;
+      caseSensitive?: boolean;
+    } = {};
+    if (options?.limit !== undefined) nativeOpts.limit = options.limit;
+    if (options?.includeIgnored !== undefined) nativeOpts.includeIgnored = options.includeIgnored;
+    if (options?.caseSensitive !== undefined) nativeOpts.caseSensitive = options.caseSensitive;
+    const hits = this.nativeFx.search(query, nativeOpts);
+    // napi-rs already rewrites to camelCase + plain arrays; just pass through.
+    return hits;
   }
 
   // ─── Events ─────────────────────────────────────────────────────────

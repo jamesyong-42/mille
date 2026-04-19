@@ -20,7 +20,8 @@ use crate::mutations::{
 };
 use crate::snapshot::MirrorSnapshot;
 use crate::types::{
-    ChangeNoticeJs, ChangeSetJs, EntryJs, ErrorPayloadJs, FileSystemEventJs, WarningPayloadJs,
+    ChangeNoticeJs, ChangeSetJs, EntryJs, ErrorPayloadJs, FileSystemEventJs, SearchHitJs,
+    SearchOptionsJs, WarningPayloadJs,
 };
 
 /// Local-mode capability bitmask advertised in Phase 5 wave 1.
@@ -662,6 +663,43 @@ impl FileExplorer {
     #[napi(js_name = "emitReadyForTests")]
     pub fn emit_ready_for_tests(&self) {
         self.events.emit_ready();
+    }
+
+    /// Filename fuzzy search via nucleo (Phase 10). Runs synchronously
+    /// against a fresh in-memory snapshot. Returns hits sorted by score
+    /// descending; ties break on ascending entry id.
+    ///
+    /// The client-port path (search-over-the-wire) is Phase 10+ and
+    /// is not wired here — this method is local-mode only.
+    #[napi]
+    pub fn search(
+        &self,
+        query: String,
+        options: Option<SearchOptionsJs>,
+    ) -> Vec<SearchHitJs> {
+        let snap = self.store.snapshot();
+        let opts = options
+            .map(|o| fx_core::SearchOptions {
+                limit: o.limit.map(|n| n as usize),
+                include_ignored: o.include_ignored.unwrap_or(false),
+                case_sensitive: o.case_sensitive.unwrap_or(false),
+            })
+            .unwrap_or_default();
+
+        let hits = fx_core::search(snap.as_ref(), &query, &opts);
+        hits.into_iter()
+            .filter_map(|h| {
+                // Search only emits ids present in the snapshot's entries,
+                // so get() returning None here is a logic bug — skip rather
+                // than panic to keep the JS boundary robust on races.
+                let entry = snap.get(h.id)?;
+                Some(SearchHitJs {
+                    entry: EntryJs::from_core(entry.as_ref()),
+                    score: h.score as f64,
+                    matched_indices: h.matched_indices,
+                })
+            })
+            .collect()
     }
 
     /// Teardown. Phase 5 wave 7 wires to a real shutdown sequence.

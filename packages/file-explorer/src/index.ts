@@ -20,6 +20,8 @@ export type {
   ExplorerOptions,
   Decoration,
   Disposable,
+  SearchHit,
+  SearchOptions,
   Uri,
   VisibleRow,
   VisibleRowCount,

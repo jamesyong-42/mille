@@ -167,6 +167,24 @@ class FileExplorerHostImpl implements FileExplorerHost {
   private readonly sessions = new Map<number, Session>();
   private nextSessionId = 1;
   private disposed = false;
+  /**
+   * Phase B2 — ids the host has already triggered a prefetch for. Guards
+   * against re-firing a walk when a client re-expands the same folder
+   * across sessions or after a collapse/re-expand cycle. The native
+   * `populateFromPath` is already idempotent (snapshot-filter), but
+   * skipping the call entirely also saves the NAPI hop. Keyed by id;
+   * never pruned — prefetch is a one-shot per id per host lifetime.
+   */
+  private readonly prefetched: Set<number> = new Set();
+  /** Phase B2 — initial-walk policy. See ExplorerOptions.initialWalk. */
+  private readonly initialWalk: 'full' | 'roots-only' | 'none';
+  /**
+   * Phase B2 — has the initial walk (roots-only seeding) run yet? The
+   * first `attachPort` triggers it so sessions can attach and handshake
+   * before any filesystem work. Subsequent attaches skip the walk but
+   * still ship whatever the store holds.
+   */
+  private initialWalkDone = false;
   /** setInterval handle for the fan-out tick. Null when idle. */
   private tickHandle: ReturnType<typeof setInterval> | null = null;
   /**
@@ -203,6 +221,7 @@ class FileExplorerHostImpl implements FileExplorerHost {
 
   constructor(options: ExplorerOptions) {
     this.explorer = new FileExplorer(options);
+    this.initialWalk = options.initialWalk ?? 'full';
   }
 
   get local(): FileExplorer {
@@ -263,7 +282,76 @@ class FileExplorerHostImpl implements FileExplorerHost {
     };
     this.sessions.set(id, session);
     this.ensureTick();
+
+    // Phase B2 — kick off the configured initial walk on first attach.
+    // Done non-blocking so handshake can fire immediately; `roots-only`
+    // drops root Entry records into the store within one NAPI hop, and
+    // the next tick's delta fan-out ships `roots` to every attached
+    // session. Errors surface as warnings (not fatal — an unreachable
+    // root is the user's concern, not the host's).
+    this.ensureInitialWalk();
+
     return { dispose: () => this.detachSession(id) };
+  }
+
+  /**
+   * Phase B2 — run the configured initial walk exactly once, lazily, at
+   * the first `attachPort`. `'full'` is a no-op here (the consumer is
+   * expected to drive `populateFromRoots` themselves — back-compat with
+   * v0.1). `'roots-only'` walks each configured root at depth 0 so root
+   * Entry records exist in the store before the client asks to expand.
+   * `'none'` is a no-op (consumer handles hydration end-to-end).
+   */
+  private ensureInitialWalk(): void {
+    if (this.initialWalkDone) return;
+    this.initialWalkDone = true;
+    if (this.initialWalk === 'full' || this.initialWalk === 'none') return;
+    // roots-only — walk each configured root at depth 0. The native
+    // `populateFromPath` with depth=0 + includeRoot=true seeds only the
+    // root Entry; children arrive when a client expands the root.
+    void this.doRootsOnlyWalk();
+  }
+
+  private async doRootsOnlyWalk(): Promise<void> {
+    // Reach into the Rust-configured roots via the raw native binding.
+    // The TS-side `FileExplorer` doesn't expose them separately; we use
+    // the wrapper's internal knowledge of the configured root paths.
+    // Rather than reconstruct them, we defer to the typed wrapper:
+    // `FileExplorer` accepts `Uri | string` roots and stores them on
+    // `this.rootPaths` (B2 addition). The public surface is
+    // `populateFromRoots` at full depth, but for roots-only we call
+    // the native `populateFromPath` per root at depth 0.
+    const rootsInternal = (this.explorer as unknown as { rootPaths?: readonly string[] })
+      .rootPaths;
+    if (!rootsInternal || rootsInternal.length === 0) return;
+    const nativeFx = (
+      this.explorer as unknown as {
+        nativeFx?: {
+          populateFromPath?: (
+            p: string,
+            d?: number | null,
+            r?: boolean | null,
+          ) => Promise<number>;
+        };
+      }
+    ).nativeFx;
+    if (!nativeFx || typeof nativeFx.populateFromPath !== 'function') {
+      // Older native builds. Silently fall back to nothing; the
+      // playground's setExpanded-triggered prefetch still fills the
+      // root's children on first expansion.
+      return;
+    }
+    for (const rootPath of rootsInternal) {
+      try {
+        // Invoke as a method on nativeFx so napi-rs preserves the
+        // receiver — destructuring the method ref and calling it
+        // bare drops `this` and throws TypeError: Illegal invocation.
+        await nativeFx.populateFromPath(rootPath, 0, true);
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.warn(`[mille] initialWalk: roots-only walk failed for ${rootPath}:`, e);
+      }
+    }
   }
 
   /** Start the 16ms fan-out tick if it isn't already running. */
@@ -632,6 +720,51 @@ class FileExplorerHostImpl implements FileExplorerHost {
     // time so these are typically already covered — but newly-arrived
     // children (post-handshake walker discoveries) still need to land.
     const snap = this.explorer.getSnapshot();
+
+    // Phase B2 — auto-walk newly-expanded folders whose children aren't
+    // in the store yet. Fires a depth-1 prefetch per id; delibrately
+    // does NOT await — the walker publishes children via the ChangeSet
+    // and the next tick's delta fan-out delivers them. We still ship
+    // whatever's already in the snapshot below so the reply isn't empty
+    // in the (common) case where the folder was already walked.
+    //
+    // Guard with `prefetched` to skip repeat walks and with `hasChildren`
+    // so known-leaf folders don't trigger a pointless NAPI round-trip.
+    for (const id of body.add ?? []) {
+      if (this.prefetched.has(id)) continue;
+      const kids = snap.childrenOf(id);
+      if (kids.length > 0) {
+        // Already walked; mark as covered to skip future expansions too.
+        this.prefetched.add(id);
+        continue;
+      }
+      // Check hasChildren — if the snapshot says this is a known leaf,
+      // there's nothing to walk. The store returns `true` when the
+      // directory has cached children; when the folder hasn't been
+      // walked at all, it returns `false` (can't distinguish
+      // "unknown-but-maybe-has-children" from "genuine leaf" without
+      // doing the walk). Fire the walk regardless for now — depth-1
+      // walks of empty / leaf folders are cheap.
+      this.prefetched.add(id);
+      try {
+        void this.explorer
+          .prefetch(id, { depth: 1 })
+          .catch((e) => {
+            // eslint-disable-next-line no-console
+            console.warn(`[mille] setExpanded prefetch failed for id ${id}:`, e);
+          });
+      } catch (e) {
+        // Synchronous throw (older native missing populateFromPath).
+        // Fall back to the v0.1 behaviour — ship whatever's already in
+        // the snapshot — and log once.
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[mille] setExpanded: prefetch not available for id ${id}; carrying on:`,
+          e,
+        );
+      }
+    }
+
     const addedEntries: ClientEntry[] = [];
     const newDirectChildCounts: Record<string, number> = {};
     const childSetIds: number[] = [];

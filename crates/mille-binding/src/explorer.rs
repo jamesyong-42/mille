@@ -176,6 +176,78 @@ impl FileExplorer {
         Ok(total)
     }
 
+    /// Phase B2 — bounded-depth walk starting at `path`. The store `insert`
+    /// path does not dedupe on `path_to_id`, so we filter the walk output
+    /// against the current snapshot before calling `populate_store`: any
+    /// entry whose absolute path is already known is dropped on the floor.
+    /// That keeps this method idempotent, which is what the host-side
+    /// `setExpanded` handler needs when a client re-expands a folder the
+    /// mirror already covers.
+    ///
+    /// `max_depth: 0` returns only the walk root; `max_depth: 1` returns
+    /// the root plus direct children. `None` is unlimited (same as
+    /// `populateFromRoots`) but is only reachable from callers that pass
+    /// `null` explicitly — the TS wrapper always supplies a bound.
+    ///
+    /// `include_root: true` surfaces the folder itself as an Entry when
+    /// the store doesn't already hold it; the `roots-only` initial-walk
+    /// mode in commit B2.2 relies on this to seed each root with a real
+    /// Entry record before any children are walked.
+    #[napi(js_name = "populateFromPath")]
+    pub async fn populate_from_path(
+        &self,
+        path: String,
+        max_depth: Option<u32>,
+        include_root: Option<bool>,
+    ) -> Result<u32> {
+        use mille_core::{populate_store, walk, WalkOptions};
+
+        let p = PathBuf::from(&path);
+        if !p.is_absolute() {
+            return Err(Error::from_reason(format!("path must be absolute: {}", path)));
+        }
+
+        // Only walk inside one of the configured roots. This both protects
+        // the store from accidentally picking up out-of-workspace entries
+        // and gives `populate_store` a predictable root context.
+        let root = self
+            .roots
+            .iter()
+            .find(|r| p == **r || p.starts_with(r))
+            .cloned()
+            .ok_or_else(|| {
+                Error::from_reason(format!(
+                    "path {:?} is not under any configured root",
+                    p
+                ))
+            })?;
+
+        let options = WalkOptions {
+            max_depth: max_depth.map(|n| n as usize),
+            follow_symlinks: self.options.follow_symlinks,
+            include_hidden: true,
+            include_root: include_root.unwrap_or(true),
+            parallelism: self.options.walker_concurrency,
+        };
+        let walked = walk(&p, options).map_err(fx_error_to_napi)?;
+
+        // Filter out entries the store already knows about. Without this,
+        // a second call with overlapping paths would double-insert (the
+        // store's `insert` doesn't dedupe on path — it trusts the caller).
+        let filtered: Vec<_> = walked
+            .into_iter()
+            .filter(|w| self.store.get_by_path(&w.path).is_none())
+            .collect();
+
+        if filtered.is_empty() {
+            return Ok(0);
+        }
+
+        let ids = populate_store(&self.store, &root, &filtered, None)
+            .map_err(fx_error_to_napi)?;
+        Ok(ids.len() as u32)
+    }
+
     /// Capture an immutable view of the tree. The inner Arc is stable
     /// between deltas, so identity comparison holds on the JS side.
     #[napi(js_name = "getSnapshot")]

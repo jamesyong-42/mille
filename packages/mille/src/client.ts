@@ -25,11 +25,28 @@
 // compatible with api.d.ts, but currently ignored (napi-rs 3.x !Send
 // issue on async fns with references — tracked in PLAN 13.x).
 
+import { basename, join as joinPath, sep as pathSep } from 'node:path';
+
 import { native } from './native.js';
 import { wrap } from './errors.js';
 import { decodeBulkRows, type VisibleRow as DecodedRow } from './decode.js';
 import type { ChangeSet } from './delta.js';
 import { DecorationStore, type DecorationProvider } from './decorations.js';
+
+/**
+ * Platform-appropriate path join. On POSIX this is `path.join`; on
+ * Windows the native resolver joins with the platform separator. The
+ * configured root paths are always absolute, so we can rely on
+ * `path.join` to DTRT across platforms.
+ */
+function joinPosix(root: string, ...parts: string[]): string {
+  return joinPath(root, ...parts);
+}
+
+// Re-export so the typescript complains about unused are silenced; we
+// really do use `basename` + `joinPosix` above. `pathSep` kept importable
+// for future Windows-specific tweaks.
+void pathSep;
 
 // ─── Local type mirrors (subset of api.d.ts) ──────────────────────────
 //
@@ -114,6 +131,40 @@ export interface ExplorerOptions {
   readonly excludeGlobs?: readonly string[];
   readonly snapshotPath?: string;
   readonly maxCachedEntries?: number;
+  /**
+   * Phase B2 — initial walk policy. Currently advisory on the
+   * `FileExplorer` itself (it never walks at construction time; callers
+   * drive `populateFromRoots` / `prefetch` explicitly). The
+   * `FileExplorerHost` in `host.ts` reads this field and picks the
+   * right walk at attach time:
+   *
+   *   - `'full'` (default, v0.1 behaviour): the host does nothing; the
+   *     consumer is responsible for calling `host.local.populateFromRoots()`
+   *     or equivalent. Back-compat preserving — every existing consumer
+   *     keeps working without a code change.
+   *   - `'roots-only'`: the host walks each configured root at depth 0
+   *     (the root Entry only, no children). Children stream in via
+   *     `setExpanded` — B2's big ergonomic win for large monorepos.
+   *   - `'none'`: no walk at all. The consumer drives `prefetch` /
+   *     `list` by hand — useful for tests and for consumers who want
+   *     to layer their own lazy-hydration strategy.
+   */
+  readonly initialWalk?: 'full' | 'roots-only' | 'none';
+}
+
+export interface ListOptions {
+  /**
+   * How many levels below `parentId` to walk. `1` = direct children
+   * only. Default: 1.
+   */
+  readonly depth?: number;
+  readonly signal?: AbortSignal;
+}
+
+export interface ListPage {
+  readonly entries: readonly Entry[];
+  readonly total: number;
+  readonly hasMore: boolean;
 }
 
 export type EventName =
@@ -133,6 +184,14 @@ type NativeFx = {
   getSnapshot(): NativeSnapshot;
   takePendingChanges(): NativeChangeSet;
   populateFromRoots(): Promise<number>;
+  // Phase B2 — bounded-depth walk of a single path. Older native builds
+  // (pre-v0.2) may not ship this method; the TS wrapper guards with
+  // `typeof === 'function'` before invoking.
+  populateFromPath?(
+    path: string,
+    maxDepth?: number | null,
+    includeRoot?: boolean | null,
+  ): Promise<number>;
   create(parentId: number, name: string, kind: number): Promise<Entry>;
   rename(id: number, newName: string): Promise<Entry>;
   move(id: number, newParentId: number, newName?: string): Promise<Entry>;
@@ -247,6 +306,12 @@ export class FileExplorer {
   private readonly changeAnyListeners = new Set<(ids: readonly number[]) => void>();
   /** @internal — unsubscribe from the store's onChange when disposed. */
   private readonly decorationStoreSub: { dispose(): void };
+  /**
+   * @internal — Phase B2. Resolved absolute paths of configured roots.
+   * Used by `pathOf(id)` to reconstruct an absolute path for
+   * `populateFromPath`, matching the native `resolve_entry_path` helper.
+   */
+  private readonly rootPaths: string[];
 
   constructor(options: ExplorerOptions) {
     const Ctor = (native as unknown as { FileExplorer: new (opts: unknown) => NativeFx })
@@ -266,8 +331,13 @@ export class FileExplorer {
     if (options.snapshotPath !== undefined) nativeOpts.snapshotPath = options.snapshotPath;
     if (options.maxCachedEntries !== undefined)
       nativeOpts.maxCachedEntries = options.maxCachedEntries;
+    // `initialWalk` is consumed by the host wrapper (host.ts), not by the
+    // native binding — don't pass it through.
 
     this.nativeFx = new Ctor(nativeOpts);
+    // Stash the resolved root paths so `pathOf` can reconstruct absolute
+    // paths for a given EntryId. Mirrors the Rust-side `self.roots`.
+    this.rootPaths = options.roots.map(resolveRoot);
 
     // Route DecorationStore bumps to the JS-only 'change:decorations'
     // channel and to 'change' (the dimension-agnostic aggregate).
@@ -350,6 +420,116 @@ export class FileExplorer {
    */
   populateFromRoots(): Promise<number> {
     return wrap(this.nativeFx.populateFromRoots());
+  }
+
+  /**
+   * Phase B2 — bounded-depth walk starting at `id`'s folder.
+   *
+   *   prefetch(id)              → walks one level below `id` (depth 1)
+   *   prefetch(id, { depth: 0 }) → seeds only `id` itself
+   *   prefetch(id, { depth: 2 }) → walks id + children + grandchildren
+   *
+   * Idempotent: the native `populateFromPath` filters entries already
+   * known to the store, so repeated expansion of the same folder is a
+   * cheap lookup. Does NOT change the session expansion state — the
+   * host's `setExpanded` handler is responsible for that; `prefetch` just
+   * warms the store so the next delta can fan children to clients.
+   *
+   * Graceful degradation: on older native builds that don't ship
+   * `populateFromPath`, throws with a clear marker. Callers (the host)
+   * try/catch and fall back to `populateFromRoots`.
+   */
+  async prefetch(
+    id: EntryId,
+    options?: { depth?: number; signal?: AbortSignal },
+  ): Promise<void> {
+    const depth = options?.depth ?? 1;
+    const populateFromPath = this.nativeFx.populateFromPath;
+    if (typeof populateFromPath !== 'function') {
+      throw new Error(
+        'FileExplorer.prefetch: native binding does not support populateFromPath; rebuild mille-binding',
+      );
+    }
+    const path = this.pathOf(id);
+    if (path === null) {
+      throw new Error(`FileExplorer.prefetch: id ${id} is not in the current snapshot`);
+    }
+    await wrap(populateFromPath.call(this.nativeFx, path, depth, true));
+  }
+
+  /**
+   * Phase B2 — asynchronous listing of a folder's children. Triggers a
+   * bounded walk (same primitive as `prefetch`) and then reads the
+   * freshly-populated children from the snapshot. Matches the shape
+   * described in api.d.ts but scoped to the subset the host needs today —
+   * depth-1 listing without pagination. Pagination + `ListPage.hasMore`
+   * are wired to the native search/list primitives in a later phase.
+   */
+  async list(parentId: EntryId, options?: ListOptions): Promise<ListPage> {
+    const depth = options?.depth ?? 1;
+    try {
+      await this.prefetch(parentId, { depth });
+    } catch (e) {
+      // Don't hard-fail the consumer — a missing native method should
+      // surface as "no children known yet", matching how a slow walker
+      // appears from the outside.
+      if (
+        !(e instanceof Error) ||
+        !e.message.includes('populateFromPath')
+      ) {
+        throw e;
+      }
+    }
+    const snap = this.getSnapshot();
+    const kids = snap.childrenOf(parentId);
+    const entries: Entry[] = [];
+    for (const kidId of kids) {
+      const e = snap.getById(kidId);
+      if (e) entries.push(e);
+    }
+    return { entries, total: entries.length, hasMore: false };
+  }
+
+  /**
+   * Walk parent pointers from `id` up to a root, collecting names; join
+   * against the matching configured root path. Returns null when the id
+   * is unknown or the chain doesn't terminate at a root whose basename
+   * matches one of the configured roots.
+   *
+   * Mirrors the native `mutations::resolve_entry_path`. Lives on the TS
+   * side so `prefetch` / `list` (both TS-only API surface) don't need a
+   * dedicated NAPI round-trip to resolve the path.
+   */
+  private pathOf(id: EntryId): string | null {
+    const snap = this.getSnapshot();
+    const names: string[] = [];
+    // Cap hops at 1024 — matches the malformed-chain defense in the
+    // native resolver with more headroom for deep monorepos.
+    let cur: EntryId | null = id;
+    let rootName: string | null = null;
+    for (let i = 0; i < 1024; i++) {
+      // Loose null: napi-rs maps Rust `Option<i64>::None` to JS
+      // `undefined` rather than `null`, so a strict `=== null` guard
+      // lets undefined through and calling `snap.getById(undefined)`
+      // throws "Failed to convert napi value Undefined into rust
+      // type i64".
+      if (cur == null) break;
+      const entry = snap.getById(cur);
+      if (!entry) return null;
+      if (entry.parentId == null) {
+        rootName = entry.name;
+        break;
+      }
+      names.push(entry.name);
+      cur = entry.parentId;
+    }
+    if (rootName === null) return null;
+    // Find the configured root path whose basename matches.
+    const rootPath = this.rootPaths.find((p) => basename(p) === rootName);
+    if (rootPath === undefined) return null;
+    // Names were child-first; join root-first.
+    names.reverse();
+    return names.length === 0 ? rootPath : joinPosix(rootPath, ...names);
   }
 
   /**

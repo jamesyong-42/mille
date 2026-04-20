@@ -44,23 +44,14 @@ async function bootstrap(): Promise<void> {
     respectIgnore: true,
     followSymlinks: 'smart',
     watchDebounceMs: 75,
-    // Standard IDE exclude set. `.gitignore` entries for these are
-    // common but not universal, and on pnpm monorepos the node_modules
-    // symlinks frequently point into the central store where the
-    // walker would traverse hundreds of thousands of transitive
-    // dependencies. Excluding up-front keeps walks sub-second.
-    excludeGlobs: [
-      '**/node_modules/**',
-      '**/.git/**',
-      '**/dist/**',
-      '**/build/**',
-      '**/out/**',
-      '**/target/**',
-      '**/.next/**',
-      '**/.turbo/**',
-      '**/.cache/**',
-      '**/.DS_Store',
-    ],
+    // v0.2 B2 — `roots-only` seeds just the workspace root(s) at
+    // attach time; the host's `handleSetExpanded` fires a depth-1
+    // prefetch per newly-expanded folder. Huge monorepos (pnpm
+    // stores, giant node_modules) no longer walk upfront.
+    // `excludeGlobs` hack is gone — lazy expansion + gitignore is
+    // enough. B3 will fix the underlying symlink-descent issue so
+    // even expanding into a pnpm `node_modules` stays responsive.
+    initialWalk: 'roots-only',
   });
 
   // Register the attach handler BEFORE kicking off the initial walk.
@@ -89,11 +80,9 @@ async function bootstrap(): Promise<void> {
   // — no reason to block the handshake anymore.
   process.parentPort.postMessage({ type: 'ready' });
   console.log('[fx-host] ready sent to main');
-
-  console.log(`[fx-host] walking ${root} …`);
-  const t0 = Date.now();
-  await host.local.populateFromRoots();
-  console.log(`[fx-host] initial walk done in ${Date.now() - t0}ms`);
+  // No eager walk. `initialWalk: 'roots-only'` seeds the root entry
+  // when the first client attaches; children are prefetched on
+  // demand via handleSetExpanded. See v0.2 B2 in V0_2_PLAN.md.
 }
 
 bootstrap().catch((err) => {

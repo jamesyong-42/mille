@@ -203,9 +203,18 @@ pub fn populate_store(
     ordered.sort_by(|a, b| a.depth.cmp(&b.depth).then_with(|| a.path.cmp(&b.path)));
 
     for w in ordered {
+        // Look in the current-walk map first, then fall back to the
+        // store's path index. The fallback matters for subsequent
+        // `populate_from_path` calls (lazy `prefetch` in v0.2 B2):
+        // the new walk's `path_to_id` starts empty, so children whose
+        // parent was inserted by a prior walk would otherwise get
+        // `parent_id = None` and appear as spurious roots.
         let parent_id = match &w.parent_path {
             None => None,
-            Some(pp) => path_to_id.get(pp).copied(),
+            Some(pp) => path_to_id
+                .get(pp)
+                .copied()
+                .or_else(|| store.get_by_path(pp).map(|e| e.id)),
         };
 
         // Suppress unused-variable warning on non-ignore paths.

@@ -137,6 +137,24 @@ export interface ExplorerOptions {
 
   /** Max in-memory entries. Further children are lazy-loaded. Default: 500_000. */
   readonly maxCachedEntries?: number;
+
+  /**
+   * Phase B2 — initial walk policy. Consumed by `createFileExplorerHost`
+   * (see host.ts); the raw `FileExplorer` class ignores it (construction
+   * stays cheap — no implicit filesystem work).
+   *
+   *   - `'full'` (default, v0.1 behaviour): the host does not walk;
+   *     the consumer calls `host.local.populateFromRoots()` explicitly.
+   *   - `'roots-only'`: the host walks each configured root at depth 0
+   *     so root Entry records appear in the store before handshake.
+   *     Children stream in on-demand via `setExpanded` (which now fires
+   *     a per-folder walk when the child list isn't in the store).
+   *   - `'none'`: the host does not walk at all; the consumer drives
+   *     `prefetch` / `list` / `populateFromRoots` by hand.
+   *
+   * The SPEC §4.3 walker section describes the tradeoffs in detail.
+   */
+  readonly initialWalk?: 'full' | 'roots-only' | 'none';
 }
 
 // ─── Listing & pagination ──────────────────────────────────────────────────

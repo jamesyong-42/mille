@@ -138,8 +138,17 @@ export class ClientMirrorSnapshot {
   }
 
   hasChildren(id: EntryId): boolean {
-    const count = this.state.directChildCounts.get(id) ?? 0;
-    return count > 0;
+    // With lazy expansion (v0.2 B2), directChildCount is `null` for
+    // folders the walker hasn't visited yet. Returning `false` here
+    // would hide the disclosure chevron, so the user can't expand
+    // the folder, so the host never gets `setExpanded` and the walk
+    // never fires — deadlock. For unwalked entries, fall back to the
+    // entry's kind: `KIND_DIRECTORY` (1) means "possibly has children,
+    // show chevron"; files / unknown kinds stay false.
+    const count = this.state.directChildCounts.get(id);
+    if (count !== undefined) return count > 0;
+    const entry = this.state.byId.get(id);
+    return entry?.kind === 1;
   }
 
   /**
@@ -219,7 +228,11 @@ export class ClientMirrorSnapshot {
       if (skipped < options.offset) {
         skipped++;
       } else {
-        const hasChildren = (this.state.directChildCounts.get(frame.id) ?? 0) > 0;
+        // Same lazy-friendly semantic as hasChildren(id): if the
+        // walker hasn't visited yet, assume directories may have
+        // children so the UI renders a chevron and expansion fires.
+        const cnt = this.state.directChildCounts.get(frame.id);
+        const hasChildren = cnt === undefined ? entry.kind === 1 : cnt > 0;
         const base = clientEntryToEntry(entry);
         const row: VisibleRow = {
           ...base,

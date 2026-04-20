@@ -46,8 +46,13 @@ async function bootstrap(): Promise<void> {
     watchDebounceMs: 75,
   });
 
-  await host.local.populateFromRoots();
-
+  // Register the attach handler BEFORE kicking off the initial walk.
+  // If populate ran first, a slow root (huge $HOME etc.) would block
+  // the handler from being installed and the renderer's handshake
+  // would look stuck. By attaching first, the initial snapshot frame
+  // flows immediately (even if mostly empty), and freshly-walked rows
+  // arrive as coalesced deltas. The renderer is responsive during
+  // the walk instead of frozen on a spinner.
   process.parentPort.on('message', (evt) => {
     const msg = evt.data as { type?: string } | undefined;
     const port = evt.ports[0];
@@ -55,6 +60,11 @@ async function bootstrap(): Promise<void> {
       host!.attachPort(wrapMessagePortMain(port));
     }
   });
+
+  console.log(`[fx-host] walking ${root} …`);
+  const t0 = Date.now();
+  await host.local.populateFromRoots();
+  console.log(`[fx-host] initial walk done in ${Date.now() - t0}ms`);
 }
 
 bootstrap().catch((err) => {

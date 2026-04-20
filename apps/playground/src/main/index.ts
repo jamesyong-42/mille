@@ -1,19 +1,17 @@
 import { app, BrowserWindow, MessageChannelMain, utilityProcess } from 'electron';
-import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { cwd } from 'node:process';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-// Phase 15.3 — default to the user's home when no override is set.
-// Rationale: the playground exists to demonstrate a realistic
-// workspace, and `cwd()` under `pnpm dev` resolves to the monorepo
-// root which is useful for dogfooding but noisy for demo screenshots.
-// macOS / Linux: `$HOME`; Windows: `%USERPROFILE%` (both resolved by
-// `os.homedir()` with the same semantics as the plan).
-const WORKSPACE_ROOT =
-  process.env.WORKSPACE_ROOT ?? homedir() ?? cwd();
+// Default to `cwd()` — under `pnpm --filter playground dev` this is
+// the monorepo root, which populates in ~1s. Previously tried
+// `os.homedir()`, but a typical macOS $HOME with node_modules / caches
+// / Library walks for tens of seconds before the attach handler
+// registers, which looks to the renderer exactly like a stuck
+// handshake. Set WORKSPACE_ROOT to override (any absolute path).
+const WORKSPACE_ROOT = process.env.WORKSPACE_ROOT ?? cwd();
 
 async function createWindow(): Promise<void> {
   const fxProcess = utilityProcess.fork(join(__dirname, '../main/fx-host.mjs'), [], {

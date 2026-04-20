@@ -167,6 +167,31 @@ export function Toolbar(props: ToolbarProps): ReactElement {
     [fx, rootPath],
   );
 
+  const [pickerBusy, setPickerBusy] = useState(false);
+
+  const handleOpenFolder = useCallback(async () => {
+    if (pickerBusy) return;
+    setPickerBusy(true);
+    try {
+      const picked = await window.millePlayground.pickAndOpenWorkspace();
+      if (picked === null) {
+        setToast('Open folder: cancelled.');
+      } else {
+        setToast(`Open folder: ${picked} — walking…`);
+        // The new port arrives asynchronously via `fx-port`; App.tsx
+        // swaps the connection. Decoration toggles reset on the new
+        // Explorer remount because Toolbar's refs live under the old
+        // unmounting instance — no manual cleanup needed here.
+      }
+    } catch (err) {
+      setToast(
+        `Open folder failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    } finally {
+      setPickerBusy(false);
+    }
+  }, [pickerBusy]);
+
   const handleReset = useCallback(() => {
     // v0.1 reset is best-effort: the tree owns its selection / filter /
     // clipboard state internally (uncontrolled). We blur whatever is
@@ -182,6 +207,12 @@ export function Toolbar(props: ToolbarProps): ReactElement {
 
   return (
     <div className="toolbar">
+      <div className="toolbar-group">
+        <button type="button" onClick={handleOpenFolder} disabled={pickerBusy}>
+          {pickerBusy ? 'Opening…' : 'Open folder…'}
+        </button>
+      </div>
+
       <div className="toolbar-group" role="group" aria-label="Theme">
         <span>Theme</span>
         <button

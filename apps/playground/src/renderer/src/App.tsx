@@ -16,7 +16,7 @@ import { defaultIconTheme } from '@vibecook/mille-ui/icons';
 import { createCommandRegistry, defaultCommands } from '@vibecook/mille-ui/commands';
 import type { FileExplorer } from '@vibecook/mille';
 import { connectFileExplorer, type PortFileExplorer } from '@vibecook/mille/port';
-import { fxPortReady } from './fx-port';
+import { fxPortReady, onFxPort } from './fx-port';
 import { Toolbar, type ThemeMode } from './Toolbar';
 
 interface ConnectionState {
@@ -30,29 +30,80 @@ export function App(): ReactElement {
 
   useEffect(() => {
     let disposed = false;
-    let fx: PortFileExplorer | null = null;
+    let currentFx: PortFileExplorer | null = null;
 
-    (async () => {
+    async function attach(port: MessagePort, workspaceRoot: string): Promise<void> {
+      console.log(`[renderer] attach(${workspaceRoot}) — calling connectFileExplorer`);
       try {
-        const { port, workspaceRoot } = await fxPortReady;
-        fx = await connectFileExplorer(port, {
+        const fx = await connectFileExplorer(port, {
           mirrorCap: 20_000,
           prefetchRows: 200,
         });
-        if (!disposed) setConn({ fx, workspaceRoot });
+        console.log(`[renderer] connected — treeVersion=${fx.getTreeVersion()}`);
+        if (disposed) {
+          void fx.dispose();
+          return;
+        }
+        const prev = currentFx;
+        currentFx = fx;
+        setConn({ fx, workspaceRoot });
+        if (prev !== null) void prev.dispose();
+        // Heartbeat: log every snapshot change so we can see if the
+        // walker's discoveries are flowing as deltas post-handshake.
+        let lastVersion = fx.getTreeVersion();
+        const sub = fx.on('change', () => {
+          const v = fx.getTreeVersion();
+          if (v !== lastVersion) {
+            const snap = fx.getSnapshot();
+            console.log(
+              `[renderer] tree change: v${lastVersion} → v${v}, roots=${snap.roots().length}`,
+            );
+            lastVersion = v;
+          }
+        });
+        // Clean up on next swap.
+        const oldDispose = currentFx.dispose.bind(currentFx);
+        currentFx.dispose = async () => {
+          sub.dispose();
+          await oldDispose();
+        };
       } catch (err) {
+        console.error('[renderer] attach failed', err);
         if (!disposed) setError(err instanceof Error ? err.message : String(err));
       }
-    })();
+    }
+
+    void fxPortReady.then(({ port, workspaceRoot }) => {
+      console.log(`[renderer] initial fx-port for ${workspaceRoot}`);
+      return attach(port, workspaceRoot);
+    });
+
+    const offSwap = onFxPort(({ port, workspaceRoot }) => {
+      console.log(`[renderer] swap fx-port for ${workspaceRoot}`);
+      setError(null);
+      setConn(null);
+      void attach(port, workspaceRoot);
+    });
 
     return () => {
       disposed = true;
-      fx?.dispose();
+      offSwap();
+      void currentFx?.dispose();
     };
   }, []);
 
   if (error) return <pre className="error">connection failed: {error}</pre>;
-  if (!conn) return <div className="loading">connecting to mille host…</div>;
+  if (!conn) {
+    return (
+      <div className="loading">
+        connecting to mille host…
+        <div className="loading-sub">
+          walking the workspace — large trees (e.g. monorepos with many
+          node_modules) can take up to a minute on first connect.
+        </div>
+      </div>
+    );
+  }
 
   return <Explorer fx={conn.fx} root={conn.workspaceRoot} />;
 }

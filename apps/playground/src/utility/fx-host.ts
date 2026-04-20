@@ -44,27 +44,54 @@ async function bootstrap(): Promise<void> {
     respectIgnore: true,
     followSymlinks: 'smart',
     watchDebounceMs: 75,
+    // Standard IDE exclude set. `.gitignore` entries for these are
+    // common but not universal, and on pnpm monorepos the node_modules
+    // symlinks frequently point into the central store where the
+    // walker would traverse hundreds of thousands of transitive
+    // dependencies. Excluding up-front keeps walks sub-second.
+    excludeGlobs: [
+      '**/node_modules/**',
+      '**/.git/**',
+      '**/dist/**',
+      '**/build/**',
+      '**/out/**',
+      '**/target/**',
+      '**/.next/**',
+      '**/.turbo/**',
+      '**/.cache/**',
+      '**/.DS_Store',
+    ],
   });
 
   // Register the attach handler BEFORE kicking off the initial walk.
-  // If populate ran first, a slow root (huge $HOME etc.) would block
-  // the handler from being installed and the renderer's handshake
-  // would look stuck. By attaching first, the initial snapshot frame
-  // flows immediately (even if mostly empty), and freshly-walked rows
-  // arrive as coalesced deltas. The renderer is responsive during
-  // the walk instead of frozen on a spinner.
+  // If populate ran first, a slow root would block the handler from
+  // being installed and the renderer's handshake would look stuck.
   process.parentPort.on('message', (evt) => {
     const msg = evt.data as { type?: string } | undefined;
     const port = evt.ports[0];
+    console.log(`[fx-host] main → fx-host: ${msg?.type ?? '<unknown>'} (ports: ${evt.ports.length})`);
     if (msg?.type === 'attach' && port) {
       host!.attachPort(wrapMessagePortMain(port));
+      console.log('[fx-host] attachPort done');
     }
   });
 
+  // Walk BEFORE signalling ready. The `snapshot` frame only ships
+  // `roots` once (at handshake) — subsequent deltas carry children
+  // but no root-list update. Handshaking before the walker adds the
+  // root entry leaves the client with `roots: []` forever; the tree
+  // renders empty despite deltas fanning out (treeVersion climbs,
+  // roots stays at 0). Awaiting the walk guarantees the handshake's
+  // snapshot carries the full root set. Tradeoff: large workspaces
+  // pause on "Connecting…" during the walk. A proper fix (v0.2) is
+  // to ship roots in deltas.
   console.log(`[fx-host] walking ${root} …`);
   const t0 = Date.now();
   await host.local.populateFromRoots();
   console.log(`[fx-host] initial walk done in ${Date.now() - t0}ms`);
+
+  process.parentPort.postMessage({ type: 'ready' });
+  console.log('[fx-host] ready sent to main');
 }
 
 bootstrap().catch((err) => {

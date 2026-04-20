@@ -1,0 +1,118 @@
+// Phase 15.3 — mille-ui playground renderer.
+//
+// Replaces the hand-rolled tree from the engine-only reference with the
+// full `<FileTreeProvider>` + `<FileTree>` composition from
+// `@vibecook/mille-ui`. Engine transport (UtilityProcess + port) is
+// unchanged from the reference snapshot at `src.engine-only.reference/`.
+//
+// The toolbar handles light/dark theme toggle, icon-theme swap (default
+// vs material stub), and decoration-provider on/off for git + agent
+// rules. See `./Toolbar.tsx`.
+
+import { useEffect, useMemo, useState, type ReactElement } from 'react';
+import { FileTreeProvider, FileTree } from '@vibecook/mille-ui';
+import type { IconTheme } from '@vibecook/mille-ui/icons';
+import { defaultIconTheme } from '@vibecook/mille-ui/icons';
+import { createCommandRegistry, defaultCommands } from '@vibecook/mille-ui/commands';
+import type { FileExplorer } from '@vibecook/mille';
+import { connectFileExplorer, type PortFileExplorer } from '@vibecook/mille/port';
+import { fxPortReady } from './fx-port';
+import { Toolbar, type ThemeMode } from './Toolbar';
+
+interface ConnectionState {
+  fx: PortFileExplorer;
+  workspaceRoot: string;
+}
+
+export function App(): ReactElement {
+  const [conn, setConn] = useState<ConnectionState | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let disposed = false;
+    let fx: PortFileExplorer | null = null;
+
+    (async () => {
+      try {
+        const { port, workspaceRoot } = await fxPortReady;
+        fx = await connectFileExplorer(port, {
+          mirrorCap: 20_000,
+          prefetchRows: 200,
+        });
+        if (!disposed) setConn({ fx, workspaceRoot });
+      } catch (err) {
+        if (!disposed) setError(err instanceof Error ? err.message : String(err));
+      }
+    })();
+
+    return () => {
+      disposed = true;
+      fx?.dispose();
+    };
+  }, []);
+
+  if (error) return <pre className="error">connection failed: {error}</pre>;
+  if (!conn) return <div className="loading">connecting to mille host…</div>;
+
+  return <Explorer fx={conn.fx} root={conn.workspaceRoot} />;
+}
+
+function Explorer({ fx, root }: { fx: PortFileExplorer; root: string }): ReactElement {
+  // Command registry — fresh per fx so the shadow/restore stack starts
+  // empty on reconnect. `defaultCommands` gives us tree structure +
+  // mutation commands (rename / delete / move / copy / paste / open).
+  const commands = useMemo(() => createCommandRegistry(defaultCommands), []);
+
+  // Theme: toggles `data-theme` on <html>. The tokens.css we import at
+  // entry defines both light and dark palettes gated on that attribute.
+  const [theme, setTheme] = useState<ThemeMode>('dark');
+  useEffect(() => {
+    document.documentElement.dataset['theme'] = theme;
+  }, [theme]);
+
+  // Icon theme selection. `'material'` is a stub in v0.1 — swapping to
+  // it surfaces an error in the toolbar and falls back to default so
+  // the tree stays rendered.
+  const [iconThemeId, setIconThemeId] = useState<'default' | 'material'>('default');
+  const iconTheme: IconTheme = defaultIconTheme;
+
+  // Port clients don't implement `registerDecorationProvider`; the
+  // decoration pipeline lives on the native `FileExplorer` only. Keep
+  // the toolbar toggles functional but no-op at the port boundary so
+  // the UX stays coherent; a real libgit2/isomorphic-git wiring lands
+  // in v0.2 alongside a host-side decoration forwarder.
+
+  return (
+    <FileTreeProvider fx={fx as unknown as FileExplorer} commands={commands}>
+      <div className="app">
+        <header>
+          <h1>mille · playground</h1>
+          <div className="meta">
+            <span>root: {root}</span>
+            <span>· version: {fx.getTreeVersion()}</span>
+          </div>
+        </header>
+        <Toolbar
+          fx={fx}
+          rootPath={root}
+          theme={theme}
+          onThemeChange={setTheme}
+          iconThemeId={iconThemeId}
+          onIconThemeChange={setIconThemeId}
+        />
+        <div className="tree-container">
+          <FileTree
+            ariaLabel="Workspace files"
+            iconTheme={iconTheme}
+            showFilter
+            searchMode="filter"
+            onOpen={(row) => {
+              // eslint-disable-next-line no-console
+              console.log('[playground] open', row);
+            }}
+          />
+        </div>
+      </div>
+    </FileTreeProvider>
+  );
+}

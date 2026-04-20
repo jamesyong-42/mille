@@ -12,7 +12,13 @@
 // call `registerAgentRulesDecorations`. Nothing is auto-wired from the
 // main `@vibecook/mille-ui` entry.
 
-import type { Decoration, Entry, EntryId } from '@vibecook/mille';
+import type {
+  Decoration,
+  Entry,
+  EntryId,
+  FileExplorer,
+} from '@vibecook/mille';
+import type { PortFileExplorer } from '@vibecook/mille/port';
 
 import type { AgentRuleMatcher } from './matchers.js';
 import { DEFAULT_MATCHERS } from './matchers.js';
@@ -49,7 +55,13 @@ export interface FileExplorerLike {
 // ─── Options & handle ─────────────────────────────────────────────────
 
 export interface RegisterAgentRulesOptions {
-  readonly fx: FileExplorerLike;
+  /**
+   * Phase A1 — accepts either the in-process `FileExplorer` or the
+   * port-backed `PortFileExplorer`. Both surface
+   * `registerDecorationProvider` so the wiring is identical; the
+   * `FileExplorerLike` escape hatch stays for scripted test fakes.
+   */
+  readonly fx: FileExplorer | PortFileExplorer | FileExplorerLike;
   /**
    * Absolute workspace root. Currently informational — matchers key
    * off the entry's URI path directly. Kept in the options shape so

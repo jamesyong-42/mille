@@ -1,4 +1,4 @@
-// Phase 15.4 + 15.5 — playground toolbar.
+// Phase 15.4 + 15.5 + A1.8 — playground toolbar.
 //
 // Responsibilities:
 //   - Theme toggle (light / dark) — sets `data-theme` on <html>.
@@ -16,14 +16,12 @@
 //     land when the playground wires up imperative handles to the tree;
 //     today the tree owns that state internally.
 //
-// IMPORTANT (v0.1 stub limit): the playground's engine handle is a
-// `PortFileExplorer` (from `@vibecook/mille/port`). The port client
-// does NOT implement `registerDecorationProvider` — decorations live on
-// the native engine which runs in the UtilityProcess. Toggling the
-// checkboxes on the port client therefore registers against a **shim
-// adapter** that no-ops: the UI wiring is demonstrable end-to-end,
-// but decorations won't actually appear on rows until v0.2 adds a
-// host-side decoration forwarder frame across the port.
+// Phase A1 removed the "port-safe" no-op shim — `PortFileExplorer` now
+// ships `registerDecorationProvider`, so the companions register
+// directly against it. Agent-rules produces real badges immediately
+// because its matchers are static; the git path still pairs with a
+// stub GitClient (every file "unmodified") and Phase A2 replaces that
+// with a shell-based implementation.
 
 import {
   useCallback,
@@ -43,7 +41,6 @@ import {
   type AgentRulesHandle,
 } from '@vibecook/mille-ui/agent-rules';
 import type { PortFileExplorer } from '@vibecook/mille/port';
-import type { Decoration, Entry, EntryId } from '@vibecook/mille';
 
 export type ThemeMode = 'light' | 'dark';
 export type IconThemeId = 'default' | 'material';
@@ -55,37 +52,6 @@ export interface ToolbarProps {
   onThemeChange(next: ThemeMode): void;
   readonly iconThemeId: IconThemeId;
   onIconThemeChange(next: IconThemeId): void;
-}
-
-/**
- * Minimal `FileExplorerLike` shim that satisfies the provider companions
- * but no-ops the registration. Used when the real engine (port client)
- * doesn't surface `registerDecorationProvider`. Exposed as a shim so the
- * toolbar keeps demonstrating the companion APIs without crashing.
- */
-function makeDecorationShim(
-  fx: PortFileExplorer,
-): {
-  registerDecorationProvider(provider: {
-    readonly id: string;
-    onDidChange(listener: (ids: readonly EntryId[]) => void): { dispose(): void };
-    provide(entry: Entry): Decoration | null;
-  }): { dispose(): void };
-  // The shim also needs `getSnapshot` + `getByUri` for the git provider.
-  getSnapshot(): ReturnType<PortFileExplorer['getSnapshot']>;
-  getByUri(uri: { scheme: string; path: string }): Promise<null>;
-} {
-  return {
-    registerDecorationProvider() {
-      return { dispose() { /* no-op */ } };
-    },
-    getSnapshot() {
-      return fx.getSnapshot();
-    },
-    async getByUri() {
-      return null;
-    },
-  };
 }
 
 /**
@@ -151,18 +117,19 @@ export function Toolbar(props: ToolbarProps): ReactElement {
         gitHandleRef.current = null;
         return;
       }
-      // Port client: registration goes through the no-op shim. The call
-      // still exercises the companion's wiring path (options parsing,
-      // initial `recompute`) so hosts observe identical API ergonomics
-      // between port-backed and native-backed engines.
+      // Phase A1 — PortFileExplorer now implements
+      // `registerDecorationProvider`, so we register directly. The
+      // stub GitClient returns an empty status map so no leaves
+      // actually carry a badge; Phase A2 replaces it with a shell
+      // implementation.
       try {
         gitHandleRef.current = registerGitDecorations({
-          fx: makeDecorationShim(fx),
+          fx,
           client: createStubGitClient(),
           rootPath,
         });
         setToast(
-          'Git decorations: stub client (everything "unmodified"). No visible badges in v0.1.',
+          'Git decorations: stub client (every file treated as "unmodified"). Phase A2 replaces with the shell client.',
         );
       } catch (err) {
         setToast(
@@ -184,11 +151,11 @@ export function Toolbar(props: ToolbarProps): ReactElement {
       }
       try {
         agentHandleRef.current = registerAgentRulesDecorations({
-          fx: makeDecorationShim(fx),
+          fx,
           rootPath,
         });
         setToast(
-          'Agent-rules decorations: registered with default matchers. No visible badges until v0.2 forwards decorations across the port.',
+          'Agent-rules decorations: registered with default matchers. Badges now visible on matching rows.',
         );
       } catch (err) {
         setToast(

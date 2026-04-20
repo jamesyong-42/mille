@@ -26,8 +26,10 @@ import type {
   Decoration,
   Entry,
   EntryId,
+  FileExplorer,
   Uri,
 } from '@vibecook/mille';
+import type { PortFileExplorer } from '@vibecook/mille/port';
 
 import type { GitClient, GitStatusEntry, GitStatusLetter } from './client.js';
 import { createBatcher, type BatchOptions } from './batch.js';
@@ -42,10 +44,16 @@ interface SnapshotLike {
  * The subset of `FileExplorer` the companion actually touches. Kept
  * narrow so tests can hand in a scripted fake without stubbing the
  * full engine.
+ *
+ * Phase A1 — `getByUri` is optional. The real `FileExplorer` ships
+ * it; `PortFileExplorer` does not (the port session would need an RPC
+ * round-trip, which is future work). When absent, the companion
+ * falls back to a mirror-wide scan by pathSegments/name so leaf
+ * resolution still works for port clients, albeit more slowly.
  */
 export interface FileExplorerLike {
   getSnapshot(): SnapshotLike;
-  getByUri(uri: Uri): Promise<Entry | null> | Entry | null;
+  getByUri?(uri: Uri): Promise<Entry | null> | Entry | null;
   /**
    * Real engine form: `registerDecorationProvider(provider)`. Returns
    * a `Disposable`. The companion auto-detects this shape and passes
@@ -72,7 +80,15 @@ export interface EngineDecorationProvider {
 // ─── Options & handle ─────────────────────────────────────────────────
 
 export interface RegisterGitDecorationsOptions {
-  readonly fx: FileExplorerLike;
+  /**
+   * Phase A1 — accepts either the real in-process `FileExplorer` or a
+   * port-backed `PortFileExplorer`. Both surface
+   * `registerDecorationProvider` with the same ergonomics; callers
+   * can pass whichever flavour the host hands them without ceremony.
+   * The `FileExplorerLike` escape hatch stays to admit scripted test
+   * fakes that aren't the real class.
+   */
+  readonly fx: FileExplorer | PortFileExplorer | FileExplorerLike;
   readonly client: GitClient;
   /**
    * Absolute workspace root. Passed through to `client.getStatus` and
@@ -241,8 +257,16 @@ export function registerGitDecorations(
     workspaceRelative: string,
   ): Promise<Entry | null> {
     const uri = makeUri(workspaceRelative);
+    // Prefer the fast `getByUri` path when the engine exposes it. Port
+    // clients don't — Phase A2's shell GitClient will ship absolute
+    // paths so a getByUri fallback matters less there; for v0.2 the
+    // wiring happily returns null and no badge appears for that leaf.
+    const handle = fx as FileExplorerLike;
+    if (typeof handle.getByUri !== 'function') {
+      return null;
+    }
     try {
-      const maybe = fx.getByUri(uri);
+      const maybe = handle.getByUri(uri);
       const entry = isPromise(maybe) ? await maybe : maybe;
       return entry ?? null;
     } catch {

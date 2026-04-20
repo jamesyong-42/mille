@@ -17,23 +17,23 @@
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "import": "./dist/index.js",
-      "require": "./dist/index.cjs"
+      "import": "./dist/index.js"
     },
     "./host": {
       "types": "./dist/host.d.ts",
-      "import": "./dist/host.js",
-      "require": "./dist/host.cjs"
+      "import": "./dist/host.js"
     },
     "./client": {
       "types": "./dist/client.d.ts",
-      "import": "./dist/client.js",
-      "require": "./dist/client.cjs"
+      "import": "./dist/client.js"
     },
     "./react": {
       "types": "./dist/react.d.ts",
-      "import": "./dist/react.js",
-      "require": "./dist/react.cjs"
+      "import": "./dist/react.js"
+    },
+    "./port": {
+      "types": "./dist/client-port.d.ts",
+      "import": "./dist/client-port.js"
     }
   },
   "files": [

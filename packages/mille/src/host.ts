@@ -439,13 +439,13 @@ class FileExplorerHostImpl implements FileExplorerHost {
       frame('snapshot', {
         version: snap.treeVersion,
         roots,
-        // Legacy ArrayBuffer payloads kept for wire-shape compatibility;
-        // entriesJson carries the real data for Phase 8 (bincode lands
-        // in Phase 12 with benchmarks).
-        mirror: new ArrayBuffer(0),
+        // mirror/viewport ArrayBuffer fields were reserved for bincode
+        // bulk payloads (Phase 12). Electron's utility↔renderer structured
+        // clone drops messages that contain empty ArrayBuffers silently,
+        // which hangs handshakes over MessagePortMain. Keep the field off
+        // until a real payload is ready (then gate on length > 0).
         entriesJson: allEntries.length > 0 ? JSON.stringify(allEntries) : undefined,
         directChildCounts,
-        viewport: new ArrayBuffer(0),
         visibleCount: allEntries.length,
       }),
     );

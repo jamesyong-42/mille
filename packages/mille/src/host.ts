@@ -16,6 +16,7 @@
 
 import { FileExplorer, type Entry, type MirrorSnapshot } from './client.js';
 import type { EntryId, ExplorerOptions } from './client.js';
+import { DecorationStore, type Decoration } from './decorations.js';
 import {
   applyDeltaToSession,
   computeSessionDelta,
@@ -27,6 +28,8 @@ import {
   frame,
   isCompatibleVersion,
   validateFrameVersion,
+  type DecorationOnWire,
+  type DecorationsFrameBody,
 } from './protocol.js';
 import type { Disposable, FileExplorerHost, MessagePortLike } from './types.js';
 
@@ -178,6 +181,15 @@ class FileExplorerHostImpl implements FileExplorerHost {
    * this single chain and awaiting inside the entry.
    */
   private mutationQueue: Promise<void> = Promise.resolve();
+  /**
+   * Phase A1 — shared decoration store. Any client that ships a
+   * `decorations` frame merges into this store; the next tick's delta
+   * fan-out piggybacks `decorationChangedIds` + serialized merged
+   * decoration payload onto every session's delta frame.
+   */
+  private readonly decorationStore = new DecorationStore();
+  /** Ids whose merged decorations changed since the last tick. */
+  private pendingDecorationChangedIds: Set<number> = new Set();
 
   constructor(options: ExplorerOptions) {
     this.explorer = new FileExplorer(options);
@@ -290,15 +302,39 @@ class FileExplorerHostImpl implements FileExplorerHost {
     if (subtreeDirty.length > 0) this.pendingSubtreeDirty.clear();
     if (subtreeResynced.length > 0) this.pendingSubtreeResynced.clear();
 
+    // Phase A1 — drain pending decoration changes. Every attached
+    // session sees the same fan-out; absence of a decoration change
+    // leaves these fields empty on the outgoing delta.
+    const decorationChangedIds =
+      this.pendingDecorationChangedIds.size > 0
+        ? [...this.pendingDecorationChangedIds]
+        : [];
+    if (decorationChangedIds.length > 0) this.pendingDecorationChangedIds.clear();
+
     // Skip the tick entirely when there's nothing to report — neither
-    // a ChangeSet nor any subtree markers. Keeps idle hosts quiet.
+    // a ChangeSet nor any subtree markers nor decoration churn.
     if (
       changeSetEmpty &&
       coarse.length === 0 &&
       subtreeDirty.length === 0 &&
-      subtreeResynced.length === 0
+      subtreeResynced.length === 0 &&
+      decorationChangedIds.length === 0
     ) {
       return;
+    }
+
+    // Build the decoration payload once. Every session's delta carries
+    // the same serialized snapshot — the per-session knownIds filter
+    // only applies to tree entries, not decorations (SCM status is
+    // observable across every window regardless of viewport).
+    let decorationsJson: string | undefined;
+    if (decorationChangedIds.length > 0) {
+      const payload: Record<string, readonly DecorationOnWire[]> = {};
+      for (const id of decorationChangedIds) {
+        const merged = this.decorationStore.getMerged(id);
+        payload[String(id)] = merged.map(toWireDecoration);
+      }
+      decorationsJson = JSON.stringify(payload);
     }
 
     // Freshest snapshot — used to lift ClientEntry records for any id
@@ -366,6 +402,12 @@ class FileExplorerHostImpl implements FileExplorerHost {
           coarseSubtrees: coarse,
           subtreeDirty,
           subtreeResynced,
+          ...(decorationChangedIds.length > 0
+            ? {
+                decorationChangedIds,
+                ...(decorationsJson !== undefined ? { decorationsJson } : {}),
+              }
+            : {}),
         }),
       );
     }
@@ -413,9 +455,66 @@ class FileExplorerHostImpl implements FileExplorerHost {
       case 'dispose':
         this.detachSession(session.id);
         return;
+      case 'decorations':
+        this.handleDecorations(session, f.body as DecorationsFrameBody);
+        return;
       default:
         this.sendError(session, 'EINVAL', `unknown message type: ${f.type}`);
     }
+  }
+
+  /**
+   * Phase A1 — merge a client's decoration push into the shared
+   * DecorationStore and schedule a fan-out. `replaceAll: true` wipes
+   * the provider's slot first; otherwise we apply each `[id, deco]`
+   * tuple as an upsert (non-null) or clear (null). Malformed bodies
+   * produce a targeted `error` frame without disrupting other sessions.
+   */
+  private handleDecorations(session: Session, body: DecorationsFrameBody): void {
+    if (
+      typeof body.providerId !== 'string' ||
+      body.providerId.length === 0 ||
+      !Array.isArray(body.entries)
+    ) {
+      this.sendError(session, 'EINVAL', 'malformed decorations frame');
+      return;
+    }
+    const providerId = body.providerId;
+    const changed = new Set<number>();
+
+    if (body.replaceAll === true) {
+      const cleared = this.decorationStore.removeProvider(providerId);
+      for (const id of cleared) changed.add(id);
+    }
+
+    for (const tuple of body.entries) {
+      if (!Array.isArray(tuple) || tuple.length !== 2) continue;
+      const rawTuple = tuple as unknown as readonly [unknown, unknown];
+      const id = rawTuple[0];
+      const deco = rawTuple[1];
+      if (typeof id !== 'number' || !Number.isFinite(id)) continue;
+      // deco may be null (clear) or a DecorationOnWire object.
+      let d: Decoration | null;
+      if (deco === null) {
+        d = null;
+      } else if (typeof deco === 'object' && deco !== null) {
+        d = deco as Decoration;
+      } else {
+        continue;
+      }
+      const entryId: number = id;
+      if (this.decorationStore.setForProvider(providerId, entryId, d)) {
+        changed.add(entryId);
+      }
+    }
+
+    if (changed.size === 0) return;
+    // Bump the store version for consumers of the 'change:decorations'
+    // channel on the host-local FileExplorer, then schedule a fan-out
+    // tick so every session observes the change.
+    this.decorationStore.bump([...changed]);
+    for (const id of changed) this.pendingDecorationChangedIds.add(id);
+    this.ensureTick();
   }
 
   private handleHandshake(session: Session): void {
@@ -675,6 +774,20 @@ class FileExplorerHostImpl implements FileExplorerHost {
     }
     await this.explorer.dispose();
   }
+}
+
+/**
+ * Project an in-memory `Decoration` into its wire shape. Keeps the
+ * same key set; spread-only-when-defined satisfies
+ * `exactOptionalPropertyTypes`.
+ */
+function toWireDecoration(d: Decoration): DecorationOnWire {
+  const out: { -readonly [K in keyof DecorationOnWire]: DecorationOnWire[K] } = {};
+  if (d.badge !== undefined) out.badge = d.badge;
+  if (d.color !== undefined) out.color = d.color;
+  if (d.tooltip !== undefined) out.tooltip = d.tooltip;
+  if (d.propagate !== undefined) out.propagate = d.propagate;
+  return out;
 }
 
 function toErrorPayload(e: unknown): { code: string; message: string; path?: string } {

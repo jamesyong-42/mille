@@ -31,8 +31,13 @@ import type { ClientEntry, MirrorWorking } from './mirror.js';
  * public Entry shape (with `undefined`-holes). Spreads only the
  * optional keys that are present, satisfying
  * `exactOptionalPropertyTypes`.
+ *
+ * Exported (unprefixed) so the port client can reconstruct a public
+ * Entry when invoking a DecorationProvider's `provide()` — the port
+ * mirror stores ClientEntry internally, but decoration providers
+ * consume the public Entry shape.
  */
-function clientEntryToEntry(c: ClientEntry): Entry {
+export function clientEntryToEntry(c: ClientEntry): Entry {
   const base = {
     id: c.id,
     parentId: c.parentId,
@@ -311,8 +316,16 @@ export class ClientMirrorSnapshot {
     return { known, pendingExpansions: pending };
   }
 
-  /** Decorations land in Phase 9; empty until then. */
-  getDecorations(_id: EntryId): readonly Decoration[] {
-    return [];
+  /**
+   * Phase A1 — returns the merged decoration list the host delta
+   * carried for this id. Empty array when the id has no decorations
+   * or is unknown. Wire shape (`DecorationOnWire`) is a structural
+   * superset of the public `Decoration`, so the cast is safe and
+   * zero-copy (we hand back the same stored array).
+   */
+  getDecorations(id: EntryId): readonly Decoration[] {
+    const stored = this.state.decorations.get(id);
+    if (stored === undefined) return [];
+    return stored as readonly Decoration[];
   }
 }

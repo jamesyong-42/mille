@@ -21,6 +21,7 @@
 // ClientMirrorSnapshot before publishing so `getSnapshot()` returns
 // `===`-equal references between ticks that didn't change anything.
 
+import type { Decoration, DecorationProvider } from './decorations.js';
 import { FileSystemError, type ErrorCode } from './errors.js';
 import {
   applyDelta,
@@ -29,9 +30,14 @@ import {
   type InboundDelta,
   type InboundSnapshot,
 } from './mirror-reducer.js';
-import { ClientMirrorSnapshot } from './mirror-snapshot.js';
+import { ClientMirrorSnapshot, clientEntryToEntry } from './mirror-snapshot.js';
 import { createMirror, type MirrorWorking } from './mirror.js';
-import { frame, PROTOCOL_VERSION, validateFrameVersion } from './protocol.js';
+import {
+  frame,
+  PROTOCOL_VERSION,
+  validateFrameVersion,
+  type DecorationOnWire,
+} from './protocol.js';
 import type { Disposable, MessagePortLike } from './types.js';
 
 interface PendingRequest {
@@ -92,6 +98,13 @@ export { ClientMirrorSnapshot as PortMirrorSnapshot } from './mirror-snapshot.js
  * port; every reqId gets a pending promise that resolves on the matching
  * mutateResult/callResult frame or rejects with a typed FileSystemError.
  */
+interface RegisteredDecorationProvider {
+  readonly provider: DecorationProvider;
+  /** Entry ids the provider has produced a decoration for at least once. */
+  readonly knownIds: Set<number>;
+  dispose: () => void;
+}
+
 export class PortFileExplorer {
   private readonly port: MessagePortLike;
   private readonly pending = new Map<number, PendingRequest>();
@@ -104,6 +117,18 @@ export class PortFileExplorer {
   private handshakeResolve!: () => void;
   private handshakeReject!: (reason: unknown) => void;
   private disposed = false;
+  /**
+   * Phase A1 — decoration providers registered against this client.
+   * Each entry retains a `knownIds` set so the client can push
+   * incremental deltas when the provider's `onDidChange` fires.
+   */
+  private readonly decorationProviders = new Map<string, RegisteredDecorationProvider>();
+  /**
+   * Entry ids that are already in `working.byId` at the last delta
+   * tick. The port client uses this to detect new ids that arrived in
+   * a delta and push per-new-id decoration computations.
+   */
+  private lastKnownEntryIds: Set<number> = new Set();
 
   constructor(rawPort: MessagePortLike, options?: ClientOptions) {
     this.port = adaptPort(rawPort);
@@ -271,6 +296,93 @@ export class PortFileExplorer {
     });
   }
 
+  /**
+   * Phase A1 — register a decoration provider on the client. The
+   * client walks `working.byId`, calls `provider.provide(entry)` for
+   * each, and pushes a single `decorations` frame with
+   * `replaceAll: true` (which the host applies as a clear-then-upsert
+   * under this provider id). Subsequent `provider.onDidChange(ids)`
+   * fires push incremental deltas; `onDidChange()` with no args
+   * re-pushes the whole known set. New entries discovered via
+   * incoming deltas also trigger per-id decoration computations so
+   * newly-arrived rows get their decoration on the same tick.
+   *
+   * Disposing the returned `Disposable` unsubscribes from the provider
+   * and pushes a clearing frame so the host drops every decoration
+   * contributed by this provider id.
+   */
+  registerDecorationProvider(provider: DecorationProvider): Disposable {
+    const record: RegisteredDecorationProvider = {
+      provider,
+      knownIds: new Set<number>(),
+      dispose: () => {
+        /* replaced below */
+      },
+    };
+
+    // Initial push — seed with whatever the mirror holds right now.
+    // Fire through `sendAfterReady` so the push happens after the
+    // handshake even if the caller registers before connect resolves.
+    const initial = this.computeDecorationsForEveryKnownId(provider, record);
+    this.sendAfterReady(
+      frame('decorations', {
+        providerId: provider.id,
+        entries: initial,
+        replaceAll: true,
+      }),
+    );
+
+    // Subscribe to onDidChange — the listener's signature in
+    // decorations.ts accepts `(ids: readonly EntryId[]) => void`. An
+    // empty `ids` array means "re-push everything known". The
+    // companion-level `EngineDecorationProvider` doesn't support
+    // zero-arg invocation; treat a zero-length list as the signal for
+    // a full rebuild so both shapes converge.
+    const sub = provider.onDidChange((ids) => {
+      if (this.disposed) return;
+      if (ids.length === 0) {
+        const full = this.computeDecorationsForEveryKnownId(provider, record);
+        this.sendAfterReady(
+          frame('decorations', {
+            providerId: provider.id,
+            entries: full,
+            replaceAll: true,
+          }),
+        );
+        return;
+      }
+      void this.pushDecorationsForIds(provider, record, ids, false);
+    });
+
+    record.dispose = (): void => {
+      try {
+        sub.dispose();
+      } catch {
+        /* ignore */
+      }
+      // Clear all decorations under this provider id on the host.
+      this.sendAfterReady(
+        frame('decorations', {
+          providerId: provider.id,
+          entries: [],
+          replaceAll: true,
+        }),
+      );
+      this.decorationProviders.delete(provider.id);
+    };
+
+    this.decorationProviders.set(provider.id, record);
+
+    let disposed = false;
+    return {
+      dispose: () => {
+        if (disposed) return;
+        disposed = true;
+        record.dispose();
+      },
+    };
+  }
+
   /** Non-mutating RPC channel (e.g. getTreeVersion). */
   async call(method: string, args: unknown[] = []): Promise<unknown> {
     await this.handshakeReady;
@@ -350,11 +462,19 @@ export class PortFileExplorer {
     this.working = applySnapshot(this.working, body, this.mirrorCap);
     this.publishSnapshot();
     this.handshakeResolve();
+    // Mirror initial seed for the decoration-new-id diff. No providers
+    // can be registered before handshake completes, but populate the
+    // tracker so the first post-register delta sees a clean baseline.
+    this.lastKnownEntryIds = new Set(this.working.byId.keys());
   }
 
   private handleDelta(body: InboundDelta): void {
     this.working = applyDelta(this.working, body, this.mirrorCap);
     this.publishSnapshot();
+    // Phase A1 — after the mirror absorbs a delta, recompute
+    // decorations for any ids that just arrived so the host sees
+    // per-provider decorations for them on the next tick.
+    this.recomputeDecorationsForNewIds();
   }
 
   /**
@@ -365,6 +485,131 @@ export class PortFileExplorer {
   private publishSnapshot(): void {
     this.publishedSnapshot = new ClientMirrorSnapshot(this.working);
     this.fireChange();
+  }
+
+  /**
+   * Walk every id in `working.byId`, call `provider.provide(entry)`,
+   * and return the wire-shape entry tuples. Also synchronises
+   * `record.knownIds` to match the set of ids the provider produced
+   * a non-null decoration for — the next incremental push can then
+   * clear ids whose decoration disappeared.
+   */
+  private computeDecorationsForEveryKnownId(
+    provider: DecorationProvider,
+    record: RegisteredDecorationProvider,
+  ): Array<readonly [number, DecorationOnWire | null]> {
+    const out: Array<readonly [number, DecorationOnWire | null]> = [];
+    const freshKnown = new Set<number>();
+    for (const [id, ce] of this.working.byId) {
+      let decoration: Decoration | null = null;
+      // Reconstruct a public Entry from the mirror's ClientEntry so
+      // providers whose matchers inspect fields beyond `id` (e.g.
+      // agent-rules' path matching via `entry.name` / duck-typed
+      // `path`) see the full record.
+      const entry = clientEntryToEntry(ce);
+      try {
+        const maybe = provider.provide(entry as unknown as { id: number });
+        // provide() may return a promise; the port path only supports
+        // sync results in the bulk walk. Async providers keep working
+        // via `onDidChange` fires — the listener below awaits per id.
+        if (maybe !== null && !isThenable(maybe)) {
+          decoration = maybe;
+        }
+      } catch {
+        decoration = null;
+      }
+      if (decoration !== null) {
+        out.push([id, toWire(decoration)]);
+        freshKnown.add(id);
+      }
+    }
+    record.knownIds.clear();
+    for (const id of freshKnown) record.knownIds.add(id);
+    return out;
+  }
+
+  /**
+   * Recompute decorations for a specific id list and push an
+   * incremental `decorations` frame (replaceAll: false). Handles the
+   * async `provide()` path: results are awaited one by one and the
+   * single outbound frame is queued after the last resolves. A
+   * provider returning `null` for a previously-known id emits an
+   * explicit `[id, null]` tuple so the host clears that slot.
+   */
+  private async pushDecorationsForIds(
+    provider: DecorationProvider,
+    record: RegisteredDecorationProvider,
+    ids: readonly number[],
+    includeClears: boolean,
+  ): Promise<void> {
+    if (this.disposed) return;
+    const entries: Array<readonly [number, DecorationOnWire | null]> = [];
+    for (const id of ids) {
+      let decoration: Decoration | null = null;
+      const ce = this.working.byId.get(id);
+      // For removed ids (no entry left in the mirror) fall back to
+      // a bare `{id}` stub so the provider can still return null for
+      // cleanup purposes. Most providers only inspect the id anyway.
+      const entry = ce !== undefined ? clientEntryToEntry(ce) : null;
+      try {
+        const arg = entry ?? { id };
+        const maybe = provider.provide(arg as unknown as { id: number });
+        decoration = isThenable(maybe) ? await maybe : maybe;
+      } catch {
+        decoration = null;
+      }
+      if (decoration !== null) {
+        entries.push([id, toWire(decoration)]);
+        record.knownIds.add(id);
+      } else if (record.knownIds.has(id) || includeClears) {
+        // Clearing an id we previously decorated. Without this the
+        // host keeps a stale entry under this provider.
+        entries.push([id, null]);
+        record.knownIds.delete(id);
+      }
+    }
+    if (entries.length === 0) return;
+    this.sendAfterReady(
+      frame('decorations', {
+        providerId: provider.id,
+        entries,
+        replaceAll: false,
+      }),
+    );
+  }
+
+  /**
+   * After a delta lands: diff the mirror's byId against
+   * `lastKnownEntryIds` to find fresh ids, then call every
+   * registered provider once per fresh id so newly-arrived rows
+   * get a decoration pushed upstream on the same tick. Removed ids
+   * (present before, absent now) also trigger a per-provider push
+   * of an explicit clearing tuple.
+   */
+  private recomputeDecorationsForNewIds(): void {
+    if (this.decorationProviders.size === 0) {
+      this.lastKnownEntryIds = new Set(this.working.byId.keys());
+      return;
+    }
+    const currentIds = new Set(this.working.byId.keys());
+    const addedIds: number[] = [];
+    for (const id of currentIds) {
+      if (!this.lastKnownEntryIds.has(id)) addedIds.push(id);
+    }
+    const removedIds: number[] = [];
+    for (const id of this.lastKnownEntryIds) {
+      if (!currentIds.has(id)) removedIds.push(id);
+    }
+    this.lastKnownEntryIds = currentIds;
+    if (addedIds.length === 0 && removedIds.length === 0) return;
+    for (const record of this.decorationProviders.values()) {
+      if (addedIds.length > 0) {
+        void this.pushDecorationsForIds(record.provider, record, addedIds, false);
+      }
+      if (removedIds.length > 0) {
+        void this.pushDecorationsForIds(record.provider, record, removedIds, true);
+      }
+    }
   }
 
   private handleResult(body: {
@@ -424,3 +669,33 @@ export async function connectFileExplorer(
   await fx.ready();
   return fx;
 }
+
+// ─── Phase A1 helpers ──────────────────────────────────────────────────
+
+/**
+ * Duck-typed promise check. `provider.provide` may be sync or async;
+ * the bulk-seed path only accepts sync results (async values flow via
+ * the per-id `onDidChange` push which awaits one id at a time).
+ */
+function isThenable<T>(v: T | Promise<T>): v is Promise<T> {
+  return (
+    v !== null &&
+    typeof v === 'object' &&
+    typeof (v as { then?: unknown }).then === 'function'
+  );
+}
+
+/**
+ * Project a public `Decoration` into its wire shape. The two interfaces
+ * share the same key set; spread-only-when-defined satisfies
+ * `exactOptionalPropertyTypes`.
+ */
+function toWire(d: Decoration): DecorationOnWire {
+  const out: { -readonly [K in keyof DecorationOnWire]: DecorationOnWire[K] } = {};
+  if (d.badge !== undefined) out.badge = d.badge;
+  if (d.color !== undefined) out.color = d.color;
+  if (d.tooltip !== undefined) out.tooltip = d.tooltip;
+  if (d.propagate !== undefined) out.propagate = d.propagate;
+  return out;
+}
+

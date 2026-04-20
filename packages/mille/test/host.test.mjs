@@ -112,7 +112,7 @@ function nextMatching(port, pred) {
   });
 }
 
-test('handshake -> snapshot reply with version + roots + empty mirror', async () => {
+test('handshake -> snapshot reply with version + roots (mirror omitted when empty)', async () => {
   const dir = tempRoot();
   try {
     const host = await createFileExplorerHost({ roots: [dir] });
@@ -129,8 +129,12 @@ test('handshake -> snapshot reply with version + roots + empty mirror', async ()
     assert.equal(snap.type, 'snapshot');
     assert.equal(typeof snap.body.version, 'number');
     assert.ok(Array.isArray(snap.body.roots));
-    assert.ok(snap.body.mirror instanceof ArrayBuffer);
-    assert.equal(snap.body.mirror.byteLength, 0);
+    // Empty-mirror frames omit the `mirror` / `viewport` ArrayBuffer
+    // fields entirely — Electron's MessagePortMain structured-clone
+    // silently drops messages containing zero-byte buffers, which
+    // hangs the handshake. Assert absence instead of empty ArrayBuffer.
+    assert.equal(snap.body.mirror, undefined);
+    assert.equal(snap.body.viewport, undefined);
     assert.equal(snap.body.visibleCount, 0);
     port1.close();
     port2.close();

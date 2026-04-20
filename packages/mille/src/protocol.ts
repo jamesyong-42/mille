@@ -14,6 +14,13 @@
 /**
  * Wire protocol version. Bump on shape changes; clients with a mismatched
  * major version are rejected at handshake (§4.9.10).
+ *
+ * Phase A1 adds a client→host `decorations` frame. Additive: v1 clients
+ * that never send the new frame keep working unchanged. The `isCompatibleVersion`
+ * gate stays exact-match on the shipped major, and the host simply ignores
+ * unknown frame types from a well-versioned client — so no bump is required
+ * for a purely additive client→host extension. Kept at 1 to avoid churning
+ * every hand-written test harness that hard-codes `v: 1`.
  */
 export const PROTOCOL_VERSION = 1;
 
@@ -88,13 +95,65 @@ export interface DisposeMsg {
   body: Record<string, never>;
 }
 
+/**
+ * Minimal decoration shape on the wire. Matches the public `Decoration`
+ * interface in `api.d.ts`; re-declared here so `protocol.ts` stays a
+ * runtime-agnostic schema module. Keep these two in sync.
+ */
+export interface DecorationOnWire {
+  readonly badge?: string;
+  readonly color?: string;
+  readonly tooltip?: string;
+  readonly propagate?: boolean;
+}
+
+/**
+ * Phase A1 — client→host bulk decoration push.
+ *
+ * A port-side `DecorationProvider` lives on the client; on register (and on
+ * `onDidChange`) the client walks its known-entry set, calls
+ * `provider.provide(entry)` for each, and ships the result to the host as a
+ * single `decorations` frame. The host merges the entries into its
+ * `DecorationStore` (provider-id keyed), bumps `decorationVersion`, and the
+ * existing §4.9.11 delta fan-out carries `decorationChangedIds` back to every
+ * session.
+ *
+ * `replaceAll: true` on register clears any prior decorations under the
+ * provider id before applying the new set (first-push semantics). On
+ * incremental `onDidChange` pushes with `replaceAll: false`, `null` values
+ * clear that entry's slot and non-null values upsert.
+ */
+export interface DecorationsMsg {
+  type: 'decorations';
+  body: DecorationsFrameBody;
+}
+
+/** Wire body shape for the `decorations` frame. Exported for consumers. */
+export interface DecorationsFrameBody {
+  /** Provider id — keys the per-provider slot on the host's DecorationStore. */
+  readonly providerId: string;
+  /**
+   * `(entryId, Decoration | null)` tuples. `null` clears the slot for
+   * that id under this provider; a non-null value upserts.
+   */
+  readonly entries: ReadonlyArray<readonly [number, DecorationOnWire | null]>;
+  /**
+   * When true, the host clears every decoration under this provider id
+   * before applying `entries`. Sent on initial registration and on
+   * whole-set re-pushes. When false / omitted, entries are applied as
+   * an incremental diff (the default for `onDidChange(ids)` bursts).
+   */
+  readonly replaceAll?: boolean;
+}
+
 export type ClientToHostMessage =
   | HandshakeMsg
   | SetExpandedMsg
   | SetViewportMsg
   | MutateMsg
   | CallMsg
-  | DisposeMsg;
+  | DisposeMsg
+  | DecorationsMsg;
 
 // ─── Host → Client messages ─────────────────────────────────────────────
 
@@ -125,6 +184,18 @@ export interface DeltaMsg {
     coarseSubtrees: number[];
     subtreeDirty: number[];
     subtreeResynced: number[];
+    /**
+     * Phase A1 — decoration fan-out piggybacks on the delta frame.
+     *
+     * `decorationChangedIds` lists the entry ids whose merged decoration
+     * set changed since the previous delta. `decorationsJson` is a
+     * JSON-encoded `Record<string, DecorationOnWire[]>` keyed by
+     * stringified entry id, carrying the fresh merged value for every
+     * id in `decorationChangedIds`. Omitted fields / an empty id list
+     * means "no decoration changes this tick".
+     */
+    decorationChangedIds?: number[];
+    decorationsJson?: string;
   };
 }
 

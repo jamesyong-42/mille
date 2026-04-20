@@ -24,7 +24,12 @@
 //     tick (see SPEC §4.9.10) so same-tick-dirty+resynced is not a
 //     case we have to arbitrate.
 
-import { cloneMirror, type ClientEntry, type MirrorWorking } from './mirror.js';
+import {
+  cloneMirror,
+  type ClientEntry,
+  type DecorationOnWireLocal,
+  type MirrorWorking,
+} from './mirror.js';
 
 /**
  * Default ceiling for the client mirror (SPEC §4.9.7). Keeps idle
@@ -136,6 +141,20 @@ export interface InboundDelta {
   /** Subtrees flipped volatile / resynced (7.9, SPEC §4.9.10). */
   subtreeDirty: number[];
   subtreeResynced: number[];
+  /**
+   * Phase A1 — entry ids whose merged decoration set changed since the
+   * previous delta. The reducer replaces `decorations[id]` for each
+   * listed id from `decorationsJson`, deleting the key when the list
+   * is empty.
+   */
+  decorationChangedIds?: number[];
+  /**
+   * JSON-encoded `Record<string, DecorationOnWire[]>` keyed by
+   * stringified entry id. Must contain an entry for every id in
+   * `decorationChangedIds`; the reducer treats absence as the empty
+   * array (i.e. clear the slot).
+   */
+  decorationsJson?: string;
 }
 
 /**
@@ -164,6 +183,7 @@ export function applySnapshot(
     roots: [...msg.roots],
     treeVersion: msg.version,
     decorationVersion: 0,
+    decorations: new Map(),
     volatileSubtrees: new Set(),
     lruTouch: new Map(),
     lruCounter: 0,
@@ -293,6 +313,42 @@ export function applyDelta(
   // Drop removed ids from lruTouch so they don't skew eviction
   // ordering on the next tick.
   for (const id of msg.removedIds) next.lruTouch.delete(id);
+
+  // Phase A1 — apply decoration deltas. Separate channel from the
+  // tree bump: a decoration-only delta still carries a (possibly
+  // unchanged) `version` field, so the reducer doesn't differentiate
+  // here. The host advances `decorationVersion` on every decoration
+  // change so consumers gating on it see a fresh snapshot.
+  const decChangedIds = msg.decorationChangedIds ?? [];
+  if (decChangedIds.length > 0) {
+    let parsed: Record<string, readonly DecorationOnWireLocal[]> = {};
+    if (msg.decorationsJson !== undefined && msg.decorationsJson.length > 0) {
+      try {
+        parsed = JSON.parse(msg.decorationsJson) as Record<
+          string,
+          readonly DecorationOnWireLocal[]
+        >;
+      } catch {
+        // Malformed decoration payload — skip applying rather than
+        // corrupt the store. The next tick will overwrite anyway.
+        parsed = {};
+      }
+    }
+    for (const id of decChangedIds) {
+      const key = String(id);
+      const decs = parsed[key];
+      if (decs === undefined || decs.length === 0) {
+        next.decorations.delete(id);
+      } else {
+        next.decorations.set(id, decs);
+      }
+    }
+    next.decorationVersion += 1;
+  }
+
+  // Removed ids should also drop their decoration slot — a stale
+  // entry has no merged decorations.
+  for (const id of msg.removedIds) next.decorations.delete(id);
 
   evictToCap(next, mirrorCap, activeSet(next));
   return next;

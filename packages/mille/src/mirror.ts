@@ -16,7 +16,22 @@
 //   - roots               — workspace roots in display order
 //   - treeVersion         — the host's authoritative tree-version
 //   - decorationVersion   — companion for Phase 9
+//   - decorations         — Phase A1: merged DecorationOnWire arrays the
+//                           host delta carried, keyed by entry id
 //   - volatileSubtrees    — subtrees currently flagged dirty (SPEC §4.9.10)
+
+/**
+ * Local mirror of the wire `DecorationOnWire` shape (declared in
+ * protocol.ts). Re-declared here to avoid a runtime import cycle —
+ * `mirror.ts` must stay free of protocol-module dependencies so the
+ * bare mirror tests can run without pulling the wire schema in.
+ */
+export interface DecorationOnWireLocal {
+  readonly badge?: string;
+  readonly color?: string;
+  readonly tooltip?: string;
+  readonly propagate?: boolean;
+}
 
 /**
  * Mirror-local copy of an Entry record. Shape matches api.d.ts Entry
@@ -59,6 +74,13 @@ export interface MirrorWorking {
   treeVersion: number;
   /** Current decoration version (Phase 9). */
   decorationVersion: number;
+  /**
+   * Phase A1 — merged decoration arrays received from the host, keyed
+   * by entry id. Each entry is the wire-shape `DecorationOnWire[]`
+   * (the host pre-merges across providers before shipping). Absent
+   * keys mean "no decorations"; an empty array is valid too.
+   */
+  decorations: Map<number, readonly DecorationOnWireLocal[]>;
   /** Subtrees flagged volatile (SPEC §4.9.10). */
   volatileSubtrees: Set<number>;
   /**
@@ -83,6 +105,7 @@ export function createMirror(): MirrorWorking {
     roots: [],
     treeVersion: 0,
     decorationVersion: 0,
+    decorations: new Map(),
     volatileSubtrees: new Set(),
     lruTouch: new Map(),
     lruCounter: 0,
@@ -104,6 +127,7 @@ export function cloneMirror(m: MirrorWorking): MirrorWorking {
     roots: [...m.roots],
     treeVersion: m.treeVersion,
     decorationVersion: m.decorationVersion,
+    decorations: new Map(m.decorations),
     volatileSubtrees: new Set(m.volatileSubtrees),
     lruTouch: new Map(m.lruTouch),
     lruCounter: m.lruCounter,

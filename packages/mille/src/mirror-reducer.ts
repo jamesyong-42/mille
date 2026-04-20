@@ -155,6 +155,14 @@ export interface InboundDelta {
    * array (i.e. clear the slot).
    */
   decorationsJson?: string;
+  /**
+   * Phase B1 — the full current root-id list on the host. Shipped only
+   * when the set changed since the previous delta (by content). When
+   * present, the reducer replaces `next.roots` with this list; absent
+   * means the root set is unchanged (common case). No dedicated
+   * version bump — root churn rides the delta's `version` field.
+   */
+  roots?: number[];
 }
 
 /**
@@ -349,6 +357,32 @@ export function applyDelta(
   // Removed ids should also drop their decoration slot — a stale
   // entry has no merged decorations.
   for (const id of msg.removedIds) next.decorations.delete(id);
+
+  // Phase B1 — roots delta. Replace wholesale with the host-supplied
+  // list when present. Identity-stable where possible: we reuse the
+  // prior `next.roots` array if every id is the same in the same
+  // order, so consumers doing shallow `===` comparisons (e.g. React
+  // memoised over `snap.roots()` identity) don't re-render
+  // unnecessarily. When an id in the delta isn't yet in `byId`
+  // (edge case: roots arrive before the entry record), the id is kept
+  // in the roots list; downstream code (`snap.roots()` and
+  // `visibleRows`) already tolerates missing entries — roots() skips
+  // them, visibleRows emits a pending placeholder. The real Entry
+  // lands on the same or a subsequent tick.
+  if (msg.roots !== undefined) {
+    const incoming = msg.roots;
+    const prev = next.roots;
+    let same = prev.length === incoming.length;
+    if (same) {
+      for (let i = 0; i < incoming.length; i++) {
+        if (prev[i] !== incoming[i]) {
+          same = false;
+          break;
+        }
+      }
+    }
+    next.roots = same ? prev : [...incoming];
+  }
 
   evictToCap(next, mirrorCap, activeSet(next));
   return next;

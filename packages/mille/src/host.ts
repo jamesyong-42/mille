@@ -100,6 +100,16 @@ interface Session {
   nextReqId: number;
   /** Whether the handshake frame has been observed. */
   handshook: boolean;
+  /**
+   * Phase B1 — the last root-id set this session has been told about.
+   * Populated with the ids shipped in the handshake's snapshot; the
+   * per-tick delta builder compares the host's current roots against
+   * this and re-ships the full list when the set changed. Kept per
+   * session because sessions can attach at different phases of the
+   * walker lifecycle — session A may have handshaken empty while B
+   * handshook after a root was added.
+   */
+  lastRootSet: Set<number>;
   /** Teardown for the message listener + port. Replaced during attach. */
   detach: () => void;
 }
@@ -235,6 +245,7 @@ class FileExplorerHostImpl implements FileExplorerHost {
       knownIds: new Set<number>(),
       nextReqId: 1,
       handshook: false,
+      lastRootSet: new Set<number>(),
       detach: () => {
         /* replaced below */
       },
@@ -311,8 +322,12 @@ class FileExplorerHostImpl implements FileExplorerHost {
         : [];
     if (decorationChangedIds.length > 0) this.pendingDecorationChangedIds.clear();
 
-    // Skip the tick entirely when there's nothing to report — neither
-    // a ChangeSet nor any subtree markers nor decoration churn.
+    // Phase B1 — check whether any session's root view is out of date.
+    // Root changes usually show up in the ChangeSet too (the walker
+    // adds the root entry to the native store), but we guard
+    // independently so a stray root-set change without an attendant
+    // ChangeSet still reaches the wire.
+    let rootsChangedAnySession = false;
     if (
       changeSetEmpty &&
       coarse.length === 0 &&
@@ -320,7 +335,16 @@ class FileExplorerHostImpl implements FileExplorerHost {
       subtreeResynced.length === 0 &&
       decorationChangedIds.length === 0
     ) {
-      return;
+      const currentRootIds = this.explorer.getSnapshot().roots().map((e) => e.id);
+      const currentRootSet = new Set(currentRootIds);
+      for (const session of this.sessions.values()) {
+        if (!session.handshook) continue;
+        if (!setsEqual(currentRootSet, session.lastRootSet)) {
+          rootsChangedAnySession = true;
+          break;
+        }
+      }
+      if (!rootsChangedAnySession) return;
     }
 
     // Build the decoration payload once. Every session's delta carries
@@ -341,6 +365,13 @@ class FileExplorerHostImpl implements FileExplorerHost {
     // that moved (changed, added, or reparented) this tick.
     const snap = this.explorer.getSnapshot();
 
+    // Phase B1 — the host's current root-id list, computed once per tick
+    // and diffed per session below. The snapshot's `roots()` call is cheap
+    // (native snapshot is a cached view) and we want every attached
+    // session to see the same root picture on any given tick.
+    const currentRootIds = snap.roots().map((e) => e.id);
+    const currentRootSet = new Set(currentRootIds);
+
     for (const session of this.sessions.values()) {
       if (!session.handshook) continue;
       const view: SessionView = {
@@ -355,6 +386,20 @@ class FileExplorerHostImpl implements FileExplorerHost {
       // host-side parent-chain tracking (Phase 8).
       for (const rootId of coarse) {
         session.knownIds.delete(rootId);
+      }
+
+      // Phase B1 — has the root set changed for this session since last
+      // tick? Compare by id content (not reference). If so, we'll ship
+      // the full current list on this delta; the client replaces its
+      // `working.roots` verbatim. Also ensure every current root id is
+      // in `knownIds` so the below changedIds/childSetChanged filter
+      // doesn't silently drop the root Entry's ClientEntry payload —
+      // root entries otherwise would be treated as "unknown to session"
+      // and stay off the wire.
+      const rootsChangedForSession = !setsEqual(currentRootSet, session.lastRootSet);
+      if (rootsChangedForSession) {
+        for (const id of currentRootIds) session.knownIds.add(id);
+        session.lastRootSet = new Set(currentRootSet);
       }
 
       // Bundle the ClientEntry payloads for every id whose record
@@ -389,6 +434,25 @@ class FileExplorerHostImpl implements FileExplorerHost {
         }
       }
 
+      // Phase B1 — also ensure any fresh root id's ClientEntry actually
+      // rides this delta. The changedIds channel above only fires for
+      // ids in the native ChangeSet; if a root was pre-existing in the
+      // store (e.g. populated before this session handshook) but is
+      // newly visible to *this* session because `roots` just started
+      // shipping, emit its Entry record too so the client can look it
+      // up via `byId` when resolving `roots`.
+      if (rootsChangedForSession) {
+        for (const id of currentRootIds) {
+          if (emitted.has(id)) continue;
+          const entry = snap.getById(id);
+          if (!entry) continue;
+          outEntries.push(entryToClient(entry));
+          emitted.add(id);
+          const c = snap.directChildCount(id);
+          if (c !== null) outDirectChildCounts[String(id)] = c;
+        }
+      }
+
       this.send(
         session,
         frame('delta', {
@@ -408,6 +472,7 @@ class FileExplorerHostImpl implements FileExplorerHost {
                 ...(decorationsJson !== undefined ? { decorationsJson } : {}),
               }
             : {}),
+          ...(rootsChangedForSession ? { roots: [...currentRootIds] } : {}),
         }),
       );
     }
@@ -533,6 +598,11 @@ class FileExplorerHostImpl implements FileExplorerHost {
       if (c !== null) directChildCounts[String(e.id)] = c;
       session.knownIds.add(e.id);
     }
+    // Phase B1 — seed lastRootSet with whatever we just shipped so the
+    // per-tick delta builder only re-emits `roots` when the set
+    // actually changes post-handshake (walker discovering a root, a
+    // caller adding a root at runtime, etc.).
+    session.lastRootSet = new Set(roots);
     this.send(
       session,
       frame('snapshot', {
@@ -774,6 +844,19 @@ class FileExplorerHostImpl implements FileExplorerHost {
     }
     await this.explorer.dispose();
   }
+}
+
+/**
+ * Phase B1 — content equality for two number sets. Fast path when sizes
+ * differ; otherwise one-pass `.has` check. Used by the per-session
+ * delta builder to decide whether to re-ship `roots`.
+ */
+function setsEqual(a: ReadonlySet<number>, b: ReadonlySet<number>): boolean {
+  if (a.size !== b.size) return false;
+  for (const v of a) {
+    if (!b.has(v)) return false;
+  }
+  return true;
 }
 
 /**

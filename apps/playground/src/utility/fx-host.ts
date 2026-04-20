@@ -76,22 +76,24 @@ async function bootstrap(): Promise<void> {
     }
   });
 
-  // Walk BEFORE signalling ready. The `snapshot` frame only ships
-  // `roots` once (at handshake) — subsequent deltas carry children
-  // but no root-list update. Handshaking before the walker adds the
-  // root entry leaves the client with `roots: []` forever; the tree
-  // renders empty despite deltas fanning out (treeVersion climbs,
-  // roots stays at 0). Awaiting the walk guarantees the handshake's
-  // snapshot carries the full root set. Tradeoff: large workspaces
-  // pause on "Connecting…" during the walk. A proper fix (v0.2) is
-  // to ship roots in deltas.
+  // Fixed in v0.2 B1 — roots now ship in deltas so the handshake can
+  // fire immediately; the walker fills the tree in the background.
+  //
+  // Previously (v0.1) the `snapshot` frame was the only wire-path for
+  // `roots`, so handshaking before the walker had added the root entry
+  // left the client with `roots: []` forever (tree stayed blank even as
+  // treeVersion climbed). The workaround was to `await populateFromRoots`
+  // before sending 'ready', which blocked the renderer on "Connecting…"
+  // for 10-60s on large monorepos. B1's delta-piggybacked roots field
+  // means the client learns the root as soon as the walker discovers it
+  // — no reason to block the handshake anymore.
+  process.parentPort.postMessage({ type: 'ready' });
+  console.log('[fx-host] ready sent to main');
+
   console.log(`[fx-host] walking ${root} …`);
   const t0 = Date.now();
   await host.local.populateFromRoots();
   console.log(`[fx-host] initial walk done in ${Date.now() - t0}ms`);
-
-  process.parentPort.postMessage({ type: 'ready' });
-  console.log('[fx-host] ready sent to main');
 }
 
 bootstrap().catch((err) => {

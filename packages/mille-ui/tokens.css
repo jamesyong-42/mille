@@ -1,0 +1,135 @@
+/*
+ * @vibecook/mille-ui — default CSS token surface.
+ *
+ * Every variable consumed by the styled default <FileTree> is declared here.
+ * Host apps either import this file (`import '@vibecook/mille-ui/tokens.css'`)
+ * or redeclare the subset they care about. All values below are placeholders
+ * matching MILLE_UI_SPEC.md §10.1 and will be tuned in later phases.
+ *
+ * Light mode is the default; dark mode overrides under [data-theme="dark"].
+ * Both use `:where()` so host selectors beat these with zero specificity war.
+ */
+
+:where(:root) {
+  /* Row geometry */
+  --mille-row-height: 22px;
+  --mille-indent-size: 8px;
+
+  /* Row backgrounds */
+  --mille-row-bg: transparent;
+  --mille-row-bg-hover: color-mix(in oklch, currentColor 6%, transparent);
+  --mille-row-bg-selected: color-mix(in oklch, currentColor 12%, transparent);
+  --mille-row-bg-selected-focused: var(--mille-accent-bg);
+
+  /* Accent + focus */
+  --mille-accent-bg: #0969da;
+  --mille-accent-fg: #ffffff;
+  --mille-focus-ring: 2px solid var(--mille-accent-bg);
+
+  /* Structural affordances */
+  --mille-indent-guide: color-mix(in oklch, currentColor 10%, transparent);
+  --mille-chevron-color: currentColor;
+
+  /* SCM / decoration colors */
+  --mille-decoration-modified: #d29922;
+  --mille-decoration-added: #3fb950;
+  --mille-decoration-deleted: #f85149;
+  --mille-decoration-ignored-opacity: 0.55;
+
+  /* Rename input */
+  --mille-rename-input-bg: Canvas;
+  --mille-rename-input-ring: var(--mille-accent-bg);
+}
+
+:where([data-theme="dark"]) {
+  --mille-row-bg: transparent;
+  --mille-row-bg-hover: color-mix(in oklch, currentColor 10%, transparent);
+  --mille-row-bg-selected: color-mix(in oklch, currentColor 18%, transparent);
+  --mille-row-bg-selected-focused: var(--mille-accent-bg);
+
+  --mille-accent-bg: #1f6feb;
+  --mille-accent-fg: #ffffff;
+  --mille-focus-ring: 2px solid var(--mille-accent-bg);
+
+  --mille-indent-guide: color-mix(in oklch, currentColor 18%, transparent);
+
+  --mille-decoration-modified: #e3b341;
+  --mille-decoration-added: #3fb950;
+  --mille-decoration-deleted: #f85149;
+  --mille-decoration-ignored-opacity: 0.5;
+
+  --mille-rename-input-bg: #0d1117;
+  --mille-rename-input-ring: var(--mille-accent-bg);
+}
+
+/*
+ * @vibecook/mille-ui — Phase 4 focus ring + accessibility media queries.
+ *
+ * Appended into `dist/tokens.css` by the build step so consumers who
+ * import `@vibecook/mille-ui/tokens.css` get the focus affordances for
+ * free. Kept in its own source file for clarity; no separate export.
+ */
+
+.mille-row:focus-visible {
+  outline: var(--mille-focus-ring, 2px solid #0969da);
+  outline-offset: -2px;
+  border-radius: 2px;
+}
+
+.mille-row[data-mille-focused="true"] {
+  background: var(--mille-row-bg-selected-focused, var(--mille-row-bg-selected, transparent));
+}
+
+.mille-row[data-mille-selected="true"] {
+  background: var(--mille-row-bg-selected, transparent);
+}
+
+.mille-row[data-mille-selected="true"][data-mille-focused="true"] {
+  background: var(--mille-row-bg-selected-focused, var(--mille-accent-bg));
+  color: var(--mille-accent-fg, inherit);
+}
+
+@media (prefers-contrast: more) {
+  .mille-row:focus-visible {
+    outline-width: 3px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mille-row {
+    transition: none !important;
+  }
+}
+
+/*
+ * Phase 7 — "cut" clipboard visual state. Rows marked cut render at
+ * reduced opacity until the user pastes or presses Esc. Matches the
+ * Finder / VS Code convention. `data-mille-cut` is set only when the
+ * row's id is in the tree's `cutIds` set; `copyIds` does NOT receive a
+ * visual treatment (matches VS Code — copy is stateless from the tree's
+ * POV until paste lands).
+ */
+.mille-row[data-mille-cut="true"] {
+  opacity: 0.5;
+}
+
+/*
+ * Phase 11 — drag-and-drop visual state.
+ *
+ *   - `data-mille-dragging` dims the source row(s) during a drag so the
+ *     user sees what's "lifted off" the tree.
+ *   - `data-mille-drop-target-self` highlights the folder the drop will
+ *     land inside (self = "into this folder").
+ *   - `data-mille-drop-target-above` / `-below` render a 2 px accent
+ *     line at the row's top/bottom edge via ::before / ::after, matching
+ *     VS Code / Finder's "between-siblings" affordance.
+ */
+.mille-row[data-mille-dragging="true"] { opacity: 0.5; }
+.mille-row[data-mille-drop-target-self="true"] { background: color-mix(in oklch, currentColor 10%, transparent); outline: 1px dashed var(--mille-accent-bg); outline-offset: -1px; }
+.mille-row { position: relative; }
+.mille-row[data-mille-drop-target-above="true"]::before,
+.mille-row[data-mille-drop-target-below="true"]::after {
+  content: ''; position: absolute; left: 0; right: 0; height: 2px; background: var(--mille-accent-bg); pointer-events: none;
+}
+.mille-row[data-mille-drop-target-above="true"]::before { top: 0; }
+.mille-row[data-mille-drop-target-below="true"]::after { bottom: 0; }

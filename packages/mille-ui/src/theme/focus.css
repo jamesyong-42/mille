@@ -1,0 +1,71 @@
+/*
+ * @vibecook/mille-ui — Phase 4 focus ring + accessibility media queries.
+ *
+ * Appended into `dist/tokens.css` by the build step so consumers who
+ * import `@vibecook/mille-ui/tokens.css` get the focus affordances for
+ * free. Kept in its own source file for clarity; no separate export.
+ */
+
+.mille-row:focus-visible {
+  outline: var(--mille-focus-ring, 2px solid #0969da);
+  outline-offset: -2px;
+  border-radius: 2px;
+}
+
+.mille-row[data-mille-focused="true"] {
+  background: var(--mille-row-bg-selected-focused, var(--mille-row-bg-selected, transparent));
+}
+
+.mille-row[data-mille-selected="true"] {
+  background: var(--mille-row-bg-selected, transparent);
+}
+
+.mille-row[data-mille-selected="true"][data-mille-focused="true"] {
+  background: var(--mille-row-bg-selected-focused, var(--mille-accent-bg));
+  color: var(--mille-accent-fg, inherit);
+}
+
+@media (prefers-contrast: more) {
+  .mille-row:focus-visible {
+    outline-width: 3px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mille-row {
+    transition: none !important;
+  }
+}
+
+/*
+ * Phase 7 — "cut" clipboard visual state. Rows marked cut render at
+ * reduced opacity until the user pastes or presses Esc. Matches the
+ * Finder / VS Code convention. `data-mille-cut` is set only when the
+ * row's id is in the tree's `cutIds` set; `copyIds` does NOT receive a
+ * visual treatment (matches VS Code — copy is stateless from the tree's
+ * POV until paste lands).
+ */
+.mille-row[data-mille-cut="true"] {
+  opacity: 0.5;
+}
+
+/*
+ * Phase 11 — drag-and-drop visual state.
+ *
+ *   - `data-mille-dragging` dims the source row(s) during a drag so the
+ *     user sees what's "lifted off" the tree.
+ *   - `data-mille-drop-target-self` highlights the folder the drop will
+ *     land inside (self = "into this folder").
+ *   - `data-mille-drop-target-above` / `-below` render a 2 px accent
+ *     line at the row's top/bottom edge via ::before / ::after, matching
+ *     VS Code / Finder's "between-siblings" affordance.
+ */
+.mille-row[data-mille-dragging="true"] { opacity: 0.5; }
+.mille-row[data-mille-drop-target-self="true"] { background: color-mix(in oklch, currentColor 10%, transparent); outline: 1px dashed var(--mille-accent-bg); outline-offset: -1px; }
+.mille-row { position: relative; }
+.mille-row[data-mille-drop-target-above="true"]::before,
+.mille-row[data-mille-drop-target-below="true"]::after {
+  content: ''; position: absolute; left: 0; right: 0; height: 2px; background: var(--mille-accent-bg); pointer-events: none;
+}
+.mille-row[data-mille-drop-target-above="true"]::before { top: 0; }
+.mille-row[data-mille-drop-target-below="true"]::after { bottom: 0; }

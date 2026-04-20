@@ -1,0 +1,109 @@
+{
+  "name": "@vibecook/mille-ui",
+  "version": "0.1.0",
+  "description": "React file-tree UI companion to @vibecook/mille. Virtualized, accessible, VS Code File Icon Theme compatible.",
+  "license": "MIT",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jamesyong-42/mille"
+  },
+  "homepage": "https://github.com/jamesyong-42/mille#readme",
+  "bugs": {
+    "url": "https://github.com/jamesyong-42/mille/issues"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./headless": {
+      "types": "./dist/headless.d.ts",
+      "import": "./dist/headless.js"
+    },
+    "./commands": {
+      "types": "./dist/commands.d.ts",
+      "import": "./dist/commands.js"
+    },
+    "./icons": {
+      "types": "./dist/icons.d.ts",
+      "import": "./dist/icons.js"
+    },
+    "./icons/default": {
+      "types": "./dist/icons-default.d.ts",
+      "import": "./dist/icons-default.js"
+    },
+    "./icons/material": {
+      "types": "./dist/icons-material.d.ts",
+      "import": "./dist/icons-material.js"
+    },
+    "./git": {
+      "types": "./dist/git.d.ts",
+      "import": "./dist/git.js"
+    },
+    "./agent-rules": {
+      "types": "./dist/agent-rules.d.ts",
+      "import": "./dist/agent-rules.js"
+    },
+    "./testing": {
+      "types": "./dist/testing.d.ts",
+      "import": "./dist/testing.js"
+    },
+    "./tailwind-preset": {
+      "default": "./dist/tailwind-preset.js"
+    },
+    "./tokens.css": "./dist/tokens.css"
+  },
+  "files": [
+    "dist",
+    "tokens.css",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc --build && node -e \"const fs=require('fs');const tokens=fs.readFileSync('src/theme/tokens.css','utf8');const focus=fs.readFileSync('src/theme/focus.css','utf8');const combined=tokens+'\\n'+focus;fs.mkdirSync('dist',{recursive:true});fs.writeFileSync('dist/tokens.css',combined);fs.writeFileSync('tokens.css',combined)\"",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test \"test/*.test.mjs\"",
+    "size": "size-limit",
+    "bench": "node bench/scroll-expand.mjs"
+  },
+  "peerDependencies": {
+    "@radix-ui/react-context-menu": "^2.0.0",
+    "@radix-ui/react-dialog": "^1.0.0",
+    "@radix-ui/react-tooltip": "^1.0.0",
+    "@tanstack/react-virtual": "^3.0.0",
+    "@vibecook/mille": "workspace:^",
+    "react": ">=19.0.0",
+    "react-dom": ">=19.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@radix-ui/react-context-menu": {
+      "optional": true
+    },
+    "@radix-ui/react-dialog": {
+      "optional": true
+    },
+    "@radix-ui/react-tooltip": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@radix-ui/react-context-menu": "^2.0.0",
+    "@radix-ui/react-dialog": "^1.0.0",
+    "@radix-ui/react-tooltip": "^1.0.0",
+    "@size-limit/preset-small-lib": "^11.0.0",
+    "@tanstack/react-virtual": "^3.0.0",
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.2.0",
+    "happy-dom": "^15.0.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "size-limit": "^11.0.0",
+    "tslib": "^2.8.1",
+    "typescript": "~6.0.0"
+  }
+}

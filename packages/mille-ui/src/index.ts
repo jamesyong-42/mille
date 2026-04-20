@@ -1,0 +1,126 @@
+// Top-level entry for `@vibecook/mille-ui`.
+//
+// This entry ships the full styled component surface (mille-tree CSS
+// class hooks + layout-critical inline styles + CSS-variable-gated
+// colors). For consumers who want to restyle everything themselves,
+// the sibling `@vibecook/mille-ui/headless` entry re-exports the same
+// structural components and hooks alongside a `milleClassNames` catalog
+// — see `./headless/index.ts`.
+
+export const VERSION = '0.1.0';
+
+// Phase 1 — provider, context, snapshot hooks.
+export { FileTreeProvider } from './provider.js';
+export type { FileTreeProviderProps } from './provider.js';
+export { FileTreeContext } from './context.js';
+export type { FileTreeContextValue, FileTreeFx } from './context.js';
+export {
+  useFileTreeContext,
+  useFileTreeSnapshot,
+  useVirtualizerForSnapshot,
+  useExpandedSet,
+  useSetExpandedBridge,
+  useFileTreeSelection,
+  useFileTreeKeyboard,
+  useTypeahead,
+  useControlledState,
+  useRenameState,
+  useContextMenuState,
+  useFileDecorations,
+  mergeDecorations,
+  EMPTY_DECORATION,
+  useClipboardState,
+  useFilterState,
+  useSearchResults,
+  useFileTreeDragDrop,
+  useAutoExpandDwell,
+  MIME_URI_LIST,
+  MIME_MILLE_ENTRIES,
+  MIME_CLAUDE_ATTACHMENT,
+  MIME_TEXT_PLAIN,
+} from './hooks/index.js';
+export type {
+  UseVirtualizerForSnapshotOptions,
+  UseVirtualizerForSnapshotResult,
+  ExpandedSetHandle,
+  SetExpandedFx,
+  FileTreeSelectionHandle,
+  UseFileTreeSelectionOptions,
+  UseFileTreeKeyboardOptions,
+  UseFileTreeKeyboardResult,
+  KeyboardExpansionActions,
+  KeyboardRowLookup,
+  KeyboardClipboardActions,
+  ViewportKeyboardActions,
+  TypeaheadHandle,
+  TypeaheadVisibleRow,
+  UseTypeaheadOptions,
+  UseControlledStateOptions,
+  UseRenameStateOptions,
+  RenameStateHandle,
+  RenameStateFx,
+  RenameStateSnapshot,
+  RenameStateControlled,
+  RenameCommitResult,
+  RenameFileSystemError,
+  ContextMenuStateHandle,
+  ClipboardStateHandle,
+  FilterStateHandle,
+  UseFilterStateControlled,
+  UseFilterStateOptions,
+  SearchableEngine,
+  SearchStatus,
+  UseSearchResultsOptions,
+  UseSearchResultsResult,
+  DragDropEffect,
+  DropPosition,
+  DragDropValidateContext,
+  DragDropValidationResult,
+  DragDropState,
+  DragDropHandlers,
+  UseFileTreeDragDropResult,
+  AutoExpandDwellHandle,
+  UseAutoExpandDwellOptions,
+} from './hooks/index.js';
+export type { CommandRegistryHandle } from './types.js';
+
+// Phase 3 — virtualized read-only tree.
+// Phase 6 adds FileContextMenu + ContextMenuItem.
+// Phase 10 adds FileDecorations.
+export {
+  FileTree,
+  FileTreeRow,
+  DisclosureChevron,
+  IndentGuides,
+  LoadingBadge,
+  FileRenameInput,
+  FileContextMenu,
+  ContextMenuItem,
+  FileDecorations,
+  FileTreeFilter,
+  SearchResultList,
+  FileTreeDragIndicator,
+} from './components/index.js';
+export type {
+  AriaRowProps,
+  DragDropOptions,
+  DisclosureChevronProps,
+  FileTreeEngine,
+  FileTreeProps,
+  FileTreeRowProps,
+  FileTreeSnapshotLike,
+  IndentGuidesProps,
+  LoadingBadgeProps,
+  MergedDecoration,
+  VirtualizerOffsetObserver,
+  VirtualizerRectObserver,
+  FileRenameInputProps,
+  FileContextMenuProps,
+  ContextMenuItemProps,
+  FileDecorationsProps,
+  FileTreeFilterHandle,
+  FileTreeFilterMode,
+  FileTreeFilterProps,
+  SearchResultListProps,
+  FileTreeDragIndicatorProps,
+} from './components/index.js';

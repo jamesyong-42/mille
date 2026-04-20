@@ -19,6 +19,11 @@ snapshots, and a React adapter.
 - Fuzzy filename search via `nucleo`
 - Decoration provider API (SCM / lint / problems overlay)
 
+### @vibecook/mille-ui
+
+React file-tree UI companion to `@vibecook/mille`. `v0.1.0` available.
+See `packages/mille-ui/README.md` and `packages/mille-ui/CHANGELOG.md`.
+
 ## Status
 
 v0.1 in-development. 401 tests green (204 Rust + 197 TypeScript).

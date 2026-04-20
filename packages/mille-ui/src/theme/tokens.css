@@ -1,0 +1,63 @@
+/*
+ * @vibecook/mille-ui — default CSS token surface.
+ *
+ * Every variable consumed by the styled default <FileTree> is declared here.
+ * Host apps either import this file (`import '@vibecook/mille-ui/tokens.css'`)
+ * or redeclare the subset they care about. All values below are placeholders
+ * matching MILLE_UI_SPEC.md §10.1 and will be tuned in later phases.
+ *
+ * Light mode is the default; dark mode overrides under [data-theme="dark"].
+ * Both use `:where()` so host selectors beat these with zero specificity war.
+ */
+
+:where(:root) {
+  /* Row geometry */
+  --mille-row-height: 22px;
+  --mille-indent-size: 8px;
+
+  /* Row backgrounds */
+  --mille-row-bg: transparent;
+  --mille-row-bg-hover: color-mix(in oklch, currentColor 6%, transparent);
+  --mille-row-bg-selected: color-mix(in oklch, currentColor 12%, transparent);
+  --mille-row-bg-selected-focused: var(--mille-accent-bg);
+
+  /* Accent + focus */
+  --mille-accent-bg: #0969da;
+  --mille-accent-fg: #ffffff;
+  --mille-focus-ring: 2px solid var(--mille-accent-bg);
+
+  /* Structural affordances */
+  --mille-indent-guide: color-mix(in oklch, currentColor 10%, transparent);
+  --mille-chevron-color: currentColor;
+
+  /* SCM / decoration colors */
+  --mille-decoration-modified: #d29922;
+  --mille-decoration-added: #3fb950;
+  --mille-decoration-deleted: #f85149;
+  --mille-decoration-ignored-opacity: 0.55;
+
+  /* Rename input */
+  --mille-rename-input-bg: Canvas;
+  --mille-rename-input-ring: var(--mille-accent-bg);
+}
+
+:where([data-theme="dark"]) {
+  --mille-row-bg: transparent;
+  --mille-row-bg-hover: color-mix(in oklch, currentColor 10%, transparent);
+  --mille-row-bg-selected: color-mix(in oklch, currentColor 18%, transparent);
+  --mille-row-bg-selected-focused: var(--mille-accent-bg);
+
+  --mille-accent-bg: #1f6feb;
+  --mille-accent-fg: #ffffff;
+  --mille-focus-ring: 2px solid var(--mille-accent-bg);
+
+  --mille-indent-guide: color-mix(in oklch, currentColor 18%, transparent);
+
+  --mille-decoration-modified: #e3b341;
+  --mille-decoration-added: #3fb950;
+  --mille-decoration-deleted: #f85149;
+  --mille-decoration-ignored-opacity: 0.5;
+
+  --mille-rename-input-bg: #0d1117;
+  --mille-rename-input-ring: var(--mille-accent-bg);
+}

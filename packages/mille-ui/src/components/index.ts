@@ -36,6 +36,7 @@ export type {
   DragDropOptions,
   FileTreeEngine,
   FileTreeProps,
+  FileTreeRef,
   FileTreeRowProps,
   FileTreeSnapshotLike,
   MergedDecoration,

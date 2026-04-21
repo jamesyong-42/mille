@@ -230,6 +230,65 @@ export interface FileTreeRowProps {
 }
 
 /**
+ * v0.2 B6 — Imperative tree handle exposed via `React.forwardRef`.
+ *
+ * `<FileTree>` is uncontrolled by default — selection, filter, clipboard,
+ * and expansion all live in-tree. Hosts that need to drive the tree
+ * programmatically (command palettes, "Reset" buttons, keyboard
+ * shortcuts that span beyond the tree) attach a ref and call these
+ * methods. Controlled-prop callers keep working unchanged.
+ *
+ * See MILLE_UI_SPEC.md §3.5.
+ */
+export interface FileTreeRef {
+  /**
+   * Expand ancestors + scroll to + focus the entry at the given
+   * workspace-relative POSIX path. No-op if the path doesn't
+   * resolve. Returns `true` on success.
+   *
+   * Resolution strategy:
+   *   1. If the engine exposes `getByUri`, build a URI of the form
+   *      `mille://<root>/<path>` and look up the entry.
+   *   2. Otherwise walk the snapshot's children level-by-level,
+   *      matching each path segment against `entry.name`.
+   *   3. If neither resolves, returns `false`.
+   */
+  revealPath(path: string): Promise<boolean>;
+
+  /** Same as `revealPath` but by `EntryId` (skips the path→id lookup). */
+  revealId(id: EntryId): boolean;
+
+  /**
+   * Scroll the virtualizer so the row at `index` is at the top. When the
+   * requested index is outside the current visible-row list, the call
+   * is a no-op.
+   */
+  scrollToRow(index: number): void;
+
+  /** Clear multi-select state; leaves focus alone. */
+  clearSelection(): void;
+
+  /** Reset filter text to the empty string. */
+  clearFilter(): void;
+
+  /** Drop cut/copy markers. */
+  clearClipboard(): void;
+
+  /**
+   * Focus the filter input. Returns `true` if a filter input was found
+   * (the caller-supplied `filterInputRef` or the tree's embedded
+   * filter when `showFilter` is on), `false` otherwise.
+   */
+  focusFilter(): boolean;
+
+  /**
+   * Convenience — clears selection + filter + clipboard + returns
+   * keyboard focus to the tree container.
+   */
+  reset(): void;
+}
+
+/**
  * Effect applied to a successful drop. `'move'` is the default;
  * `'copy'` fires when the user holds Alt/Option.
  */

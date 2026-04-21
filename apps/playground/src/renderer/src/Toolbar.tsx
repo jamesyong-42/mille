@@ -12,10 +12,10 @@
 //     PATH the client silently returns an empty map; no crash.
 //   - Agent-rules checkbox — calls `registerAgentRulesDecorations` with
 //     the built-in matcher list.
-//   - Reset button — stubbed: logs an intent and blurs the focused
-//     element. Full reset (selection/filter/clipboard clearing) will
-//     land when the playground wires up imperative handles to the tree;
-//     today the tree owns that state internally.
+//   - Reset button — v0.2 B6 wired up the mille-ui imperative `<FileTree>`
+//     handle (`FileTreeRef.reset()`). The parent (App.tsx) passes
+//     `onReset` which calls into the ref and clears selection / filter
+//     / clipboard in one shot, then returns keyboard focus to the tree.
 //
 // Phase A1 removed the "port-safe" no-op shim — `PortFileExplorer` now
 // ships `registerDecorationProvider`, so the companions register
@@ -52,11 +52,25 @@ export interface ToolbarProps {
   /** v0.2 B5 — async-load lifecycle signal from the parent. Used to
    *  clear the "Loading Material…" toast when the bundle lands. */
   readonly iconThemeStatus?: 'idle' | 'loading' | 'loaded' | 'error';
+  /**
+   * v0.2 B6 — parent-supplied reset callback. Typically calls
+   * `treeRef.current?.reset()` to clear selection, filter, and
+   * clipboard, and return keyboard focus to the tree.
+   */
+  onReset?(): void;
 }
 
 export function Toolbar(props: ToolbarProps): ReactElement {
-  const { fx, rootPath, theme, onThemeChange, iconThemeId, onIconThemeChange, iconThemeStatus } =
-    props;
+  const {
+    fx,
+    rootPath,
+    theme,
+    onThemeChange,
+    iconThemeId,
+    onIconThemeChange,
+    iconThemeStatus,
+    onReset,
+  } = props;
 
   const [toast, setToast] = useState<string | null>(null);
 
@@ -181,17 +195,20 @@ export function Toolbar(props: ToolbarProps): ReactElement {
   }, [pickerBusy]);
 
   const handleReset = useCallback(() => {
-    // v0.1 reset is best-effort: the tree owns its selection / filter /
-    // clipboard state internally (uncontrolled). We blur whatever is
-    // focused so the keyboard handler re-enters fresh, and log an
-    // intent for the dev console — a proper reset needs an imperative
-    // handle (deferred to v0.2).
+    // v0.2 B6 — delegate to the parent's imperative-handle wiring.
+    // `onReset` calls `treeRef.current?.reset()` which clears
+    // selection + filter + clipboard in one shot and returns keyboard
+    // focus to the tree. When `onReset` is absent (older host), fall
+    // back to the v0.1 best-effort blur.
+    if (onReset) {
+      onReset();
+      setToast('Tree reset: selection / filter / clipboard cleared.');
+      return;
+    }
     const active = document.activeElement;
     if (active instanceof HTMLElement) active.blur();
-    // eslint-disable-next-line no-console
-    console.info('[playground] reset intent — selection/filter/clipboard live in-tree');
-    setToast('Reset: best-effort. Imperative tree API lands in v0.2.');
-  }, []);
+    setToast('Reset: best-effort. Host did not supply onReset.');
+  }, [onReset]);
 
   return (
     <div className="toolbar">

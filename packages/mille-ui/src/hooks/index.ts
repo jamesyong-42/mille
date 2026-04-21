@@ -103,3 +103,7 @@ export {
   type AutoExpandDwellHandle,
   type UseAutoExpandDwellOptions,
 } from './useAutoExpandDwell.js';
+
+// v0.2 B6 — imperative tree handle.
+export { useFileTreeRef } from './useFileTreeRef.js';
+export type { FileTreeRef } from './useFileTreeRef.js';

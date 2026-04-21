@@ -10,7 +10,7 @@
 // rules. See `./Toolbar.tsx`.
 
 import { useEffect, useMemo, useState, type ReactElement } from 'react';
-import { FileTreeProvider, FileTree } from '@vibecook/mille-ui';
+import { FileTreeProvider, FileTree, useFileTreeRef } from '@vibecook/mille-ui';
 import type { IconTheme } from '@vibecook/mille-ui/icons';
 import { defaultIconTheme } from '@vibecook/mille-ui/icons';
 import { createCommandRegistry, defaultCommands } from '@vibecook/mille-ui/commands';
@@ -114,6 +114,10 @@ function Explorer({ fx, root }: { fx: PortFileExplorer; root: string }): ReactEl
   // mutation commands (rename / delete / move / copy / paste / open).
   const commands = useMemo(() => createCommandRegistry(defaultCommands), []);
 
+  // v0.2 B6 — imperative handle for the tree. Lets the Toolbar's Reset
+  // button actually clear selection / filter / clipboard end-to-end.
+  const treeRef = useFileTreeRef();
+
   // Theme: toggles `data-theme` on <html>. The tokens.css we import at
   // entry defines both light and dark palettes gated on that attribute.
   const [theme, setTheme] = useState<ThemeMode>('dark');
@@ -189,9 +193,11 @@ function Explorer({ fx, root }: { fx: PortFileExplorer; root: string }): ReactEl
           iconThemeId={iconThemeId}
           onIconThemeChange={setIconThemeId}
           iconThemeStatus={iconThemeStatus}
+          onReset={() => treeRef.current?.reset()}
         />
         <div className="tree-container">
           <FileTree
+            ref={treeRef}
             ariaLabel="Workspace files"
             iconTheme={iconTheme}
             showFilter

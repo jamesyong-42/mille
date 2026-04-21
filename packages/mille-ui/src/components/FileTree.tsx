@@ -15,12 +15,15 @@
 //     row the user interacted with, or the first row if none.
 
 import {
+  forwardRef,
   useCallback,
   useEffect,
+  useImperativeHandle,
   useMemo,
   useRef,
   type CSSProperties,
   type FocusEvent as ReactFocusEvent,
+  type ForwardedRef,
   type MouseEvent as ReactMouseEvent,
   type ReactElement,
   type ReactNode,
@@ -59,6 +62,7 @@ import type {
   AriaRowProps,
   FileTreeEngine,
   FileTreeProps,
+  FileTreeRef,
   FileTreeRowProps,
   FileTreeSnapshotLike,
 } from './types.js';
@@ -76,23 +80,35 @@ interface CommandRegistryHandleLike {
  * `<FileTreeProvider>` so single-tree apps can drop in without setting
  * up a provider. Callers that wrap `<FileTree>` in their own
  * `<FileTreeProvider>` (e.g. to pass a command registry) omit `fx`.
+ *
+ * v0.2 B6 — wrapped in `React.forwardRef<FileTreeRef, ...>` so hosts can
+ * drive the tree imperatively via `revealPath` / `reset` / etc. Callers
+ * that don't need the handle just omit `ref` — existing code keeps
+ * working unchanged.
  */
-export function FileTree(props: FileTreeProps): ReactElement {
+function FileTreeBase(
+  props: FileTreeProps,
+  ref: ForwardedRef<FileTreeRef>,
+): ReactElement {
   const { fx, ...rest } = props;
   if (fx) {
     return (
       <FileTreeProvider fx={fx as unknown as Parameters<typeof FileTreeProvider>[0]['fx']}>
-        <FileTreeInner {...rest} />
+        <FileTreeInner {...rest} forwardedRef={ref} />
       </FileTreeProvider>
     );
   }
-  return <FileTreeInner {...rest} />;
+  return <FileTreeInner {...rest} forwardedRef={ref} />;
 }
+
+export const FileTree = forwardRef<FileTreeRef, FileTreeProps>(FileTreeBase);
 FileTree.displayName = 'FileTree';
 
 // ─── Inner tree — assumes provider is present ──────────────────────
 
-type FileTreeInnerProps = Omit<FileTreeProps, 'fx'>;
+type FileTreeInnerProps = Omit<FileTreeProps, 'fx'> & {
+  readonly forwardedRef?: ForwardedRef<FileTreeRef>;
+};
 
 function FileTreeInner(props: FileTreeInnerProps): ReactElement {
   const {
@@ -127,6 +143,7 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
     showFilter = false,
     dragDrop,
     disableDragDrop = false,
+    forwardedRef,
     __testSearchDebounceMs,
     __testObserveElementRect,
     __testObserveElementOffset,
@@ -193,7 +210,7 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
   useSetExpandedBridge(fx, expanded);
 
   // Virtualizer. `count` reflects the snapshot's `visibleRowCount`.
-  const { virtualItems, totalSize, count } = useVirtualizerForSnapshot({
+  const { virtualItems, totalSize, count, scrollToIndex } = useVirtualizerForSnapshot({
     snapshot,
     expanded,
     rowHeight,
@@ -617,6 +634,277 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
       }
     },
     [selection],
+  );
+
+  // ─── v0.2 B6 — Imperative handle ───────────────────────────────────
+  //
+  // Exposes a `FileTreeRef` surface for hosts that want to drive the
+  // tree programmatically (command palette, "Reset" button, etc.). All
+  // state mutators delegate to the existing hooks (`selection.clear`,
+  // `filterState.clear`, `clipboard.clear`, `addExpanded`, …); the
+  // `revealPath` implementation sniffs for `fx.getByUri` first and
+  // falls back to a snapshot child-walk.
+
+  // Computing an ancestor chain from a target id to its root walks
+  // `entry.parentId`. Returned leaf-first; callers reverse for
+  // top-down expansion. Short-circuits when any ancestor is missing.
+  const ancestorsOf = useCallback(
+    (id: EntryId): readonly EntryId[] => {
+      const chain: EntryId[] = [];
+      let cursor: EntryId | null = id;
+      let guard = 0;
+      while (cursor !== null && guard < 10_000) {
+        const entry = snapshot.getById(cursor);
+        if (entry === null) break;
+        if (entry.parentId === null) break;
+        chain.push(entry.parentId);
+        cursor = entry.parentId;
+        guard += 1;
+      }
+      return chain;
+    },
+    [snapshot],
+  );
+
+  const revealId = useCallback(
+    (id: EntryId): boolean => {
+      // Verify the id actually exists in the current mirror. If not we
+      // can't reveal it — the caller is probably racing a walker; they
+      // should retry once the next delta lands.
+      if (snapshot.getById(id) === null) return false;
+
+      // Expand every ancestor (top-down order doesn't matter because
+      // each `add` is idempotent and the sets commute).
+      for (const ancestorId of ancestorsOf(id)) {
+        addExpanded(ancestorId);
+      }
+
+      // Once expanded, the next render's `visibleRows` will contain the
+      // target. Today's list may still be stale (we just dispatched
+      // setState calls via `addExpanded`), but we can look up by
+      // walking `visibleRows` as-is; if the row isn't there yet, fall
+      // back to zero.
+      const idx = visibleRows.findIndex((r) => r.id === id);
+      if (idx >= 0) {
+        scrollToIndex(idx, { align: 'start' });
+        selection.setFocused(id);
+      } else {
+        // Queue a focus-only update — the re-rendered tree's
+        // `onContainerFocus` + roving tabindex will pick this up.
+        selection.setFocused(id);
+      }
+      return true;
+    },
+    [snapshot, ancestorsOf, addExpanded, visibleRows, scrollToIndex, selection],
+  );
+
+  // `fx.getByUri` is async; when the engine exposes it we use it to
+  // turn a workspace-relative path into an `EntryId`. Many minimal
+  // engines (fakes, port clients) don't implement it — we fall back to
+  // a depth-first name-match walk over the snapshot's already-known
+  // children. Both paths return `null` when resolution fails.
+  const resolvePath = useCallback(
+    async (path: string): Promise<EntryId | null> => {
+      const trimmed = path.replace(/^\/+/, '').replace(/\/+$/, '');
+      if (trimmed.length === 0) {
+        const firstRoot = snapshot.roots()[0];
+        return firstRoot ? firstRoot.id : null;
+      }
+      const segments = trimmed.split('/');
+
+      // Strategy 1 — engine-native URI lookup when available.
+      const fxWithUri = fx as unknown as {
+        getByUri?: (uri: string) => Promise<{ id: EntryId } | null>;
+      };
+      if (typeof fxWithUri.getByUri === 'function') {
+        try {
+          // Build a synthetic `mille://` URI relative to the first
+          // root. The engine resolves whatever URI forms it accepts;
+          // we pass several common shapes to improve the hit rate.
+          const firstRoot = snapshot.roots()[0];
+          const candidates: string[] = [];
+          if (firstRoot) {
+            candidates.push(`mille://${firstRoot.name}/${trimmed}`);
+          }
+          candidates.push(`file:///${trimmed}`);
+          candidates.push(trimmed);
+          for (const uri of candidates) {
+            const entry = await fxWithUri.getByUri(uri);
+            if (entry && typeof entry.id === 'number') {
+              return entry.id;
+            }
+          }
+        } catch {
+          // Swallow — fall through to the child-walk fallback.
+        }
+      }
+
+      // Strategy 2 — depth-first walk over each root's children.
+      // Matches the first segment against any root by name; subsequent
+      // segments against direct children. Uses the snapshot's
+      // already-loaded entries only (no engine RPC).
+      const roots = snapshot.roots();
+      const snapAny = snapshot as unknown as {
+        childrenOf?: (id: EntryId) => readonly Entry[];
+      };
+      const childrenOf = (parentId: EntryId): readonly Entry[] => {
+        if (typeof snapAny.childrenOf === 'function') {
+          return snapAny.childrenOf(parentId);
+        }
+        // Fallback: scan the full row list for entries whose parentId
+        // matches. `visibleRows` is bounded by what's currently
+        // expanded; unexpanded subtrees won't be represented. Callers
+        // needing deeper resolution should expand first.
+        const out: Entry[] = [];
+        for (const row of visibleRows) {
+          if (row.parentId === parentId) out.push(row as unknown as Entry);
+        }
+        return out;
+      };
+
+      // Descend one segment at a time.
+      let cursor: Entry | null = null;
+      const first = segments[0];
+      if (first === undefined) return null;
+      for (const root of roots) {
+        if (root.name === first) {
+          cursor = root;
+          break;
+        }
+      }
+      // Also allow the first segment to be a direct child of the first
+      // root — matches the common case where `path` is relative to the
+      // single workspace root (e.g. 'src/foo.ts').
+      if (cursor === null && roots.length > 0) {
+        const firstRoot = roots[0];
+        if (firstRoot) {
+          for (const child of childrenOf(firstRoot.id)) {
+            if (child.name === first) {
+              cursor = child;
+              break;
+            }
+          }
+          // If the path segment matched, start the remaining descent
+          // below from the second segment; otherwise we'll return null
+          // after the next loop because cursor is still null.
+          if (cursor !== null) {
+            for (let i = 1; i < segments.length; i += 1) {
+              const seg = segments[i];
+              const kids = childrenOf(cursor.id);
+              let matched: Entry | null = null;
+              for (const k of kids) {
+                if (k.name === seg) {
+                  matched = k;
+                  break;
+                }
+              }
+              if (matched === null) return null;
+              cursor = matched;
+            }
+            return cursor.id;
+          }
+        }
+      }
+      if (cursor === null) return null;
+
+      // Descend the remaining segments from the matched first-segment
+      // entry (the "first segment is a root name" branch).
+      for (let i = 1; i < segments.length; i += 1) {
+        const seg = segments[i];
+        const kids = childrenOf(cursor.id);
+        let matched: Entry | null = null;
+        for (const k of kids) {
+          if (k.name === seg) {
+            matched = k;
+            break;
+          }
+        }
+        if (matched === null) return null;
+        cursor = matched;
+      }
+      return cursor.id;
+    },
+    [fx, snapshot, visibleRows],
+  );
+
+  const revealPath = useCallback(
+    async (path: string): Promise<boolean> => {
+      const id = await resolvePath(path);
+      if (id === null) return false;
+      return revealId(id);
+    },
+    [resolvePath, revealId],
+  );
+
+  const focusFilter = useCallback((): boolean => {
+    const ext = filterInputRef?.current;
+    if (ext && typeof ext.focus === 'function') {
+      ext.focus();
+      return true;
+    }
+    const emb = embeddedFilterInputRef.current;
+    if (emb && typeof emb.focus === 'function') {
+      emb.focus();
+      return true;
+    }
+    return false;
+  }, [filterInputRef]);
+
+  useImperativeHandle(
+    forwardedRef,
+    (): FileTreeRef => ({
+      revealPath,
+      revealId,
+      scrollToRow: (index: number) => {
+        scrollToIndex(index, { align: 'start' });
+      },
+      clearSelection: () => {
+        selection.clear();
+      },
+      clearFilter: () => {
+        filterState.clear();
+      },
+      clearClipboard: () => {
+        clipboard.clear();
+      },
+      focusFilter,
+      reset: () => {
+        selection.clear();
+        filterState.clear();
+        clipboard.clear();
+        // Return keyboard focus to the tree. The tree container itself
+        // isn't focusable (rows own the roving tabindex); when a first
+        // row exists, focus it so arrow keys work immediately. Without
+        // any rows we call `.focus()` on the container anyway — if the
+        // caller stapled a `tabIndex` this still lands meaningfully.
+        const first = visibleRows[0];
+        if (first !== undefined) {
+          selection.setFocused(first.id);
+          const scrollEl = scrollerRef.current;
+          const rowEl = scrollEl
+            ? scrollEl.querySelector<HTMLElement>(
+                `[data-mille-row-id="${first.id}"]`,
+              )
+            : null;
+          if (rowEl && typeof rowEl.focus === 'function') {
+            rowEl.focus();
+            return;
+          }
+        }
+        const el = scrollerRef.current;
+        if (el && typeof el.focus === 'function') el.focus();
+      },
+    }),
+    [
+      revealPath,
+      revealId,
+      scrollToIndex,
+      selection,
+      filterState,
+      clipboard,
+      focusFilter,
+      visibleRows,
+    ],
   );
 
   // ─── Phase 8 — filter / search derivations ──────────────────────────

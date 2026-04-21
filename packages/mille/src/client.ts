@@ -282,6 +282,23 @@ function resolveRoot(u: Uri | string): string {
   return u.path;
 }
 
+/**
+ * Linear scan of a folder's direct children for a name match. Used by
+ * `getByUri` to walk the path segment-by-segment without pulling the
+ * full snapshot tree into JS.
+ */
+function findNamedChild(
+  snap: { getById(id: number): { id: number; name: string } | null },
+  childIds: number[],
+  name: string,
+): { id: number; name: string } | null {
+  for (const kidId of childIds) {
+    const kid = snap.getById(kidId);
+    if (kid !== null && kid.name === name) return kid;
+  }
+  return null;
+}
+
 function encodeFollowSymlinks(v: ExplorerOptions['followSymlinks']): string | undefined {
   if (v === undefined) return undefined;
   if (v === true) return 'true';
@@ -366,6 +383,73 @@ export class FileExplorer {
 
   getSnapshot(): MirrorSnapshot {
     return new MirrorSnapshot(this.nativeFx.getSnapshot(), this.decorations);
+  }
+
+  /**
+   * URI → Entry lookup. `api.d.ts` promises this as async; here it's
+   * synchronous under the hood (the native snapshot is already in
+   * memory) but kept async to match the contract. Resolves `file://`
+   * paths by walking the snapshot tree from the root whose path
+   * prefix matches.
+   *
+   * Other schemes (`memfs:`, `ssh:`, etc.) return null — provider
+   * registration lands in a later phase.
+   */
+  async getByUri(uri: Uri): Promise<Entry | null> {
+    if (uri.scheme !== 'file') return null;
+    // Find the configured root whose path is a prefix of `uri.path`.
+    let match: { root: string; relative: string } | null = null;
+    for (const rp of this.rootPaths) {
+      if (uri.path === rp) {
+        match = { root: rp, relative: '' };
+        break;
+      }
+      const withSlash = rp.endsWith('/') ? rp : `${rp}/`;
+      if (uri.path.startsWith(withSlash)) {
+        match = { root: rp, relative: uri.path.slice(withSlash.length) };
+        break;
+      }
+    }
+    if (match === null) return null;
+
+    const snap = this.nativeFx.getSnapshot();
+    // Find the root Entry whose name matches the last path segment of
+    // the configured root. Matches the same identity used by `pathOf`.
+    const rootName = match.root.split('/').pop() ?? match.root;
+    let cursor = snap.roots().find((e) => e.name === rootName) ?? null;
+    if (cursor === null) return null;
+    if (match.relative.length === 0) {
+      return (cursor as unknown as Entry);
+    }
+
+    // Walk each path segment, looking for a child whose name matches.
+    // When a segment isn't in the store yet (lazy `roots-only` init),
+    // kick a depth-1 prefetch on the current cursor and re-snapshot.
+    // Tracks only the id across iterations so TS narrowing stays clean;
+    // the final native entry is resolved from the last snapshot.
+    const segments = match.relative.split('/').filter((s) => s.length > 0);
+    let curId: number = cursor.id;
+    let lastSnap = snap;
+    for (const seg of segments) {
+      let kids = lastSnap.childrenOf(curId);
+      let found = findNamedChild(lastSnap, kids, seg);
+      if (found === null) {
+        // Miss: try a depth-1 walk. Native filters dedupe already-
+        // known ids so this is idempotent when the parent was walked.
+        try {
+          await this.prefetch(curId, { depth: 1 });
+        } catch {
+          return null;
+        }
+        lastSnap = this.nativeFx.getSnapshot();
+        kids = lastSnap.childrenOf(curId);
+        found = findNamedChild(lastSnap, kids, seg);
+      }
+      if (found === null) return null;
+      curId = found.id;
+    }
+    const finalEntry = lastSnap.getById(curId);
+    return finalEntry === null ? null : (finalEntry as unknown as Entry);
   }
 
   /**

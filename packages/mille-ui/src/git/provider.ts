@@ -302,8 +302,13 @@ export function registerGitDecorations(
       for (const leaf of leafEntries) {
         let cursor = snapshot.getById(leaf.id);
         if (cursor === null) continue;
+        // napi-rs maps Rust `Option<i64>::None` to JS `undefined` (not
+        // `null`). Loose `== null` catches both sentinels; strict
+        // comparisons let undefined through and `getById(undefined)`
+        // throws "Failed to convert napi value Undefined into rust
+        // type i64". Same fix as `client.ts#pathOf`.
         let parentId = cursor.parentId;
-        while (parentId !== null) {
+        while (parentId != null) {
           // Do not clobber a real leaf decoration with an ancestor
           // muted one — a modified folder keeps its own status.
           if (!next.has(parentId)) {

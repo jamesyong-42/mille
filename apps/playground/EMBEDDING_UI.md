@@ -314,6 +314,17 @@ the box.
   real product, provide an OS-native "open folder" flow (Electron's
   `dialog.showOpenDialogSync`) and persist the last choice.
 
+## 6.1. Recent folders (v0.2 B7)
+
+The playground persists the last ~10 opened paths to
+`app.getPath('userData') + '/recent-folders.json'` and exposes them
+via `window.millePlayground.getRecentFolders()`; the toolbar's "Open
+folder…" control is a dropdown listing recents + a "Browse…" row.
+Clear by deleting that JSON file (or the whole `userData` dir).
+Stored paths are trusted — they can only be seeded by the OS-native
+folder picker, never renderer-supplied strings — so the main-process
+skips canonicalization beyond `statSync` directory validation.
+
 ## 7. Reference
 
 - Playground source: `apps/playground/src/`

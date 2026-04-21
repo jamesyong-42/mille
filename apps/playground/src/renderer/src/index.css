@@ -129,6 +129,76 @@ header h1 {
   color: #f87171;
 }
 
+/* v0.2 B7 — recent-folders dropdown. Playground-only, no Radix. */
+.recents-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.recents-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  min-width: 260px;
+  max-width: 440px;
+  margin: 0;
+  padding: 4px 0;
+  list-style: none;
+  background: #1b1d2a;
+  border: 1px solid #2e3142;
+  border-radius: 4px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
+  z-index: 50;
+}
+
+html[data-theme='light'] .recents-menu {
+  background: #ffffff;
+  border-color: #d0d7de;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.12);
+}
+
+.recents-menu li {
+  margin: 0;
+}
+
+.recents-menu button,
+.recents-menu .recents-empty {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 4px 10px;
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.recents-menu button:hover,
+.recents-menu button:focus-visible {
+  background: color-mix(in oklch, currentColor 12%, transparent);
+  outline: none;
+}
+
+.recents-menu .recents-empty {
+  color: #8b90a3;
+  cursor: default;
+}
+
+.recents-menu hr {
+  border: none;
+  border-top: 1px solid #2e3142;
+  margin: 4px 0;
+}
+
+html[data-theme='light'] .recents-menu hr {
+  border-top-color: #d0d7de;
+}
+
 .tree-container {
   flex: 1 1 auto;
   min-height: 0;

@@ -10,9 +10,59 @@ import {
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { cwd } from 'node:process';
-import { statSync } from 'node:fs';
+import { readFileSync, statSync, writeFileSync } from 'node:fs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+
+// v0.2 B7 — recent folders persistence.
+//
+// The last ~10 pick-and-open paths are persisted to a small JSON file
+// in `app.getPath('userData')`. On every successful `openWorkspace`
+// the path is prepended (dedup by equality) and the list is capped.
+// The renderer reads it via `ipcMain.handle('get-recent-folders')` to
+// populate the toolbar dropdown.
+//
+// Resolved lazily in `app.whenReady()` — `app.getPath('userData')`
+// throws if called before then.
+const RECENT_FOLDERS_MAX = 10;
+let recentFoldersPath: string | null = null;
+
+function loadRecentFolders(): string[] {
+  if (recentFoldersPath === null) return [];
+  try {
+    const raw = readFileSync(recentFoldersPath, 'utf8');
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((p): p is string => typeof p === 'string');
+  } catch {
+    // Missing file, bad JSON, permissions — treat as empty.
+    return [];
+  }
+}
+
+function saveRecentFolders(list: readonly string[]): void {
+  if (recentFoldersPath === null) return;
+  try {
+    writeFileSync(recentFoldersPath, JSON.stringify(list, null, 2), 'utf8');
+  } catch {
+    // Disk full, permissions — non-fatal; recents are a convenience.
+  }
+}
+
+/**
+ * Prepend `path` to the persisted recents list, dedup by equality,
+ * cap at `RECENT_FOLDERS_MAX`. Called from `openWorkspace` so both
+ * the initial boot and picker-driven swaps bump the list.
+ */
+function recordRecentFolder(path: string): void {
+  const current = loadRecentFolders();
+  const deduped = current.filter((p) => p !== path);
+  deduped.unshift(path);
+  if (deduped.length > RECENT_FOLDERS_MAX) {
+    deduped.length = RECENT_FOLDERS_MAX;
+  }
+  saveRecentFolders(deduped);
+}
 
 // Default to `cwd()` — under `pnpm --filter playground dev` this is
 // the monorepo root, which populates in ~1s. A typical macOS $HOME
@@ -69,6 +119,14 @@ function openWorkspace(win: BrowserWindow, root: string): void {
   const proc = forkFxProcess(root);
   fxProcess = proc;
   console.log(`[playground-main] forked fx-host for ${root}`);
+
+  // v0.2 B7 — bump the recents list. The fx utility may still fail
+  // (e.g. path vanished between the picker close and walker start)
+  // but the path has already passed `statSync` validation in the
+  // IPC handler for picker-driven opens. For the DEFAULT_WORKSPACE_ROOT
+  // boot path we accept the small risk of recording a bad entry — the
+  // loader tolerates missing paths by simply failing to walk them.
+  recordRecentFolder(root);
 
   const onMessage = (msg: unknown): void => {
     const m = msg as { type?: string } | undefined;
@@ -133,9 +191,17 @@ async function createWindow(): Promise<void> {
     }
     openWorkspace(win, raw);
   });
+
+  // v0.2 B7 — renderer reads this to populate the toolbar dropdown.
+  // Cheap enough to re-read from disk on every call; no cache layer.
+  ipcMain.handle('get-recent-folders', () => loadRecentFolders());
 }
 
-app.whenReady().then(createWindow);
+app.whenReady().then(() => {
+  // v0.2 B7 — resolve userData path now that Electron is ready.
+  recentFoldersPath = join(app.getPath('userData'), 'recent-folders.json');
+  return createWindow();
+});
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();

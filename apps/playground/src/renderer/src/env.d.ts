@@ -5,6 +5,10 @@
 // the preload sources. Keep both copies in sync.
 export interface MillePlaygroundApi {
   pickAndOpenWorkspace(): Promise<string | null>;
+  /** v0.2 B7 — open a known path (from recents) without re-prompting. */
+  openWorkspace(path: string): Promise<void>;
+  /** v0.2 B7 — last ~10 successfully-opened folders, newest first. */
+  getRecentFolders(): Promise<string[]>;
 }
 
 declare global {

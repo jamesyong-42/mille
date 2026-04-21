@@ -42,6 +42,42 @@ import type { PortFileExplorer } from '@vibecook/mille/port';
 export type ThemeMode = 'light' | 'dark';
 export type IconThemeId = 'default' | 'material';
 
+/**
+ * v0.2 B7 — compact path display for the recents dropdown. Absolute
+ * paths inside `$HOME` get `~/…` rewriting; anything else gets
+ * left-truncated (middle-ellipsis feels clever but reads worse at
+ * a glance). Full path is preserved on hover via `title` at the
+ * call site. Lives here (module-local) because its only consumer is
+ * the recents menu below — not worth its own file.
+ *
+ * We intentionally don't call into `path.basename` / the electron
+ * API surface from the renderer; this is string-level pretty-printing
+ * with a homedir hint shipped from the main process would be nicer,
+ * but the extra IPC round-trip isn't worth it for a menu entry.
+ */
+const HOME_PREFIX_HINT = /^\/Users\/[^/]+\//;
+const MAX_DISPLAY_LEN = 40;
+
+function formatRecentPath(raw: string): string {
+  let display = raw;
+  // Best-effort home substitution. A renderer has no `os.homedir()`,
+  // so we pattern-match macOS-style absolute home paths. Linux /root
+  // and /home/xxx fall through to the ellipse branch below, which
+  // handles them safely even if the tilde doesn't appear.
+  const homeMatch = HOME_PREFIX_HINT.exec(raw);
+  if (homeMatch !== null) {
+    display = '~/' + raw.slice(homeMatch[0].length);
+  } else if (raw.startsWith('/home/')) {
+    const rest = raw.slice('/home/'.length);
+    const slash = rest.indexOf('/');
+    if (slash > 0) display = '~/' + rest.slice(slash + 1);
+  }
+  if (display.length > MAX_DISPLAY_LEN) {
+    display = '…' + display.slice(display.length - (MAX_DISPLAY_LEN - 1));
+  }
+  return display;
+}
+
 export interface ToolbarProps {
   readonly fx: PortFileExplorer;
   readonly rootPath: string;
@@ -171,8 +207,46 @@ export function Toolbar(props: ToolbarProps): ReactElement {
 
   const [pickerBusy, setPickerBusy] = useState(false);
 
-  const handleOpenFolder = useCallback(async () => {
+  // v0.2 B7 — recents dropdown state.
+  const [recentsOpen, setRecentsOpen] = useState(false);
+  const [recents, setRecents] = useState<string[]>([]);
+  const recentsWrapRef = useRef<HTMLDivElement | null>(null);
+
+  // Close the menu when clicking outside. Attached only while open so
+  // we don't leak a listener on every toolbar. Uses `mousedown` so the
+  // close fires before React commits any inner click — matches the
+  // usual dropdown convention.
+  useEffect(() => {
+    if (!recentsOpen) return;
+    const onDown = (evt: MouseEvent): void => {
+      const root = recentsWrapRef.current;
+      if (root !== null && !root.contains(evt.target as Node)) {
+        setRecentsOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [recentsOpen]);
+
+  const toggleRecents = useCallback(async () => {
+    const next = !recentsOpen;
+    setRecentsOpen(next);
+    if (next) {
+      try {
+        const list = await window.millePlayground.getRecentFolders();
+        // Filter out the current root — clicking it would be a no-op
+        // anyway and the parent handshake idempotency would still
+        // re-attach. Hiding keeps the list focused on *other* options.
+        setRecents(list.filter((p) => p !== rootPath));
+      } catch {
+        setRecents([]);
+      }
+    }
+  }, [recentsOpen, rootPath]);
+
+  const handlePickBrowse = useCallback(async () => {
     if (pickerBusy) return;
+    setRecentsOpen(false);
     setPickerBusy(true);
     try {
       const picked = await window.millePlayground.pickAndOpenWorkspace();
@@ -194,6 +268,33 @@ export function Toolbar(props: ToolbarProps): ReactElement {
     }
   }, [pickerBusy]);
 
+  const handlePickRecent = useCallback(
+    async (path: string) => {
+      if (pickerBusy) return;
+      setRecentsOpen(false);
+      // Re-picking the already-open root is treated as a no-op. The
+      // main-process handshake is idempotent (kills + re-forks the
+      // utility), but surfacing a brief toast is friendlier than a
+      // silent reload. Filter above usually prevents reaching here.
+      if (path === rootPath) {
+        setToast(`Already open: ${path}`);
+        return;
+      }
+      setPickerBusy(true);
+      try {
+        await window.millePlayground.openWorkspace(path);
+        setToast(`Open folder: ${path} — walking…`);
+      } catch (err) {
+        setToast(
+          `Open folder failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      } finally {
+        setPickerBusy(false);
+      }
+    },
+    [pickerBusy, rootPath],
+  );
+
   const handleReset = useCallback(() => {
     // v0.2 B6 — delegate to the parent's imperative-handle wiring.
     // `onReset` calls `treeRef.current?.reset()` which clears
@@ -213,9 +314,57 @@ export function Toolbar(props: ToolbarProps): ReactElement {
   return (
     <div className="toolbar">
       <div className="toolbar-group">
-        <button type="button" onClick={handleOpenFolder} disabled={pickerBusy}>
-          {pickerBusy ? 'Opening…' : 'Open folder…'}
-        </button>
+        <div className="recents-wrap" ref={recentsWrapRef}>
+          <button
+            type="button"
+            onClick={() => void toggleRecents()}
+            disabled={pickerBusy}
+            aria-haspopup="menu"
+            aria-expanded={recentsOpen}
+          >
+            {pickerBusy ? 'Opening…' : 'Open folder… ▾'}
+          </button>
+          {recentsOpen ? (
+            <ul className="recents-menu" role="menu">
+              {recents.length === 0 ? (
+                <li role="none">
+                  <span
+                    className="recents-empty"
+                    role="menuitem"
+                    aria-disabled="true"
+                  >
+                    No recent folders yet
+                  </span>
+                </li>
+              ) : (
+                recents.map((p) => (
+                  <li key={p} role="none">
+                    <button
+                      type="button"
+                      role="menuitem"
+                      title={p}
+                      onClick={() => void handlePickRecent(p)}
+                    >
+                      {formatRecentPath(p)}
+                    </button>
+                  </li>
+                ))
+              )}
+              <li role="separator" aria-hidden="true">
+                <hr />
+              </li>
+              <li role="none">
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => void handlePickBrowse()}
+                >
+                  Browse…
+                </button>
+              </li>
+            </ul>
+          ) : null}
+        </div>
       </div>
 
       <div className="toolbar-group" role="group" aria-label="Theme">

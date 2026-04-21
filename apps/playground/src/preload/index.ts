@@ -33,4 +33,27 @@ contextBridge.exposeInMainWorld('millePlayground', {
     await ipcRenderer.invoke('open-workspace', picked);
     return picked;
   },
+
+  /**
+   * v0.2 B7 — open a specific path directly, bypassing the native
+   * picker. Used by the recents dropdown to one-click-swap between
+   * previously-visited folders. Main-process validates `path` is an
+   * existing directory and throws otherwise; caller should surface
+   * the rejection (e.g. a toast) if the entry has gone stale.
+   */
+  async openWorkspace(path: string): Promise<void> {
+    await ipcRenderer.invoke('open-workspace', path);
+  },
+
+  /**
+   * v0.2 B7 — recents list, newest first, capped at ~10 entries and
+   * persisted to `app.getPath('userData') + '/recent-folders.json'`.
+   * Cheap re-read from disk per call (no IPC push-channel needed for
+   * a dropdown that opens on demand).
+   */
+  async getRecentFolders(): Promise<string[]> {
+    const list: unknown = await ipcRenderer.invoke('get-recent-folders');
+    if (!Array.isArray(list)) return [];
+    return list.filter((p): p is string => typeof p === 'string');
+  },
 });

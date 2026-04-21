@@ -26,7 +26,11 @@ import { mkdtempSync, writeFileSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 
-const { createShellGitClient } = await import('../dist/git.js');
+// v0.2 — shell client moved from `/git` to `/git/node` because it uses
+// `node:child_process` and can't bundle into a renderer context; the
+// renderer-safe `/git` barrel only exports types + the renderer-
+// bundler-safe provider now.
+const { createShellGitClient } = await import('../dist/git-node.js');
 
 // ─── Git availability probe ──────────────────────────────────────────
 

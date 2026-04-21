@@ -56,4 +56,15 @@ contextBridge.exposeInMainWorld('millePlayground', {
     if (!Array.isArray(list)) return [];
     return list.filter((p): p is string => typeof p === 'string');
   },
+
+  /**
+   * v0.2 — toggle git decorations. The shell-based `GitClient` uses
+   * `node:child_process` + `fs.watch`, which can't run in the
+   * renderer, so the provider lives in the fx utility process and
+   * A1's decoration fan-out carries badges to every attached port
+   * session automatically.
+   */
+  async setGitDecorations(enabled: boolean): Promise<void> {
+    await ipcRenderer.invoke('set-git-decorations', enabled);
+  },
 });

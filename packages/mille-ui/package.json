@@ -44,6 +44,10 @@
       "types": "./dist/git.d.ts",
       "import": "./dist/git.js"
     },
+    "./git/node": {
+      "types": "./dist/git-node.d.ts",
+      "import": "./dist/git-node.js"
+    },
     "./agent-rules": {
       "types": "./dist/agent-rules.d.ts",
       "import": "./dist/agent-rules.js"

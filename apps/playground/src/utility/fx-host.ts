@@ -1,6 +1,11 @@
 import { createFileExplorerHost } from '@vibecook/mille/host';
 import type { FileExplorerHost, MessagePortLike } from '@vibecook/mille/host';
 import type { MessagePortMain } from 'electron';
+import {
+  registerGitDecorations,
+  type GitDecorationsHandle,
+} from '@vibecook/mille-ui/git';
+import { createShellGitClient } from '@vibecook/mille-ui/git/node';
 
 // Electron's MessagePortMain emits `message` events with a MessageEvent-
 // shaped object ({ data, ports }). The mille library's built-in adapter
@@ -34,6 +39,34 @@ function wrapMessagePortMain(port: MessagePortMain): MessagePortLike {
 }
 
 let host: FileExplorerHost | null = null;
+let gitDecorations: GitDecorationsHandle | null = null;
+
+// v0.2 — the shell git client needs `node:child_process`, so it
+// cannot live in the renderer. Register it here against the
+// in-process FileExplorer; A1's decoration fan-out carries badges to
+// every attached port session automatically. Controlled via the
+// `set-git-decorations` IPC message from main → utility.
+function setGitDecorations(enabled: boolean, rootPath: string): void {
+  if (!host) return;
+  if (!enabled) {
+    gitDecorations?.dispose();
+    gitDecorations = null;
+    console.log('[fx-host] git decorations disabled');
+    return;
+  }
+  if (gitDecorations !== null) return; // already on — idempotent
+  try {
+    const client = createShellGitClient({ rootPath });
+    gitDecorations = registerGitDecorations({
+      fx: host.local,
+      client,
+      rootPath,
+    });
+    console.log('[fx-host] git decorations enabled');
+  } catch (err) {
+    console.warn('[fx-host] failed to enable git decorations:', err);
+  }
+}
 
 async function bootstrap(): Promise<void> {
   const root = process.env.WORKSPACE_ROOT;
@@ -58,12 +91,19 @@ async function bootstrap(): Promise<void> {
   // If populate ran first, a slow root would block the handler from
   // being installed and the renderer's handshake would look stuck.
   process.parentPort.on('message', (evt) => {
-    const msg = evt.data as { type?: string } | undefined;
+    const msg = evt.data as
+      | { type?: string; enabled?: boolean }
+      | undefined;
     const port = evt.ports[0];
     console.log(`[fx-host] main → fx-host: ${msg?.type ?? '<unknown>'} (ports: ${evt.ports.length})`);
     if (msg?.type === 'attach' && port) {
       host!.attachPort(wrapMessagePortMain(port));
       console.log('[fx-host] attachPort done');
+      return;
+    }
+    if (msg?.type === 'set-git-decorations') {
+      setGitDecorations(!!msg.enabled, root);
+      return;
     }
   });
 

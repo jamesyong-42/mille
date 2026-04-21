@@ -9,6 +9,8 @@ export interface MillePlaygroundApi {
   openWorkspace(path: string): Promise<void>;
   /** v0.2 B7 — last ~10 successfully-opened folders, newest first. */
   getRecentFolders(): Promise<string[]>;
+  /** v0.2 — toggle git decorations (runs in fx utility process). */
+  setGitDecorations(enabled: boolean): Promise<void>;
 }
 
 declare global {

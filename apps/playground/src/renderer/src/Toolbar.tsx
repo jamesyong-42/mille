@@ -29,11 +29,6 @@ import {
   type ReactElement,
 } from 'react';
 import {
-  createShellGitClient,
-  registerGitDecorations,
-  type GitDecorationsHandle,
-} from '@vibecook/mille-ui/git';
-import {
   registerAgentRulesDecorations,
   type AgentRulesHandle,
 } from '@vibecook/mille-ui/agent-rules';
@@ -118,8 +113,7 @@ export function Toolbar(props: ToolbarProps): ReactElement {
     if (iconThemeStatus === 'loaded') setToast(null);
   }, [iconThemeStatus]);
 
-  // Decoration disposers — held in refs so toggling doesn't re-register.
-  const gitHandleRef = useRef<GitDecorationsHandle | null>(null);
+  // Agent-rules runs in the renderer — matchers are static, no Node.
   const agentHandleRef = useRef<AgentRulesHandle | null>(null);
 
   const [gitOn, setGitOn] = useState(false);
@@ -128,10 +122,11 @@ export function Toolbar(props: ToolbarProps): ReactElement {
   // Ensure every disposer fires on unmount.
   useEffect(() => {
     return () => {
-      gitHandleRef.current?.dispose();
-      gitHandleRef.current = null;
       agentHandleRef.current?.dispose();
       agentHandleRef.current = null;
+      // Fire-and-forget git-off on unmount. The utility-side registration
+      // would also clean up on process exit; this just tightens the loop.
+      void window.millePlayground.setGitDecorations(false).catch(() => {});
     };
   }, []);
 
@@ -147,37 +142,27 @@ export function Toolbar(props: ToolbarProps): ReactElement {
     [onIconThemeChange],
   );
 
-  const handleGitToggle = useCallback(
-    (next: boolean) => {
-      setGitOn(next);
-      if (!next) {
-        gitHandleRef.current?.dispose();
-        gitHandleRef.current = null;
-        return;
-      }
-      // Phase B4 — real shell-based `GitClient`. Shells out to the
-      // host's `git` binary and watches `.git/HEAD` + `.git/index` for
-      // refresh. On a non-repo directory (or missing git binary) the
-      // client returns an empty map and no badges render — no crash.
-      try {
-        const client = createShellGitClient({ rootPath });
-        gitHandleRef.current = registerGitDecorations({
-          fx,
-          client,
-          rootPath,
-        });
-        setToast(
-          'Git decorations: live. Modified / staged / untracked files now carry real badges.',
-        );
-      } catch (err) {
-        setToast(
-          `Git decorations failed: ${err instanceof Error ? err.message : String(err)}`,
-        );
-        setGitOn(false);
-      }
-    },
-    [fx, rootPath],
-  );
+  const handleGitToggle = useCallback(async (next: boolean) => {
+    setGitOn(next);
+    // v0.2 — the shell-based `GitClient` uses `node:child_process`, so
+    // it cannot live in the renderer. The provider is registered in
+    // the fx utility process; A1's decoration fan-out carries badges
+    // to the client mirror automatically. We just flip the toggle via
+    // IPC.
+    try {
+      await window.millePlayground.setGitDecorations(next);
+      setToast(
+        next
+          ? 'Git decorations: live. Modified / staged / untracked files now carry real badges.'
+          : 'Git decorations disabled.',
+      );
+    } catch (err) {
+      setToast(
+        `Git decorations failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      setGitOn(!next);
+    }
+  }, []);
 
   const handleAgentToggle = useCallback(
     (next: boolean) => {
@@ -405,7 +390,7 @@ export function Toolbar(props: ToolbarProps): ReactElement {
           <input
             type="checkbox"
             checked={gitOn}
-            onChange={(e) => handleGitToggle(e.target.checked)}
+            onChange={(e) => void handleGitToggle(e.target.checked)}
           />
           Git decorations
         </label>

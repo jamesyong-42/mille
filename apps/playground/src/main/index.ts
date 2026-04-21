@@ -195,6 +195,20 @@ async function createWindow(): Promise<void> {
   // v0.2 B7 — renderer reads this to populate the toolbar dropdown.
   // Cheap enough to re-read from disk on every call; no cache layer.
   ipcMain.handle('get-recent-folders', () => loadRecentFolders());
+
+  // Git decorations run in the fx utility process (they shell out to
+  // `git`, which `node:child_process` can't do from the renderer).
+  // Toolbar toggle → IPC → we forward to the current utility as a
+  // `set-git-decorations` control message.
+  ipcMain.handle('set-git-decorations', (_evt, enabled: unknown) => {
+    const on = enabled === true;
+    if (fxProcess === null) return;
+    try {
+      fxProcess.postMessage({ type: 'set-git-decorations', enabled: on });
+    } catch (err) {
+      console.warn('[playground-main] failed to forward git-decorations toggle:', err);
+    }
+  });
 }
 
 app.whenReady().then(() => {

@@ -3,15 +3,25 @@
 // Produces lightweight `WalkedEntry` records; the coalescer (2.4) converts
 // these into `Entry` with allocated IDs and pushes them into `EntryStore`.
 // No ignore parsing here (2.5), no parallelism (2.4), no rename/compact (2.6).
+//
+// v0.2 B3: when an `IgnoreMatcher` is supplied to `walk_with_ignore`, ignore
+// rules are applied inside jwalk's `process_read_dir` callback — i.e. BEFORE
+// jwalk would resolve a symlinked directory and descend its target. This
+// matters for pnpm monorepos: a root `.gitignore` listing `node_modules/`
+// now stops the walker at the `node_modules` symlink entry itself, rather
+// than letting jwalk follow the link into pnpm's 38k-file store.
 
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use jwalk::{Parallelism, WalkDir};
+use parking_lot::Mutex;
 
 use crate::entry::EntryKind;
 use crate::error::{ErrorCode, FxError};
+use crate::ignore::{IgnoreMatcher, IGNORE_FILE_NAMES};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SymlinkPolicy {
@@ -73,6 +83,37 @@ pub struct WalkedEntry {
 }
 
 pub fn walk(root: &Path, options: WalkOptions) -> Result<Vec<WalkedEntry>, FxError> {
+    walk_inner(root, options, None)
+}
+
+/// Walk with gitignore rules applied BEFORE symlink resolution.
+///
+/// When `ignore` is `Some`, each child DirEntry's logical path (parent +
+/// file_name) is checked against the matcher inside jwalk's
+/// `process_read_dir` callback. Ignored directories get
+/// `read_children_path = None` so jwalk never recurses into them — critical
+/// for pnpm-style layouts where `node_modules/` is a symlink into a central
+/// store and letting jwalk canonicalize first would pull in 10k+ unrelated
+/// files.
+///
+/// The matcher is stacked dynamically during the walk: when a child
+/// `.gitignore` / `.ignore` / `.rgignore` is encountered, its rules are
+/// added to the stack so nested ignore files work the same as the root
+/// one. The caller's matcher is cloned into a shared `Arc<Mutex<_>>` so
+/// the rayon worker threads can mutate it cooperatively.
+pub fn walk_with_ignore(
+    root: &Path,
+    options: WalkOptions,
+    ignore: &IgnoreMatcher,
+) -> Result<Vec<WalkedEntry>, FxError> {
+    walk_inner(root, options, Some(ignore))
+}
+
+fn walk_inner(
+    root: &Path,
+    options: WalkOptions,
+    ignore: Option<&IgnoreMatcher>,
+) -> Result<Vec<WalkedEntry>, FxError> {
     if !root.exists() {
         return Err(FxError::Io {
             code: ErrorCode::ENOENT,
@@ -93,6 +134,78 @@ pub fn walk(root: &Path, options: WalkOptions) -> Result<Vec<WalkedEntry>, FxErr
         .sort(true);
     if let Some(d) = options.max_depth {
         builder = builder.max_depth(d);
+    }
+
+    // Shared matcher state for the jwalk closure. Cloning an IgnoreMatcher
+    // isn't supported (Gitignore doesn't impl Clone), so we hand the Arc
+    // the caller's matcher by rebuilding from its underlying ignore files.
+    // We also track discovered ignore files during the walk so a nested
+    // `.gitignore` takes effect before its sibling directories are
+    // descended.
+    let matcher_arc: Option<Arc<Mutex<IgnoreMatcher>>> = if let Some(existing) = ignore {
+        // Seed the live matcher with the caller's pre-loaded rules. When
+        // the caller already built a matcher from disk we move those
+        // entries into the shared cell so the closure sees them.
+        Some(Arc::new(Mutex::new(existing.clone_rules())))
+    } else {
+        None
+    };
+
+    if let Some(matcher_arc) = matcher_arc.clone() {
+        // The callback fires once per directory with the directory's full
+        // child list. The task assignment explicitly wants us to emit the
+        // ignored entry itself (e.g. `node_modules` the symlink) but block
+        // descent — which we do by clearing `read_children_path`. Tests
+        // for B3 assert the symlink entry is present in the output, so we
+        // do NOT drop the entry from `children`; only the descent is
+        // blocked.
+        builder = builder.process_read_dir(move |_depth, parent_path, _rds, children| {
+            // First pass: scan for newly-appeared ignore files in this
+            // directory so nested rules apply to their siblings.
+            for result in children.iter() {
+                if let Ok(dent) = result {
+                    let name = match dent.file_name.to_str() {
+                        Some(s) => s,
+                        None => continue,
+                    };
+                    if !dent.file_type.is_file() {
+                        continue;
+                    }
+                    if IGNORE_FILE_NAMES.iter().any(|n| *n == name) {
+                        let ignore_file = parent_path.join(name);
+                        let _ = matcher_arc.lock().add_from_file(&ignore_file);
+                    }
+                }
+            }
+
+            // Second pass: for each child, decide whether jwalk should
+            // descend. This runs BEFORE jwalk resolves any symlinks, so
+            // `node_modules/` (a symlink) is checked on its logical path
+            // — it matches the `node_modules/` gitignore rule and we
+            // clear `read_children_path` to block descent into pnpm's
+            // store. The entry itself is still yielded, and the emit
+            // phase below will mark it `is_ignored` via the matcher.
+            let matcher = matcher_arc.lock();
+            for result in children.iter_mut() {
+                if let Ok(dent) = result {
+                    let name = match dent.file_name.to_str() {
+                        Some(s) => s,
+                        None => continue,
+                    };
+                    let logical = parent_path.join(name);
+                    // For directory-like entries (real dirs or symlinks
+                    // whose target may be a dir) we pass is_dir=true so
+                    // `pattern/` rules match. jwalk gives us the
+                    // symlink's own file_type (not the target), so treat
+                    // symlinks as dir-like for matching purposes.
+                    let is_dir_like =
+                        dent.file_type.is_dir() || dent.file_type.is_symlink();
+                    if matcher.is_ignored(&logical, is_dir_like) {
+                        dent.read_children_path = None;
+                    }
+                }
+            }
+        });
     }
 
     let mut out = Vec::new();
@@ -638,5 +751,120 @@ mod tests {
             .expect("link entry");
         assert!(link.is_symlink);
         assert_eq!(link.kind, EntryKind::Symlink);
+    }
+
+    /// B3 regression: a pnpm-style `node_modules` symlink whose target is a
+    /// populated sibling "store" directory must not be descended when the
+    /// root `.gitignore` lists `node_modules/`. Before B3 the matcher only
+    /// ran in the emit phase AFTER jwalk had already resolved the symlink
+    /// and walked the store; the walker touched O(tracked + store) files.
+    #[cfg(unix)]
+    #[test]
+    fn walk_with_ignore_skips_gitignored_symlink_target() {
+        use std::os::unix::fs::symlink;
+        use crate::ignore::IgnoreMatcher;
+
+        // Set up the "store" sibling with a bunch of files the walker
+        // must NOT reach.
+        let store = TempDir::new().unwrap();
+        for i in 0..60 {
+            make_file(store.path(), &format!("store-file-{:03}.js", i), b"x");
+        }
+        fs::create_dir(store.path().join("nested")).unwrap();
+        for i in 0..10 {
+            make_file(&store.path().join("nested"), &format!("n{:02}.js", i), b"y");
+        }
+
+        // Set up the "repo" with a gitignore'd node_modules symlink.
+        let repo = TempDir::new().unwrap();
+        fs::write(repo.path().join(".gitignore"), "node_modules/\n").unwrap();
+        fs::create_dir(repo.path().join("src")).unwrap();
+        make_file(&repo.path().join("src"), "main.rs", b"fn main() {}");
+        symlink(store.path(), repo.path().join("node_modules")).unwrap();
+
+        // Pre-build the matcher from the repo's root .gitignore so it's
+        // live when the walker starts. In production this happens in
+        // `walk_with_ignore`'s process_read_dir callback as directories
+        // are streamed, but loading the root gitignore up-front gives a
+        // deterministic fixture.
+        let mut matcher = IgnoreMatcher::new();
+        matcher
+            .add_from_file(&repo.path().join(".gitignore"))
+            .unwrap();
+
+        let entries = walk_with_ignore(
+            repo.path(),
+            WalkOptions {
+                include_root: false,
+                ..Default::default()
+            },
+            &matcher,
+        )
+        .unwrap();
+
+        let names: Vec<_> = entries.iter().map(|e| e.name.as_str()).collect();
+
+        // The symlink entry itself is present (file-tree UIs want to show
+        // it in the list even when ignored).
+        assert!(names.contains(&"node_modules"), "expected node_modules in {:?}", names);
+        // The repo's real files are present.
+        assert!(names.contains(&".gitignore"));
+        assert!(names.contains(&"src"));
+        assert!(names.contains(&"main.rs"));
+
+        // Not one file under the store target leaked through.
+        for e in &entries {
+            assert!(
+                !e.path.starts_with(store.path()),
+                "walker descended into the pnpm-style store: {:?}",
+                e.path
+            );
+            assert!(
+                !e.name.starts_with("store-file-"),
+                "store file leaked: {}",
+                e.name
+            );
+        }
+
+        // Total entry count is bounded by the real repo contents, not the
+        // store. Repo has: .gitignore, src, main.rs, node_modules => 4.
+        // Allow a tiny margin for any platform-specific hidden files the
+        // fixture happens to carry in /tmp; the store alone would push us
+        // past 70.
+        assert!(
+            entries.len() < 10,
+            "expected < 10 entries, got {}: {:?}",
+            entries.len(),
+            names
+        );
+    }
+
+    #[test]
+    fn walk_with_ignore_picks_up_nested_gitignore() {
+        // Even when no root .gitignore exists, a nested one discovered
+        // mid-walk must take effect for its siblings. Mirrors how B3's
+        // process_read_dir callback augments the matcher dynamically.
+        use crate::ignore::IgnoreMatcher;
+
+        let td = TempDir::new().unwrap();
+        fs::create_dir(td.path().join("pkg")).unwrap();
+        fs::write(td.path().join("pkg/.gitignore"), "build/\n").unwrap();
+        fs::create_dir(td.path().join("pkg/build")).unwrap();
+        make_file(&td.path().join("pkg/build"), "artifact.bin", b"x");
+        make_file(&td.path().join("pkg"), "source.rs", b"fn x() {}");
+
+        let matcher = IgnoreMatcher::new();
+        let entries = walk_with_ignore(td.path(), WalkOptions::default(), &matcher).unwrap();
+        let names: Vec<_> = entries.iter().map(|e| e.name.as_str()).collect();
+
+        assert!(names.contains(&"source.rs"));
+        // The `build` dir itself is yielded (so the tree UI can show the
+        // ignored node) but its contents must not have been walked.
+        assert!(names.contains(&"build"));
+        assert!(
+            !names.contains(&"artifact.bin"),
+            "nested gitignore didn't block descent: {:?}",
+            names
+        );
     }
 }

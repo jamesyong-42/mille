@@ -10,7 +10,10 @@ use std::collections::HashSet;
 
 use criterion::{criterion_group, criterion_main, Criterion};
 use mille_bench::medium_tree;
-use mille_core::{populate_store, walk, EntryStore, VisibleRowsQuery, WalkOptions};
+use mille_core::{
+    populate_store, walk, walk_with_ignore, EntryStore, IgnoreMatcher, VisibleRowsQuery,
+    WalkOptions,
+};
 
 /// Helper: criterion can't see `VisibleRowsQuery` construction easily without
 /// holding the expansion Set outside. We expose an "all expanded" helper that
@@ -113,6 +116,45 @@ fn bench_visible_rows_full(c: &mut Criterion) {
     });
 }
 
+/// v0.2 B3 regression bench. Fixture: `repo_entries` real files under `src/`
+/// plus a `node_modules` symlink into a `store_entries`-file sibling.
+/// `walk_with_ignore` with a `node_modules/` rule should walk in O(repo)
+/// time — before B3 it walked O(repo + store). We size the fixture so
+/// that a regression (i.e. the walker descending the symlink) would be
+/// an order of magnitude slower and easily visible in criterion output.
+#[cfg(unix)]
+fn bench_pnpm_style_ignore(c: &mut Criterion) {
+    use mille_bench::pnpm_style_fixture;
+
+    // ~10k repo files + ~100k store files. Criterion re-runs on the same
+    // fixture, so cost is just the walk itself (no rebuild per iter).
+    let (repo, _store) = pnpm_style_fixture(10_000, 100_000);
+    let mut seeded = IgnoreMatcher::new();
+    seeded
+        .add_from_file(&repo.path().join(".gitignore"))
+        .expect("seed gitignore");
+
+    c.bench_function("walker_pnpm_style_ignored_10k_repo_100k_store", |b| {
+        b.iter(|| {
+            let _ =
+                walk_with_ignore(repo.path(), WalkOptions::default(), &seeded).unwrap();
+        })
+    });
+}
+
+#[cfg(unix)]
+criterion_group!(
+    walker,
+    bench_walker_serial,
+    bench_walker_parallel,
+    bench_populate_store,
+    bench_visible_row_count,
+    bench_visible_rows_100,
+    bench_visible_rows_full,
+    bench_pnpm_style_ignore,
+);
+
+#[cfg(not(unix))]
 criterion_group!(
     walker,
     bench_walker_serial,
@@ -122,4 +164,5 @@ criterion_group!(
     bench_visible_rows_100,
     bench_visible_rows_full,
 );
+
 criterion_main!(walker);

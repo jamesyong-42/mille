@@ -14,9 +14,21 @@ use crate::error::{ErrorCode, FxError};
 /// Filenames we treat as gitignore-format ignore files.
 pub const IGNORE_FILE_NAMES: &[&str] = &[".gitignore", ".ignore", ".rgignore"];
 
+/// A single rule source, remembered verbatim so the matcher can be cloned /
+/// rebuilt (e.g. to share across jwalk worker threads in B3).
+#[derive(Clone, Debug)]
+enum IgnoreSource {
+    File(PathBuf),
+    String { root: PathBuf, patterns: String },
+}
+
 #[derive(Default)]
 pub struct IgnoreMatcher {
     matchers: Vec<(PathBuf, Gitignore)>,
+    /// Replayable record of every `add_from_*` call. Used by `clone_rules`
+    /// — `Gitignore` itself doesn't impl Clone, so we rebuild each matcher
+    /// from its original input.
+    sources: Vec<IgnoreSource>,
 }
 
 impl IgnoreMatcher {
@@ -44,6 +56,7 @@ impl IgnoreMatcher {
             source: std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()),
         })?;
         self.matchers.push((root.to_path_buf(), gi));
+        self.sources.push(IgnoreSource::File(ignore_file.to_path_buf()));
         Ok(())
     }
 
@@ -68,7 +81,33 @@ impl IgnoreMatcher {
             source: std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()),
         })?;
         self.matchers.push((root.to_path_buf(), gi));
+        self.sources.push(IgnoreSource::String {
+            root: root.to_path_buf(),
+            patterns: patterns.to_owned(),
+        });
         Ok(())
+    }
+
+    /// Replay every stored source into a fresh matcher. Used by the B3
+    /// symlink-aware walker to hand a mutex-wrapped copy to jwalk's
+    /// worker threads without moving the caller's matcher.
+    ///
+    /// Sources that fail to reload (e.g. a `.gitignore` file was deleted
+    /// between build and walk) are silently skipped — callers already
+    /// treat ignore matching as best-effort.
+    pub fn clone_rules(&self) -> Self {
+        let mut fresh = Self::default();
+        for source in &self.sources {
+            match source {
+                IgnoreSource::File(path) => {
+                    let _ = fresh.add_from_file(path);
+                }
+                IgnoreSource::String { root, patterns } => {
+                    let _ = fresh.add_from_string(root, patterns);
+                }
+            }
+        }
+        fresh
     }
 
     /// True when any stacked matcher reports `path` as ignored. Gitignore

@@ -157,7 +157,10 @@ impl FileExplorer {
     /// unfinished business — tracked for the next integration pass.
     #[napi(js_name = "populateFromRoots")]
     pub async fn populate_from_roots(&self) -> Result<u32> {
-        use mille_core::{populate_store, walk, WalkOptions};
+        use mille_core::{
+            build_ignore_matcher_from_walk, populate_store, walk, walk_with_ignore,
+            IgnoreMatcher, WalkOptions,
+        };
 
         let mut total: u32 = 0;
         for root in &self.roots {
@@ -168,8 +171,34 @@ impl FileExplorer {
                 include_root: true,
                 parallelism: self.options.walker_concurrency,
             };
-            let walked = walk(root, options).map_err(fx_error_to_napi)?;
-            let ids = populate_store(&self.store, root, &walked, None)
+            // v0.2 B3: when respect_ignore is on, apply gitignore rules
+            // during the walk via process_read_dir. We seed the matcher
+            // with the root's own .gitignore (read directly, no walk)
+            // so pnpm-style `node_modules/` symlinks are blocked on the
+            // very first read_dir call. Nested ignore files are added
+            // dynamically inside walk_with_ignore as subdirectories are
+            // streamed.
+            let (walked, matcher) = if self.options.respect_ignore {
+                let mut seeded = IgnoreMatcher::new();
+                for name in mille_core::IGNORE_FILE_NAMES {
+                    let candidate = root.join(name);
+                    if candidate.is_file() {
+                        let _ = seeded.add_from_file(&candidate);
+                    }
+                }
+                let w = walk_with_ignore(root, options, &seeded)
+                    .map_err(fx_error_to_napi)?;
+                // Rebuild a full matcher from every ignore file we
+                // actually observed during the walk so the is_ignored
+                // flag on the resulting entries is consistent with
+                // nested rules.
+                let full = build_ignore_matcher_from_walk(&w).map_err(fx_error_to_napi)?;
+                (w, Some(full))
+            } else {
+                let w = walk(root, options).map_err(fx_error_to_napi)?;
+                (w, None)
+            };
+            let ids = populate_store(&self.store, root, &walked, matcher.as_ref())
                 .map_err(fx_error_to_napi)?;
             total = total.saturating_add(ids.len() as u32);
         }
@@ -200,7 +229,10 @@ impl FileExplorer {
         max_depth: Option<u32>,
         include_root: Option<bool>,
     ) -> Result<u32> {
-        use mille_core::{populate_store, walk, WalkOptions};
+        use mille_core::{
+            build_ignore_matcher_from_walk, populate_store, walk, walk_with_ignore,
+            IgnoreMatcher, WalkOptions,
+        };
 
         let p = PathBuf::from(&path);
         if !p.is_absolute() {
@@ -229,7 +261,38 @@ impl FileExplorer {
             include_root: include_root.unwrap_or(true),
             parallelism: self.options.walker_concurrency,
         };
-        let walked = walk(&p, options).map_err(fx_error_to_napi)?;
+
+        // v0.2 B3: respect_ignore now uses the symlink-aware walker so
+        // lazy `setExpanded` walks on a pnpm monorepo don't accidentally
+        // descend into the central store.
+        let (walked, matcher) = if self.options.respect_ignore {
+            let mut seeded = IgnoreMatcher::new();
+            // Seed with every ignore file on the path from the workspace
+            // root down to the target directory — a lazy expand at
+            // `repo/packages/foo` should still honor `repo/.gitignore`.
+            let mut anchor = root.clone();
+            for seg in p.strip_prefix(&root).ok().into_iter().flat_map(|r| r.iter()) {
+                for name in mille_core::IGNORE_FILE_NAMES {
+                    let candidate = anchor.join(name);
+                    if candidate.is_file() {
+                        let _ = seeded.add_from_file(&candidate);
+                    }
+                }
+                anchor = anchor.join(seg);
+            }
+            for name in mille_core::IGNORE_FILE_NAMES {
+                let candidate = p.join(name);
+                if candidate.is_file() {
+                    let _ = seeded.add_from_file(&candidate);
+                }
+            }
+            let w = walk_with_ignore(&p, options, &seeded).map_err(fx_error_to_napi)?;
+            let full = build_ignore_matcher_from_walk(&w).map_err(fx_error_to_napi)?;
+            (w, Some(full))
+        } else {
+            let w = walk(&p, options).map_err(fx_error_to_napi)?;
+            (w, None)
+        };
 
         // Filter out entries the store already knows about. Without this,
         // a second call with overlapping paths would double-insert (the
@@ -243,7 +306,7 @@ impl FileExplorer {
             return Ok(0);
         }
 
-        let ids = populate_store(&self.store, &root, &filtered, None)
+        let ids = populate_store(&self.store, &root, &filtered, matcher.as_ref())
             .map_err(fx_error_to_napi)?;
         Ok(ids.len() as u32)
     }

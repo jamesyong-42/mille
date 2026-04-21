@@ -40,8 +40,8 @@ pub use resume::{
 // TODO: Phase 2 — jwalk-based walker + coalescer
 pub mod walker;
 pub use walker::{
-    build_ignore_matcher_from_walk, populate_store, walk, SymlinkPolicy, WalkOptions,
-    WalkedEntry,
+    build_ignore_matcher_from_walk, populate_store, walk, walk_with_ignore, SymlinkPolicy,
+    WalkOptions, WalkedEntry,
 };
 
 // TODO: Phase 2 — ripgrep `ignore` crate wrapper

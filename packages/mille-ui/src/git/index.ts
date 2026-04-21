@@ -22,3 +22,14 @@ export type {
   RegisterGitDecorationsOptions,
 } from './provider.js';
 export { registerGitDecorations } from './provider.js';
+
+// Phase B4 — real shell-based `GitClient`.
+export type {
+  ChildProcessLike,
+  ShellGitClientOptions,
+  SpawnLike,
+} from './shell-client.js';
+export { createShellGitClient } from './shell-client.js';
+
+export type { WatchDotGitOptions } from './watch-dotgit.js';
+export { watchDotGit } from './watch-dotgit.js';

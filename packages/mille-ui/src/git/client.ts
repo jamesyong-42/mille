@@ -26,9 +26,11 @@ export type GitStatusLetter =
   | '!';
 
 /**
- * One row's worth of git status. `path` is workspace-relative (POSIX
- * separators). `staged` is optional: when `true`, the entry is in the
- * index; when `false`/omitted, it reflects the working tree.
+ * One row's worth of git status. `path` is workspace-relative with
+ * POSIX separators — that's what the decoration provider feeds into
+ * `fx.getByUri(root + '/' + path)` to resolve the Entry. `staged` is
+ * optional: when `true`, the entry is in the index; when `false` or
+ * omitted, it reflects the working tree.
  */
 export interface GitStatusEntry {
   readonly path: string;
@@ -39,9 +41,16 @@ export interface GitStatusEntry {
 /**
  * Minimal contract the UI needs from a host-supplied git client.
  *
- * `getStatus(root)` returns a snapshot map keyed by workspace-relative
- * path. The UI treats the map as immutable; implementations should
- * return a fresh map per call unless they can guarantee no mutation.
+ * `getStatus(root)` returns a snapshot map. Keys are **absolute POSIX
+ * paths** (joined with `root` up-front) so callers who want to look
+ * up by full path can `.get(absPath)` without having to re-normalize.
+ * Each value's `path` field remains workspace-relative — that's what
+ * `provider.ts`'s `resolvePathToEntry` wants. This intentional split
+ * keeps both lookup styles cheap.
+ *
+ * Implementations should return a fresh map per call unless they can
+ * guarantee no mutation. Passing the same instance twice is
+ * permitted if the backing data is immutable.
  *
  * `onChange(cb)` subscribes to HEAD/index/worktree changes. The
  * callback fires on every interesting transition; the companion
@@ -50,7 +59,8 @@ export interface GitStatusEntry {
 export interface GitClient {
   /**
    * Fetch the current status for all modified / untracked / ignored
-   * paths under `root`. Paths in the returned map are expected to be
+   * paths under `root`. Returned map keys are **absolute POSIX paths**.
+   * Each `GitStatusEntry.path` field is the same path expressed
    * workspace-relative with POSIX separators.
    */
   getStatus(root: string): Promise<ReadonlyMap<string, GitStatusEntry>>;

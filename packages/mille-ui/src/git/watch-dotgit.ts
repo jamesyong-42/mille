@@ -53,7 +53,7 @@ export function watchDotGit(
     }, debounceMs);
   }
 
-  function tryWatch(target: string): void {
+  function tryWatchFile(target: string): void {
     try {
       const w = fs.watch(target, { persistent: false }, () => {
         fire();
@@ -67,8 +67,34 @@ export function watchDotGit(
     }
   }
 
-  tryWatch(path.join(gitDir, 'HEAD'));
-  tryWatch(path.join(gitDir, 'index'));
+  // QA fix — Linux atomic-rename safety.
+  //
+  // `fs.watch(path)` on an individual file uses inotify's inode-based
+  // watch, which goes silent after git rewrites `.git/index` via
+  // `rename(index.lock, index)` (the old inode is gone, the new file
+  // is a different inode). On Linux, subsequent edits never fire.
+  // Fix: watch the containing directory as well, and filter by name.
+  // Directory watches survive atomic renames because they track the
+  // directory inode, not the file inodes. macOS FSEvents already
+  // handles this via path-based watching; the dir watch is redundant
+  // there but harmless.
+  function tryWatchDir(): void {
+    try {
+      const w = fs.watch(gitDir, { persistent: false }, (_event, filename) => {
+        if (filename === 'HEAD' || filename === 'index' || filename === 'index.lock') {
+          fire();
+        }
+      });
+      w.on('error', () => { /* ignore */ });
+      watchers.push(w);
+    } catch {
+      /* ENOENT / EACCES — no gitDir, skip. */
+    }
+  }
+
+  tryWatchDir();
+  tryWatchFile(path.join(gitDir, 'HEAD'));
+  tryWatchFile(path.join(gitDir, 'index'));
 
   return (): void => {
     if (disposed) return;

@@ -126,26 +126,37 @@ function Explorer({ fx, root }: { fx: PortFileExplorer; root: string }): ReactEl
   // the tree stays rendered.
   const [iconThemeId, setIconThemeId] = useState<'default' | 'material'>('default');
   const [iconTheme, setIconTheme] = useState<IconTheme>(defaultIconTheme);
+  // 'idle' | 'loading' | 'loaded' | 'error'. Toolbar uses this to
+  // clear the "Loading Material…" toast when the async import lands.
+  const [iconThemeStatus, setIconThemeStatus] = useState<
+    'idle' | 'loading' | 'loaded' | 'error'
+  >('idle');
 
   // v0.2 B5 — async-load Material Icon Theme bundle on demand. Falls
   // back to default if the bundle fails (e.g., offline CI stub).
   useEffect(() => {
     if (iconThemeId === 'default') {
       setIconTheme(defaultIconTheme);
+      setIconThemeStatus('idle');
       return;
     }
     let cancelled = false;
+    setIconThemeStatus('loading');
     void (async () => {
       try {
         const mod = await import('@vibecook/mille-ui/icons/material');
         const theme = await mod.loadMaterialIconTheme();
-        if (!cancelled) setIconTheme(theme);
+        if (!cancelled) {
+          setIconTheme(theme);
+          setIconThemeStatus('loaded');
+        }
       } catch (err) {
         // eslint-disable-next-line no-console
         console.warn('[playground] Material theme failed to load:', err);
         if (!cancelled) {
           setIconTheme(defaultIconTheme);
           setIconThemeId('default');
+          setIconThemeStatus('error');
         }
       }
     })();
@@ -177,6 +188,7 @@ function Explorer({ fx, root }: { fx: PortFileExplorer; root: string }): ReactEl
           onThemeChange={setTheme}
           iconThemeId={iconThemeId}
           onIconThemeChange={setIconThemeId}
+          iconThemeStatus={iconThemeStatus}
         />
         <div className="tree-container">
           <FileTree

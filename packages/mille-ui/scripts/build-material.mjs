@@ -189,9 +189,20 @@ async function main() {
       ),
       'utf8',
     );
-    // Exit 0 — CI shouldn't die if the network is unreachable; the
-    // stub is clearly marked.
-    return;
+    // The stub is clearly marked in-file, but `prepublishOnly` runs
+    // this script before a real `npm publish`, so a silent exit 0
+    // would ship the stub to the registry. Hard-fail unless the
+    // caller opts into a stub explicitly — CI that genuinely runs
+    // offline can set MILLE_ALLOW_MATERIAL_STUB=1 to proceed. Local
+    // `pnpm build:material` inherits the same discipline.
+    if (process.env.MILLE_ALLOW_MATERIAL_STUB === '1') {
+      console.warn('[build-material] MILLE_ALLOW_MATERIAL_STUB=1 — keeping stub; exit 0.');
+      return;
+    }
+    console.error(
+      '[build-material] stub emitted but MILLE_ALLOW_MATERIAL_STUB is unset — refusing to proceed so a stub-as-release can\'t slip out. Set MILLE_ALLOW_MATERIAL_STUB=1 to allow.',
+    );
+    process.exit(1);
   } finally {
     try { rmSync(workDir, { recursive: true, force: true }); } catch { /* ignore */ }
   }

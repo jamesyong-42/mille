@@ -49,13 +49,24 @@ export interface ToolbarProps {
   onThemeChange(next: ThemeMode): void;
   readonly iconThemeId: IconThemeId;
   onIconThemeChange(next: IconThemeId): void;
+  /** v0.2 B5 — async-load lifecycle signal from the parent. Used to
+   *  clear the "Loading Material…" toast when the bundle lands. */
+  readonly iconThemeStatus?: 'idle' | 'loading' | 'loaded' | 'error';
 }
 
 export function Toolbar(props: ToolbarProps): ReactElement {
-  const { fx, rootPath, theme, onThemeChange, iconThemeId, onIconThemeChange } =
+  const { fx, rootPath, theme, onThemeChange, iconThemeId, onIconThemeChange, iconThemeStatus } =
     props;
 
   const [toast, setToast] = useState<string | null>(null);
+
+  // v0.2 B5 — clear the "Loading Material…" toast once the bundle
+  // lands. Error paths already reset via the default fallback; this
+  // covers the happy-path success case the parent signals via
+  // `iconThemeStatus === 'loaded'`.
+  useEffect(() => {
+    if (iconThemeStatus === 'loaded') setToast(null);
+  }, [iconThemeStatus]);
 
   // Decoration disposers — held in refs so toggling doesn't re-register.
   const gitHandleRef = useRef<GitDecorationsHandle | null>(null);

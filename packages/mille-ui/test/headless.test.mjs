@@ -1,18 +1,23 @@
 // `@vibecook/mille-ui/headless` entry point — smoke tests.
 //
-// Verifies:
-//   1. Every member of the `FileTreeHeadless` namespace resolves to a
-//      defined component / function.
-//   2. `<FileTreeHeadless.Root fx={fake} ariaLabel="Files" />` renders
-//      structural DOM + ARIA without importing any CSS (happy-dom has
-//      no stylesheet loaded; rendering relies only on inline / layout
-//      styles).
-//   3. The `milleClassNames` catalog returns the concrete `mille-*`
-//      strings the components emit.
-//   4. Hooks are callable from `/headless` (smoke via hook identity).
-//   5. DnD + clipboard + selection hooks are importable from `/headless`.
-//   6. `defaultCommands` is exported from `/headless` (command registry
-//      surface).
+// v0.2 B8 contract: `/headless` ships the tree's **logic layer** only —
+// no styled components, no Radix, no icon bundle. What it exports:
+//
+//   - Every pre-existing logic hook (selection, keyboard, clipboard,
+//     dnd, etc.) plus the v0.2 B8 hooks split out of the heavy styled
+//     components (`useFileTreeRow`, `useFileRenameInput`,
+//     `useFileContextMenu`).
+//   - The provider + command registry primitives + icon theme types.
+//   - The `milleClassNames` catalog.
+//
+// What's **NOT** in `/headless`:
+//   - The `FileTreeHeadless` namespace (removed — styled-component
+//     re-exports blew the gzip budget; consumers import styled
+//     components from the default entry `@vibecook/mille-ui`).
+//   - `defaultCommands` / `treeDefaults` / `mutationDefaults` (moved
+//     to `@vibecook/mille-ui/commands` — 16 KB raw is not a headless
+//     concern).
+//   - `FileIcon` (lives at `@vibecook/mille-ui/icons`).
 
 import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
@@ -57,16 +62,28 @@ const { createRoot } = await import('react-dom/client');
 // the JS export surface is complete on its own.
 const headless = await import('../dist/headless.js');
 const {
-  FileTreeHeadless,
   milleClassNames,
   createCommandRegistry,
-  defaultCommands,
   useFileTreeDragDrop,
   useClipboardState,
   useFileTreeSelection,
   FileTreeProvider,
   useFileTreeContext,
+  // v0.2 B8 — logic hooks split out of the heavy styled components.
+  useFileTreeRow,
+  useFileRenameInput,
+  useFileContextMenu,
 } = headless;
+
+// `defaultCommands` lives at `@vibecook/mille-ui/commands` post-B8 —
+// the headless entry exports only the registry primitives.
+const { defaultCommands } = await import('../dist/commands.js');
+
+// The styled `FileTree` + siblings live at the default entry, not the
+// headless entry. The ARIA / rendering smoke test below imports them
+// from there; the v0.1 `FileTreeHeadless` namespace is gone.
+const styled = await import('../dist/index.js');
+const StyledFileTree = styled.FileTree;
 
 const { createFakeEngine, createFakeSnapshot } = await import(
   '../dist/testing.js'
@@ -109,41 +126,22 @@ function makeRow({ id, parentId, name, depth, kind, hasChildren, isExpanded }) {
   };
 }
 
-// ─── Test 1: namespace completeness ────────────────────────────────
+// ─── Test 1: v0.2 B8 logic hooks are exported from /headless ──────
 
-test('FileTreeHeadless exposes every documented member', () => {
-  const expected = [
-    'Root',
-    'Row',
-    'Icon',
-    'Decorations',
-    'RenameInput',
-    'ContextMenu',
-    'ContextMenuItem',
-    'Filter',
-    'SearchResults',
-    'DragIndicator',
-    'IndentGuides',
-    'DisclosureChevron',
-    'LoadingBadge',
-  ];
-  for (const key of expected) {
-    const member = FileTreeHeadless[key];
-    assert.ok(member, `FileTreeHeadless.${key} should be defined`);
-    // React memo() wraps a function in a special object (with
-    // `$$typeof = Symbol(react.memo)`); plain components are functions.
-    // Both are valid React elements — accept either.
-    const t = typeof member;
-    assert.ok(
-      t === 'function' || (t === 'object' && member.$$typeof !== undefined),
-      `FileTreeHeadless.${key} should be a React component (got ${t})`,
-    );
-  }
+test('/headless exports the v0.2 B8 logic hooks', () => {
+  assert.equal(typeof useFileTreeRow, 'function');
+  assert.equal(typeof useFileRenameInput, 'function');
+  assert.equal(typeof useFileContextMenu, 'function');
 });
 
-// ─── Test 2: <Root> renders structural DOM + ARIA without CSS ──────
+// ─── Test 2: styled tree (from default entry) still renders ARIA ──
+//
+// B8 moves the styled `FileTree` off the `/headless` entry but keeps
+// it reachable from the default `@vibecook/mille-ui` entry. This test
+// still smoke-tests the render path, via that default entry, to lock
+// in the "public API of the styled entry is unchanged" hard constraint.
 
-test('FileTreeHeadless.Root renders structural DOM + ARIA without CSS', async () => {
+test('styled FileTree from default entry renders DOM + ARIA', async () => {
   const fx = createFakeEngine();
   const rows = [
     makeRow({
@@ -183,7 +181,7 @@ test('FileTreeHeadless.Root renders structural DOM + ARIA without CSS', async ()
 
   await act(async () => {
     root.render(
-      createElement(FileTreeHeadless.Root, {
+      createElement(StyledFileTree, {
         fx,
         ariaLabel: 'Files',
         rowHeight: 20,
@@ -267,17 +265,35 @@ test('DnD MIME constants are exported from /headless', () => {
   assert.equal(headless.MIME_TEXT_PLAIN, 'text/plain');
 });
 
-// ─── Test 6: command registry surface ──────────────────────────────
+// ─── Test 6: command registry primitives exported from /headless ──
 
-test('command registry surface is exported from /headless', () => {
+test('command registry primitives are exported from /headless', () => {
   assert.equal(typeof createCommandRegistry, 'function');
+  // `defaultCommands` no longer ships from `/headless` post-B8 — it
+  // moved to `/commands`. The registry primitives themselves stay put
+  // and compose cleanly with the command set from its own entry.
   assert.ok(Array.isArray(defaultCommands));
   assert.ok(
     defaultCommands.length > 0,
-    'defaultCommands should be non-empty',
+    'defaultCommands (imported from /commands) should be non-empty',
   );
-  // Registry constructs and dispatches cleanly off the headless export.
   const registry = createCommandRegistry(defaultCommands);
   assert.equal(typeof registry.dispatch, 'function');
   assert.equal(typeof registry.all, 'function');
+});
+
+// ─── Test 7: styled-component re-exports are NOT in /headless ─────
+//
+// B8 hard-removes the `FileTreeHeadless` namespace and the individual
+// styled-component re-exports (`FileTree`, `FileTreeRow`, etc.) from
+// the headless entry. Consumers who want them import from the default
+// entry — this test locks in the removal so a future re-add would
+// flag as a regression against the 12 KB gzip budget.
+test('styled-component re-exports are absent from /headless', () => {
+  assert.equal(headless.FileTreeHeadless, undefined);
+  assert.equal(headless.FileTree, undefined);
+  assert.equal(headless.FileTreeRow, undefined);
+  assert.equal(headless.FileRenameInput, undefined);
+  assert.equal(headless.FileContextMenu, undefined);
+  assert.equal(headless.FileIcon, undefined);
 });

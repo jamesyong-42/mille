@@ -71,11 +71,14 @@ jobs:
       - name: Test
         run: pnpm -r --if-present test
 
-      # Phase 16.2 — mille-ui bundle size report. Non-failing for v0.1:
-      # budgets in `.size-limit.cjs` track current sizes + headroom.
-      # Tightened to SPEC §12 targets in v0.2.
+      # v0.2 B8 — mille-ui bundle size assertion. Fails CI on regression.
+      # Budgets live in `packages/mille-ui/package.json` under
+      # `size-limit`; see SPEC §12 for targets.
+      - name: Build mille-ui
+        run: pnpm --filter @vibecook/mille-ui run build
+
       - name: mille-ui size check
-        run: pnpm --filter @vibecook/mille-ui size || true
+        run: pnpm --filter @vibecook/mille-ui run size
 
   # ------------------------------------------------------------------
   # Native build matrix — 8 triples per SPEC §6.2.

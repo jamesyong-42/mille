@@ -107,3 +107,30 @@ export {
 // v0.2 B6 — imperative tree handle.
 export { useFileTreeRef } from './useFileTreeRef.js';
 export type { FileTreeRef } from './useFileTreeRef.js';
+
+// v0.2 B8 — logic hooks extracted from heavy styled components so
+// `@vibecook/mille-ui/headless` can expose them without bundling the
+// Radix / icon subsystems that the styled views depend on.
+export {
+  useFileTreeRow,
+  type UseFileTreeRowResult,
+  type UseFileTreeRowRowProps,
+  type UseFileTreeRowChevronProps,
+  type UseFileTreeRowIconProps,
+  type UseFileTreeRowNameProps,
+  type UseFileTreeRowRenameProps,
+  type UseFileTreeRowDecorationProps,
+} from './useFileTreeRow.js';
+export {
+  useFileRenameInput,
+  type UseFileRenameInputOptions,
+  type UseFileRenameInputResult,
+  type UseFileRenameInputInputProps,
+  type UseFileRenameInputTooltipProps,
+} from './useFileRenameInput.js';
+export {
+  useFileContextMenu,
+  type UseFileContextMenuOptions,
+  type UseFileContextMenuResult,
+  type UseFileContextMenuGroup,
+} from './useFileContextMenu.js';

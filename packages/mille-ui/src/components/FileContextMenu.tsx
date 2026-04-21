@@ -1,24 +1,21 @@
 // FileContextMenu — Radix <ContextMenu.Content> populated from the
 // command registry.
 //
-// Phase 6. MILLE_UI_SPEC.md §4.6, §9.3.
+// Phase B8 (v0.2): thin view on top of `useFileContextMenu`. All
+// filtering, sorting, grouping, and dispatch logic lives in the hook;
+// this component owns nothing but the Radix portal / content / group /
+// separator plumbing.
 //
-// This component renders ONLY the content (portal + content + items).
-// The trigger wraps each row — see `FileTreeRow.tsx`. Rendering the
-// content centrally means a single Radix instance handles the full
-// menu population regardless of which row was right-clicked, which
-// keeps the per-row Radix instance cheap (trigger-only).
+// MILLE_UI_SPEC.md §4.6, §9.3.
 //
-// The component reads the command registry + live context from the
-// `FileTreeContext`. It filters commands by `visibleInContextMenu` and
-// `when`, groups them by `command.group` tag (alphabetical), inserts
-// separators between groups, and delegates each row to
-// `<ContextMenuItem>`.
+// The component reads the command registry + live context, delegates
+// filtering to the hook, renders Radix groups with separators between
+// them, and defers each row to `<ContextMenuItem>`.
 
 import { type ReactElement, type ReactNode } from 'react';
 import * as ContextMenu from '@radix-ui/react-context-menu';
-import type { Command, CommandContext, CommandRegistry } from '../commands/types.js';
-import { evaluateWhen } from '../commands/when.js';
+import type { CommandContext, CommandRegistry } from '../commands/types.js';
+import { useFileContextMenu } from '../hooks/useFileContextMenu.js';
 import { ContextMenuItem } from './ContextMenuItem.js';
 
 export interface FileContextMenuProps {
@@ -66,50 +63,6 @@ const DEFAULT_EMPTY: ReactNode = (
 );
 
 /**
- * Visible-in-context-menu filter. Default is `true` when unset — matches
- * the `Command` type docstring. Function form is evaluated with the
- * current context.
- */
-function isVisibleInContextMenu(command: Command, ctx: CommandContext): boolean {
-  const v = command.visibleInContextMenu;
-  if (v === undefined) return true;
-  if (typeof v === 'function') return Boolean(v(ctx));
-  return Boolean(v);
-}
-
-/**
- * Group-tag sort: alphabetical. Matches SPEC §9.3. Commands with no
- * `group` sort to an implicit `'9_custom'` bucket so host-added
- * commands-without-a-tag land at the end.
- */
-function groupKey(command: Command): string {
-  return command.group ?? '9_custom';
-}
-
-/** Partition the visible command list into ordered groups. */
-function partitionByGroup(
-  commands: readonly Command[],
-): ReadonlyArray<{ readonly group: string; readonly items: readonly Command[] }> {
-  const buckets = new Map<string, Command[]>();
-  for (const c of commands) {
-    const key = groupKey(c);
-    let list = buckets.get(key);
-    if (!list) {
-      list = [];
-      buckets.set(key, list);
-    }
-    list.push(c);
-  }
-  const keys = Array.from(buckets.keys()).sort((a, b) => a.localeCompare(b));
-  const out: { group: string; items: readonly Command[] }[] = [];
-  for (const k of keys) {
-    const list = buckets.get(k);
-    if (list && list.length > 0) out.push({ group: k, items: list });
-  }
-  return out;
-}
-
-/**
  * Render-only component. Wrap a Radix <ContextMenu.Root> + Trigger
  * around the row; place <FileContextMenu> once per tree (conventionally
  * as a sibling of the scroller) so it participates in the same Root
@@ -128,18 +81,12 @@ export function FileContextMenu(props: FileContextMenuProps): ReactElement {
     portalContainer,
   } = props;
 
-  const all = registry.all();
-  const visible: Command[] = [];
-  for (const c of all) {
-    if (!isVisibleInContextMenu(c, context)) continue;
-    if (!evaluateWhen(c.when, context)) continue;
-    visible.push(c);
-  }
+  const optionArgs: Parameters<typeof useFileContextMenu>[0] = onClose
+    ? { registry, context, onClose }
+    : { registry, context };
+  const { groups, onClose: close } = useFileContextMenu(optionArgs);
 
-  const groups = partitionByGroup(visible);
-  const isEmpty = visible.length === 0 && !extraItems;
-
-  const close = onClose ?? (() => undefined);
+  const isEmpty = groups.length === 0 && !extraItems;
 
   return (
     <ContextMenu.Portal
@@ -156,9 +103,9 @@ export function FileContextMenu(props: FileContextMenuProps): ReactElement {
           <>
             {groups.map((group, groupIdx) => (
               <ContextMenu.Group
-                key={group.group}
+                key={group.key}
                 className="mille-context-menu-group"
-                data-mille-context-menu-group={group.group}
+                data-mille-context-menu-group={group.key}
               >
                 {groupIdx > 0 ? (
                   <ContextMenu.Separator

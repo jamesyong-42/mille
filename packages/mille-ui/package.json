@@ -4,6 +4,7 @@
   "description": "React file-tree UI companion to @vibecook/mille. Virtualized, accessible, VS Code File Icon Theme compatible.",
   "license": "MIT",
   "type": "module",
+  "sideEffects": false,
   "repository": {
     "type": "git",
     "url": "https://github.com/jamesyong-42/mille"
@@ -71,8 +72,25 @@
     "typecheck": "tsc --noEmit",
     "test": "node --test \"test/*.test.mjs\"",
     "size": "size-limit",
+    "size:why": "size-limit --why",
     "bench": "node bench/scroll-expand.mjs"
   },
+  "size-limit": [
+    {
+      "name": "headless (SPEC §12 target 12 KB, limit 20 KB; 13 KB is the fail-on-regression boundary post-B8)",
+      "path": "dist/headless.js",
+      "limit": "13 KB",
+      "gzip": true,
+      "ignore": ["react", "react-dom", "@vibecook/mille", "@tanstack/react-virtual", "@radix-ui/react-context-menu", "@radix-ui/react-dialog", "@radix-ui/react-tooltip"]
+    },
+    {
+      "name": "index (SPEC §12 target 45 KB, limit 75 KB)",
+      "path": "dist/index.js",
+      "limit": "75 KB",
+      "gzip": true,
+      "ignore": ["react", "react-dom", "@vibecook/mille", "@tanstack/react-virtual", "@radix-ui/react-context-menu", "@radix-ui/react-dialog", "@radix-ui/react-tooltip"]
+    }
+  ],
   "peerDependencies": {
     "@radix-ui/react-context-menu": "^2.0.0",
     "@radix-ui/react-dialog": "^1.0.0",

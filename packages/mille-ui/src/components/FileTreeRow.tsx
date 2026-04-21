@@ -1,5 +1,10 @@
 // FileTreeRow — the default row renderer.
 //
+// Phase B8 (v0.2): this component is now a **thin view** on top of the
+// `useFileTreeRow` logic hook. The hook owns ARIA + event wiring +
+// rename / DnD / decoration state; the view spreads the returned prop
+// bundles onto its DOM nodes and sub-components.
+//
 // Structure per MILLE_UI_SPEC.md §4.3:
 //
 //   <div role="treeitem" aria-level aria-selected aria-expanded>
@@ -8,26 +13,16 @@
 //     <FileIcon entry={entry} expanded={expanded} />
 //     <span className="mille-row-name">{displayName}</span>
 //     {pending && <LoadingBadge />}
-//     {/* decoration slot — Phase 10 fills */}
+//     <FileDecorations decorations={decorations} />
 //   </div>
 //
 // Wrapped in `React.memo` keyed on identifying props; re-renders only
-// when ids / versions / flags change. Phase-10 will replace the
-// decoration placeholder and feed a per-row decoration-version into the
-// memo key.
+// when ids / versions / flags change.
 
-import {
-  memo,
-  useCallback,
-  useEffect,
-  useRef,
-  type CSSProperties,
-  type FocusEvent as ReactFocusEvent,
-  type ReactElement,
-  type ReactNode,
-} from 'react';
+import { memo, type ReactElement, type ReactNode } from 'react';
 import * as ContextMenu from '@radix-ui/react-context-menu';
 import { FileIcon, defaultIconTheme } from '../icons/index.js';
+import { useFileTreeRow } from '../hooks/useFileTreeRow.js';
 import type { FileTreeRowProps } from './types.js';
 import { DisclosureChevron } from './DisclosureChevron.js';
 import { IndentGuides } from './IndentGuides.js';
@@ -35,217 +30,33 @@ import { LoadingBadge } from './LoadingBadge.js';
 import { FileRenameInput } from './FileRenameInput.js';
 import { FileDecorations } from './FileDecorations.js';
 
-// Numeric enum matching api.d.ts §EntryKind.
-const KIND_DIRECTORY = 1;
-
-// Tiny class-name helper — saves pulling in `clsx`. Filters out false /
-// undefined / null, then space-joins.
-function cx(...parts: ReadonlyArray<string | false | null | undefined>): string | undefined {
-  let out = '';
-  for (const p of parts) {
-    if (!p) continue;
-    out = out ? `${out} ${p}` : p;
-  }
-  return out || undefined;
-}
-
-const NAME_STYLE: CSSProperties = {
-  flex: '1 1 auto',
-  minWidth: 0,
-  whiteSpace: 'nowrap',
-  overflow: 'hidden',
-  textOverflow: 'ellipsis',
-};
-
-// Base style. Virtualizer supplies absolute positioning via `style`.
-const ROW_BASE_STYLE: CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: '4px',
-  boxSizing: 'border-box',
-  width: '100%',
-  position: 'relative',
-  userSelect: 'none',
-};
-
 function FileTreeRowImpl(props: FileTreeRowProps): ReactElement {
   const {
-    row,
-    depth,
-    selected,
-    focused,
-    expanded,
-    hasChildren,
+    rowProps,
+    chevronProps,
+    iconProps,
+    nameProps,
+    renameProps,
+    decorationProps,
     pending,
-    decorations,
-    iconTheme,
-    className,
-    style,
-    ariaProps,
-    isStickyRoot,
-    cut,
-    hidden,
-    onChevronClick,
-    onClick,
-    onDoubleClick,
-    onContextMenu,
-    onKeyDown,
-    onFocus,
-    renameTargetId,
-    onRenameCommit,
-    onRenameCancel,
-    validateRename,
-    renameError,
-    disableContextMenu,
-    contextMenuContent,
-    registerRowElement,
-    disableDragDrop,
-    dragging,
-    dropTargetPosition,
-    onDragStart,
-    onDragEnter,
-    onDragOver,
-    onDragLeave,
-    onDrop,
-    onDragEnd,
-  } = props;
+    useContextMenuWrapper,
+    depth,
+  } = useFileTreeRow(props);
 
-  // Row DOM ref. Published up through `registerRowElement` so the
-  // tree's keyboard handler can synthesize `contextmenu` events here
-  // when Shift+F10 / Menu is pressed.
-  const rowElRef = useRef<HTMLDivElement | null>(null);
-  const setRowEl = useCallback(
-    (el: HTMLDivElement | null) => {
-      rowElRef.current = el;
-      if (registerRowElement) registerRowElement(row.id, el);
-    },
-    [registerRowElement, row.id],
-  );
-  useEffect(() => {
-    // Ensure cleanup if the row unmounts without the ref callback
-    // firing with `null` (which does run in React, but being explicit
-    // keeps the registry tidy when a consumer remounts aggressively).
-    return () => {
-      if (registerRowElement) registerRowElement(row.id, null);
-    };
-  }, [registerRowElement, row.id]);
-
-  const displayName =
-    row.pathSegments && row.pathSegments.length > 0
-      ? row.pathSegments.join('/')
-      : row.name;
-
-  const isRenaming =
-    renameTargetId !== undefined &&
-    renameTargetId !== null &&
-    renameTargetId === row.id &&
-    typeof onRenameCommit === 'function' &&
-    typeof onRenameCancel === 'function';
-
-  const rowStyle: CSSProperties = {
-    ...ROW_BASE_STYLE,
-    paddingInlineStart: `calc(${depth} * var(--mille-indent-size, 8px))`,
-    height: 'var(--mille-row-height, 22px)',
-    ...(isStickyRoot
-      ? {
-          position: 'sticky',
-          top: 0,
-          zIndex: 1,
-          background: 'var(--mille-sticky-root-bg, var(--mille-row-bg, transparent))',
-        }
-      : null),
-    ...style,
-    ...(hidden ? { display: 'none' } : null),
-  };
-
-  // Phase 11 — DnD wiring. A row is draggable unless the row-level or
-  // tree-level `disableDragDrop` prop is set. Handlers are only
-  // attached when the tree provided them (i.e. DnD is active).
-  const dndEnabled = disableDragDrop !== true;
+  const iconTheme = props.iconTheme ?? defaultIconTheme;
 
   const rowNode: ReactNode = (
-    <div
-      ref={setRowEl}
-      role="treeitem"
-      aria-level={ariaProps['aria-level']}
-      {...(ariaProps['aria-setsize'] !== undefined
-        ? { 'aria-setsize': ariaProps['aria-setsize'] }
-        : null)}
-      {...(ariaProps['aria-posinset'] !== undefined
-        ? { 'aria-posinset': ariaProps['aria-posinset'] }
-        : null)}
-      aria-selected={selected}
-      {...(hasChildren ? { 'aria-expanded': expanded } : null)}
-      data-mille-row-id={row.id}
-      data-mille-depth={depth}
-      data-mille-selected={selected ? 'true' : undefined}
-      data-mille-focused={focused ? 'true' : undefined}
-      data-mille-pending={pending ? 'true' : undefined}
-      data-mille-sticky-root={isStickyRoot ? 'true' : undefined}
-      data-mille-cut={cut ? 'true' : undefined}
-      data-mille-hidden={hidden ? 'true' : undefined}
-      data-mille-dragging={dragging ? 'true' : undefined}
-      data-mille-drop-target-self={
-        dropTargetPosition === 'self' ? 'true' : undefined
-      }
-      data-mille-drop-target-above={
-        dropTargetPosition === 'above' ? 'true' : undefined
-      }
-      data-mille-drop-target-below={
-        dropTargetPosition === 'below' ? 'true' : undefined
-      }
-      data-mille-decoration-ignored={
-        decorations.fontWeight === 0 ? 'true' : undefined
-      }
-      data-mille-decoration-strikethrough={
-        decorations.strikethrough ? 'true' : undefined
-      }
-      className={cx('mille-row', className)}
-      style={rowStyle}
-      tabIndex={focused ? 0 : -1}
-      {...(dndEnabled ? { draggable: true } : null)}
-      onClick={onClick}
-      onDoubleClick={onDoubleClick}
-      onContextMenu={onContextMenu}
-      {...(onKeyDown ? { onKeyDown } : null)}
-      {...(onFocus ? { onFocus } : null)}
-      {...(dndEnabled && onDragStart ? { onDragStart } : null)}
-      {...(dndEnabled && onDragEnter ? { onDragEnter } : null)}
-      {...(dndEnabled && onDragOver ? { onDragOver } : null)}
-      {...(dndEnabled && onDragLeave ? { onDragLeave } : null)}
-      {...(dndEnabled && onDrop ? { onDrop } : null)}
-      {...(dndEnabled && onDragEnd ? { onDragEnd } : null)}
-    >
+    <div {...rowProps}>
       <IndentGuides depth={depth} />
-      <DisclosureChevron
-        expanded={expanded}
-        hasChildren={hasChildren}
-        onClick={onChevronClick}
-      />
-      <FileIcon
-        entry={row}
-        expanded={expanded}
-        theme={iconTheme ?? defaultIconTheme}
-        rootLevel={depth === 0}
-      />
-      {isRenaming ? (
-        <FileRenameInput
-          initialName={row.name}
-          kind={row.kind === KIND_DIRECTORY ? 'directory' : 'file'}
-          onCommit={onRenameCommit!}
-          onCancel={onRenameCancel!}
-          {...(validateRename ? { validator: validateRename } : null)}
-          {...(renameError !== undefined && renameError !== null
-            ? { errorTooltip: renameError }
-            : null)}
-        />
+      <DisclosureChevron {...chevronProps} />
+      <FileIcon {...iconProps} theme={iconTheme} />
+      {renameProps !== null ? (
+        <FileRenameInput {...renameProps} />
       ) : (
-        <span className="mille-row-name" data-mille-row-name="" style={NAME_STYLE}>
-          {displayName}
-        </span>
+        <span {...nameProps} />
       )}
       {pending ? <LoadingBadge /> : null}
-      <FileDecorations decorations={decorations} />
+      <FileDecorations {...decorationProps} />
     </div>
   );
 
@@ -254,10 +65,11 @@ function FileTreeRowImpl(props: FileTreeRowProps): ReactElement {
   // contextmenu event, so a per-row Root matches VS Code / Finder
   // semantics (menu always anchors where the click happened, even when
   // the user switches between rows quickly).
-  if (disableContextMenu) {
+  if (!useContextMenuWrapper) {
     return <>{rowNode}</>;
   }
 
+  const contextMenuContent = props.contextMenuContent;
   return (
     <ContextMenu.Root>
       <ContextMenu.Trigger asChild>{rowNode}</ContextMenu.Trigger>

@@ -1,0 +1,10 @@
+{
+  "upstream": "material-extensions/vscode-material-icon-theme",
+  "version": "5.33.1",
+  "license": "MIT",
+  "fetchedAt": "2026-04-21T05:31:57.161Z",
+  "source": "https://open-vsx.org/api/PKief/material-icon-theme/5.33.1/file/PKief.material-icon-theme-5.33.1.vsix",
+  "kept": 154,
+  "skipped": 21,
+  "sanitizationErrors": 0
+}

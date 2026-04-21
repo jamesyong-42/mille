@@ -125,7 +125,34 @@ function Explorer({ fx, root }: { fx: PortFileExplorer; root: string }): ReactEl
   // it surfaces an error in the toolbar and falls back to default so
   // the tree stays rendered.
   const [iconThemeId, setIconThemeId] = useState<'default' | 'material'>('default');
-  const iconTheme: IconTheme = defaultIconTheme;
+  const [iconTheme, setIconTheme] = useState<IconTheme>(defaultIconTheme);
+
+  // v0.2 B5 — async-load Material Icon Theme bundle on demand. Falls
+  // back to default if the bundle fails (e.g., offline CI stub).
+  useEffect(() => {
+    if (iconThemeId === 'default') {
+      setIconTheme(defaultIconTheme);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const mod = await import('@vibecook/mille-ui/icons/material');
+        const theme = await mod.loadMaterialIconTheme();
+        if (!cancelled) setIconTheme(theme);
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn('[playground] Material theme failed to load:', err);
+        if (!cancelled) {
+          setIconTheme(defaultIconTheme);
+          setIconThemeId('default');
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [iconThemeId]);
 
   // Port clients don't implement `registerDecorationProvider`; the
   // decoration pipeline lives on the native `FileExplorer` only. Keep

@@ -1,14 +1,15 @@
-// Phase 15.4 + 15.5 + A1.8 — playground toolbar.
+// Phase 15.4 + 15.5 + A1.8 + B4.4 — playground toolbar.
 //
 // Responsibilities:
 //   - Theme toggle (light / dark) — sets `data-theme` on <html>.
 //   - Icon-theme dropdown (default / material stub). Material is not
 //     shipped in v0.1; selecting it surfaces an error toast and
 //     restores `'default'` so the tree keeps rendering.
-//   - Git decorations checkbox — calls `registerGitDecorations` with a
-//     stub GitClient that treats every file as "unmodified" (no entries
-//     returned) so the wiring is exercised without shelling out to
-//     libgit2.
+//   - Git decorations checkbox — Phase B4 swapped the v0.1 stub for
+//     `createShellGitClient`. It shells out to the host's `git`
+//     binary and parses `--porcelain=v2 -z`, so modified / added /
+//     untracked files now surface real badges. If `git` isn't on
+//     PATH the client silently returns an empty map; no crash.
 //   - Agent-rules checkbox — calls `registerAgentRulesDecorations` with
 //     the built-in matcher list.
 //   - Reset button — stubbed: logs an intent and blurs the focused
@@ -18,10 +19,7 @@
 //
 // Phase A1 removed the "port-safe" no-op shim — `PortFileExplorer` now
 // ships `registerDecorationProvider`, so the companions register
-// directly against it. Agent-rules produces real badges immediately
-// because its matchers are static; the git path still pairs with a
-// stub GitClient (every file "unmodified") and Phase A2 replaces that
-// with a shell-based implementation.
+// directly against it.
 
 import {
   useCallback,
@@ -31,10 +29,9 @@ import {
   type ReactElement,
 } from 'react';
 import {
+  createShellGitClient,
   registerGitDecorations,
-  type GitClient,
   type GitDecorationsHandle,
-  type GitStatusEntry,
 } from '@vibecook/mille-ui/git';
 import {
   registerAgentRulesDecorations,
@@ -52,23 +49,6 @@ export interface ToolbarProps {
   onThemeChange(next: ThemeMode): void;
   readonly iconThemeId: IconThemeId;
   onIconThemeChange(next: IconThemeId): void;
-}
-
-/**
- * Stub git client for v0.1. Returns an empty status map (everything
- * "unmodified"). Mutates `onChange` listeners into a dead subscription —
- * the stub never fires changes. A real implementation would watch
- * `.git/HEAD` + index through preload's node:fs or via libgit2.
- */
-function createStubGitClient(): GitClient {
-  return {
-    async getStatus(): Promise<ReadonlyMap<string, GitStatusEntry>> {
-      return new Map();
-    },
-    onChange(): () => void {
-      return () => { /* no-op */ };
-    },
-  };
 }
 
 export function Toolbar(props: ToolbarProps): ReactElement {
@@ -96,14 +76,11 @@ export function Toolbar(props: ToolbarProps): ReactElement {
 
   const handleIconThemeChange = useCallback(
     (next: IconThemeId) => {
-      if (next === 'material') {
-        setToast(
-          'Material icon theme bundle is not shipped in v0.1 — falling back to default.',
-        );
-        onIconThemeChange('default');
-        return;
-      }
-      setToast(null);
+      // v0.2 B5 — Material bundle is real now. App.tsx async-loads it;
+      // if the dynamic import rejects it falls back to default + logs.
+      setToast(
+        next === 'material' ? 'Loading Material Icon Theme…' : null,
+      );
       onIconThemeChange(next);
     },
     [onIconThemeChange],
@@ -117,19 +94,19 @@ export function Toolbar(props: ToolbarProps): ReactElement {
         gitHandleRef.current = null;
         return;
       }
-      // Phase A1 — PortFileExplorer now implements
-      // `registerDecorationProvider`, so we register directly. The
-      // stub GitClient returns an empty status map so no leaves
-      // actually carry a badge; Phase A2 replaces it with a shell
-      // implementation.
+      // Phase B4 — real shell-based `GitClient`. Shells out to the
+      // host's `git` binary and watches `.git/HEAD` + `.git/index` for
+      // refresh. On a non-repo directory (or missing git binary) the
+      // client returns an empty map and no badges render — no crash.
       try {
+        const client = createShellGitClient({ rootPath });
         gitHandleRef.current = registerGitDecorations({
           fx,
-          client: createStubGitClient(),
+          client,
           rootPath,
         });
         setToast(
-          'Git decorations: stub client (every file treated as "unmodified"). Phase A2 replaces with the shell client.',
+          'Git decorations: live. Modified / staged / untracked files now carry real badges.',
         );
       } catch (err) {
         setToast(
@@ -241,7 +218,7 @@ export function Toolbar(props: ToolbarProps): ReactElement {
             }
           >
             <option value="default">Default</option>
-            <option value="material">Material (stub)</option>
+            <option value="material">Material</option>
           </select>
         </label>
       </div>

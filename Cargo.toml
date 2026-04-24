@@ -21,7 +21,7 @@ napi-build = "2.2"
 
 # Filesystem watching
 notify = "6.1"
-notify-debouncer-full = "0.3"
+notify-debouncer-full = "0.7"
 
 # Parallel directory walking
 jwalk = "0.8"

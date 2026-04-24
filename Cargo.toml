@@ -20,7 +20,7 @@ napi-derive = "3.2"
 napi-build = "2.2"
 
 # Filesystem watching
-notify = "6.1"
+notify = "8.2"
 notify-debouncer-full = "0.3"
 
 # Parallel directory walking

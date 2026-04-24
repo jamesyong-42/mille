@@ -16,7 +16,11 @@
 
 import { FileExplorer, type Entry, type MirrorSnapshot } from './client.js';
 import type { EntryId, ExplorerOptions } from './client.js';
-import { DecorationStore, type Decoration } from './decorations.js';
+import {
+  DecorationStore,
+  type Decoration,
+  type DecorationProvider,
+} from './decorations.js';
 import {
   applyDeltaToSession,
   computeSessionDelta,
@@ -248,6 +252,57 @@ class FileExplorerHostImpl implements FileExplorerHost {
   markSubtreeResynced(rootId: number): void {
     this.pendingSubtreeResynced.add(rootId);
     this.pendingSubtreeDirty.delete(rootId);
+  }
+
+  /**
+   * In-process decoration provider registration. Writes into the
+   * host's DecorationStore (same store the `decorations` wire frame
+   * feeds) so the next tick fans out to every attached session.
+   *
+   * `host.local.registerDecorationProvider` is NOT equivalent — that
+   * registers against the `FileExplorer`'s independent DecorationStore
+   * and decorations never reach clients. Use this method for any
+   * provider that should be visible to renderer sessions.
+   */
+  registerDecorationProvider(rawProvider: unknown): Disposable {
+    if (this.disposed) {
+      throw new Error('FileExplorerHost is disposed');
+    }
+    const provider = rawProvider as DecorationProvider;
+    const sub = provider.onDidChange(async (ids) => {
+      const changed: number[] = [];
+      for (const id of ids) {
+        try {
+          const maybe = provider.provide({ id });
+          const d =
+            maybe !== null && typeof maybe === 'object' && 'then' in maybe
+              ? await maybe
+              : (maybe as Decoration | null);
+          if (
+            this.decorationStore.setForProvider(provider.id, id, d ?? null)
+          ) {
+            changed.push(id);
+          }
+        } catch {
+          // Swallow provider errors — a buggy provider shouldn't
+          // crash the host. Matches FileExplorer's behaviour.
+        }
+      }
+      if (changed.length > 0) {
+        this.decorationStore.bump(changed);
+        for (const id of changed) this.pendingDecorationChangedIds.add(id);
+      }
+    });
+    return {
+      dispose: () => {
+        sub.dispose();
+        const cleared = this.decorationStore.removeProvider(provider.id);
+        if (cleared.length > 0) {
+          this.decorationStore.bump(cleared);
+          for (const id of cleared) this.pendingDecorationChangedIds.add(id);
+        }
+      },
+    };
   }
 
   attachPort(rawPort: MessagePortLike): Disposable {

@@ -57,10 +57,17 @@ function setGitDecorations(enabled: boolean, rootPath: string): void {
   if (gitDecorations !== null) return; // already on — idempotent
   try {
     const client = createShellGitClient({ rootPath });
+    const currentHost = host;
     gitDecorations = registerGitDecorations({
-      fx: host.local,
+      fx: host.local,          // read path (getSnapshot, getByUri)
       client,
       rootPath,
+      // Critical: register against the *host's* DecorationStore, not
+      // `host.local`'s. `host.local.registerDecorationProvider` has
+      // its own independent store that never reaches attached port
+      // sessions — decorations would place but never fan out. The
+      // host's store is what the per-session tick observes.
+      registrar: (provider) => currentHost.registerDecorationProvider(provider),
     });
     console.log('[fx-host] git decorations enabled');
   } catch (err) {

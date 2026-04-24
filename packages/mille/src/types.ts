@@ -60,5 +60,14 @@ export interface FileExplorerHost {
    * state.
    */
   markSubtreeResynced(rootId: number): void;
+  /**
+   * Register an in-process decoration provider directly against the
+   * host's DecorationStore. Fires fan out to every attached session
+   * via the existing §4.9.11 delta pipeline. Prefer this over
+   * `host.local.registerDecorationProvider` when the host is the
+   * origin of the decorations — `host.local`'s store is independent
+   * and never reaches attached clients.
+   */
+  registerDecorationProvider(provider: unknown): Disposable;
   dispose(): Promise<void>;
 }

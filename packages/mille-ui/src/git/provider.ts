@@ -109,6 +109,20 @@ export interface RegisterGitDecorationsOptions {
   readonly uriScheme?: string;
   /** Forwarded to the batcher; exposed for tests. */
   readonly batchOptions?: BatchOptions;
+  /**
+   * v0.2 — when the provider should register somewhere other than
+   * `fx.registerDecorationProvider` (e.g. `FileExplorerHost` exposes
+   * its own decoration store that's separate from `host.local`'s),
+   * supply a custom registrar. The registrar is called exactly once
+   * with the built provider and must return a `Disposable`. `fx` is
+   * still used for read paths (`getSnapshot`, `getByUri`) so pass
+   * the reader-side surface (usually `host.local`).
+   */
+  readonly registrar?: (provider: EngineDecorationProvider) => Disposable;
+}
+
+interface Disposable {
+  dispose(): void;
 }
 
 export interface GitDecorationsHandle {
@@ -370,7 +384,9 @@ export function registerGitDecorations(
     },
   };
 
-  const registration = fx.registerDecorationProvider(provider);
+  const registration = options.registrar
+    ? options.registrar(provider)
+    : fx.registerDecorationProvider(provider);
 
   const unsubscribe = client.onChange(() => {
     if (disposed) return;

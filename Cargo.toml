@@ -58,7 +58,7 @@ blake3 = "1.5"
 memmap2 = "0.9"
 
 # Errors
-thiserror = "1.0"
+thiserror = "2.0"
 
 # Small collections
 smallvec = { version = "1.13", features = ["const_generics", "union"] }

@@ -21,13 +21,15 @@ snapshots, and a React adapter.
 
 ### @vibecook/mille-ui
 
-React file-tree UI companion to `@vibecook/mille`. `v0.1.0` available.
+React file-tree UI companion to `@vibecook/mille`. `v0.2.0` available.
 See `packages/mille-ui/README.md` and `packages/mille-ui/CHANGELOG.md`.
 
 ## Status
 
-v0.1 in-development. 401 tests green (204 Rust + 197 TypeScript).
-See `SPEC.md`, `PLAN.md`, and `packages/mille/EMBEDDING.md`.
+v0.2.0 released 2026-04-25. Roots-in-deltas, lazy list-on-expand,
+symlink-aware ignore, port-side decoration pipeline, real shell-based
+GitClient, Material Icon Theme bundle, imperative `FileTreeRef`, and a
+headless bundle trim from 21.69 KB → 12.46 KB gzip. See `CHANGELOG.md`.
 
 ## Quickstart
 

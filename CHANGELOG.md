@@ -1,5 +1,84 @@
 # mille changelog
 
+## 0.2.0 — 2026-04-25
+
+Engine correctness + Track A completion. Builds on v0.1; no breaking API
+changes for in-process consumers. The port wire protocol gains optional
+`roots` on delta frames and adds `decorations` / `decorationChanged` frame
+types — old clients keep working, new fields ignored if unused.
+
+### Engine (`@vibecook/mille`)
+
+- **Roots in deltas (B1).** `DeltaMsg.roots?` carries root-set updates so a
+  client mirror that handshakes before the walker has populated the root
+  no longer ends up with `roots=[]` forever. `populateFromRoots`-before-
+  `ready` workarounds can be removed.
+- **Lazy list-on-expand (B2).** New `ExplorerOptions.initialWalk?:
+  'full' | 'roots-only' | 'none'` (default `'full'` for back-compat).
+  `host.handleSetExpanded` now triggers shallow walks for newly-expanded
+  folders whose direct children aren't yet in the store. Tree renders in
+  <200 ms with `'roots-only'` even on huge repos.
+- **Symlink-aware ignore (B3).** Walker applies gitignore rules on the
+  DirEntry name before resolving symlinks, so pnpm-style
+  `node_modules → central store` symlinks are correctly skipped.
+  Walks are now O(tracked-files) on pnpm monorepos instead of
+  O(tracked + store).
+- **Port-side decoration pipeline (Phase A1).** New `decorations` and
+  `decorationChanged` frame types. `PortFileExplorer` implements
+  `registerDecorationProvider` with batched push semantics; the host
+  merges into its `DecorationStore` and fans out to every connected
+  client. Other clients see the same git/lint badges (by design).
+- **Host-level `registerDecorationProvider`.** Decoration providers can
+  be registered against the host (not just per-port-client), letting an
+  embedder install one git provider that fans out to every renderer.
+- **NAPI-undefined guards.** `getByUri` and provider-edge paths handle
+  `undefined` returns from the binding without crashing.
+
+### UI (`@vibecook/mille-ui`)
+
+- **Shell-based `createShellGitClient` (B4 / A2).** Spawns
+  `git status --porcelain=v2 -z`, watches `.git/HEAD` and `.git/index`
+  via `node:fs.watch` (100 ms debounce). Now exported from
+  `@vibecook/mille-ui/git/node` (Node-only entrypoint) so the browser
+  bundle stays free of `node:child_process`.
+- **Material Icon Theme bundle (B5 / A3).** `loadMaterialIconTheme()`
+  returns the real bundle. Built at publish time from the upstream
+  `material-extensions/vscode-material-icon-theme` repo (MIT) via
+  `scripts/build-material.mjs`. See `NOTICES.md` for attribution.
+- **Imperative `FileTreeRef` handle (B6).** `forwardRef` on `FileTree`
+  exposes `revealPath` / `revealId` / `scrollToRow` / `clearSelection`
+  / `clearFilter` / `clearClipboard` / `focusFilter`. New
+  `useFileTreeRef` hook for nested consumers.
+- **Headless bundle trim (B8).** Headless entry now ships logic hooks
+  + ARIA primitives without the styled-row chrome. Bundle dropped from
+  21.69 KB → 12.46 KB gzip (SPEC §12 target was 12 KB; landed within
+  the 13 KB fail-on-regression boundary). `size-limit` now fails CI on
+  regression.
+
+### Playground (`apps/playground`)
+
+- **Folder picker + recent folders dropdown (B7).** Open-folder button
+  becomes a dropdown of up to 10 recent projects (persisted to
+  `app.getPath('userData')/recent-folders.json`) plus "Browse…".
+- Removed the decoration no-op shim — git and agent-rules toggles now
+  render real badges via the port-side pipeline.
+- Switched to `initialWalk: 'roots-only'`; dropped the
+  `populateFromRoots`-before-`ready` workaround and the temporary
+  `excludeGlobs` workaround for pnpm symlinks.
+
+### Known gaps (carried into v0.2.x / v0.3)
+
+- Headless bundle is 12.46 KB gzip vs the 12 KB SPEC §12 target — within
+  the regression boundary but not under the aspirational floor.
+- Full Logic-hook + View split per `MILLE_UI_SPEC` §4.9 is partial; the
+  remaining row primitives are not yet split.
+- Playwright perf guardrails + visual regression baselines deferred.
+- Content search is still a separate package (not yet built).
+- Remote FS providers (SSH, zip, memfs) reserved in API; implementations
+  deferred.
+- `AbortSignal` on async mutations still partial (napi-rs 3.x `!Send`).
+- Windows parent-directory fsync (POSIX-only today).
+
 ## 0.1.0 — 2026-04-19
 
 First release. Local-mode `@vibecook/mille` with:

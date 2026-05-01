@@ -15,7 +15,7 @@ repository = "https://github.com/jamesyong/file-explorer"
 
 [workspace.dependencies]
 # NAPI bindings (3.x as of 2026-04)
-napi = { version = "3.2", default-features = false, features = ["napi8", "async", "tokio_rt", "serde-json"] }
+napi = { version = "3.8", default-features = false, features = ["napi8", "async", "tokio_rt", "serde-json"] }
 napi-derive = "3.2"
 napi-build = "2.2"
 

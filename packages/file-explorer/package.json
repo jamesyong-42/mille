@@ -55,7 +55,7 @@
     "prepublishOnly": "napi prepublish -t npm"
   },
   "devDependencies": {
-    "@napi-rs/cli": "^3.0.0",
+    "@napi-rs/cli": "^3.7.0",
     "@types/react": "^18",
     "fast-check": "^4.7.0",
     "react": "^18",

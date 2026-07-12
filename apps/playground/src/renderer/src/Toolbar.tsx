@@ -35,7 +35,8 @@ import {
 import type { PortFileExplorer } from '@vibecook/mille/port';
 
 export type ThemeMode = 'light' | 'dark';
-export type IconThemeId = 'default' | 'material';
+/** `stage` = playground mock icons (default). */
+export type IconThemeId = 'stage' | 'default' | 'material';
 
 /**
  * v0.2 B7 — compact path display for the recents dropdown. Absolute
@@ -89,6 +90,8 @@ export interface ToolbarProps {
    * clipboard, and return keyboard focus to the tree.
    */
   onReset?(): void;
+  /** Vertical stack for the settings popover (Project gear). */
+  readonly compact?: boolean;
 }
 
 export function Toolbar(props: ToolbarProps): ReactElement {
@@ -101,6 +104,7 @@ export function Toolbar(props: ToolbarProps): ReactElement {
     onIconThemeChange,
     iconThemeStatus,
     onReset,
+    compact = false,
   } = props;
 
   const [toast, setToast] = useState<string | null>(null);
@@ -116,8 +120,25 @@ export function Toolbar(props: ToolbarProps): ReactElement {
   // Agent-rules runs in the renderer — matchers are static, no Node.
   const agentHandleRef = useRef<AgentRulesHandle | null>(null);
 
-  const [gitOn, setGitOn] = useState(false);
+  const [gitOn, setGitOn] = useState(true);
   const [agentOn, setAgentOn] = useState(false);
+
+  // Auto-enable git decorations so the explorer matches the docs mock
+  // (M / A badges) without requiring a manual toggle on first open.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        await window.millePlayground.setGitDecorations(true);
+        if (!cancelled) setGitOn(true);
+      } catch {
+        if (!cancelled) setGitOn(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [fx]);
 
   // Ensure every disposer fires on unmount.
   useEffect(() => {
@@ -135,7 +156,13 @@ export function Toolbar(props: ToolbarProps): ReactElement {
       // v0.2 B5 — Material bundle is real now. App.tsx async-loads it;
       // if the dynamic import rejects it falls back to default + logs.
       setToast(
-        next === 'material' ? 'Loading Material Icon Theme…' : null,
+        next === 'material'
+          ? 'Loading Material Icon Theme…'
+          : next === 'stage'
+            ? 'Stage icons (docs mock).'
+            : next === 'default'
+              ? 'Default monoline icons.'
+              : null,
       );
       onIconThemeChange(next);
     },
@@ -297,7 +324,7 @@ export function Toolbar(props: ToolbarProps): ReactElement {
   }, [onReset]);
 
   return (
-    <div className="toolbar">
+    <div className={compact ? 'toolbar toolbar--compact' : 'toolbar'}>
       <div className="toolbar-group">
         <div className="recents-wrap" ref={recentsWrapRef}>
           <button
@@ -379,8 +406,9 @@ export function Toolbar(props: ToolbarProps): ReactElement {
               handleIconThemeChange(e.target.value as IconThemeId)
             }
           >
-            <option value="default">Default</option>
             <option value="material">Material</option>
+            <option value="default">Default</option>
+            <option value="stage">Stage</option>
           </select>
         </label>
       </div>

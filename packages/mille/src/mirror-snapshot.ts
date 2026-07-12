@@ -59,30 +59,56 @@ export function clientEntryToEntry(c: ClientEntry): Entry {
 }
 
 /**
- * Sort children by name for deterministic display order. The client
- * may receive child ids out-of-order (the host sends them in
- * id-allocation order, not sorted); sort here using the byId map so
- * wire-order doesn't leak into the rendered tree. Falls back to id
- * comparison when names collide.
+ * Sort children for IDE-style trees: directories first, then files,
+ * each group A→Z by name. Matches JetBrains / VS Code Project view
+ * ordering (not pure alphabetical, which interleaves files and dirs).
+ *
+ * The client may receive child ids out-of-order (the host sends them
+ * in id-allocation order); sort here using the byId map so wire-order
+ * doesn't leak into the rendered tree.
  */
+/** True for real directories and symlink-to-directory (pnpm workspace links). */
+function isExpandableEntry(e: ClientEntry): boolean {
+  return e.kind === 1 || e.symlinkTargetIsDir === true;
+}
+
 function sortChildrenByName(ids: number[], byId: Map<number, ClientEntry>): number[] {
   return [...ids].sort((a, b) => {
-    const na = byId.get(a)?.name ?? '';
-    const nb = byId.get(b)?.name ?? '';
+    const ea = byId.get(a);
+    const eb = byId.get(b);
+    // Directories and symlink-to-dir (pnpm links) sort above files.
+    const ka = ea && isExpandableEntry(ea) ? 0 : 1;
+    const kb = eb && isExpandableEntry(eb) ? 0 : 1;
+    if (ka !== kb) return ka - kb;
+    const na = ea?.name ?? '';
+    const nb = eb?.name ?? '';
     if (na === nb) return a - b;
     return na < nb ? -1 : 1;
   });
 }
 
 /**
- * Invisibility filter matching fx-core's `entry_counts_visible`.
- * Ignored and hidden entries drop out of the default visible set;
- * `includeIgnored=true` disables both filters (mirroring the Rust
- * side's single boolean).
+ * Whether an entry appears in the default Project-view slice.
+ *
+ * JetBrains Project tool window conventions:
+ *   - Hide OS noise (.DS_Store, Thumbs.db) and VCS internals (`.git`).
+ *   - **Show** gitignored / excluded paths (node_modules, out, target,
+ *     *.tsbuildinfo) so the tree matches what the IDE surfaces — the
+ *     UI styles them as library roots / excluded rather than omitting.
+ *   - **Show** project dotfiles (.gitignore, .env, …).
+ *   - `includeIgnored=true` additionally reveals OS/VCS noise.
  */
 function isVisibleEntry(e: ClientEntry, includeIgnored: boolean): boolean {
-  if (includeIgnored) return true;
-  return !e.isIgnored && !e.isHidden;
+  const n = e.name;
+  // OS + VCS noise — hidden unless the caller asks for everything.
+  if (n === '.DS_Store' || n === 'Thumbs.db' || n === 'desktop.ini') {
+    return includeIgnored;
+  }
+  if (n === '.git') return includeIgnored;
+
+  // Project view shows ignored + hidden entries (excluded folders,
+  // config dotfiles, build artifacts). Styling is the UI's job.
+  return true;
 }
 
 /**
@@ -142,13 +168,13 @@ export class ClientMirrorSnapshot {
     // folders the walker hasn't visited yet. Returning `false` here
     // would hide the disclosure chevron, so the user can't expand
     // the folder, so the host never gets `setExpanded` and the walk
-    // never fires — deadlock. For unwalked entries, fall back to the
-    // entry's kind: `KIND_DIRECTORY` (1) means "possibly has children,
-    // show chevron"; files / unknown kinds stay false.
+    // never fires — deadlock. For unwalked entries, fall back to
+    // expandable kinds: real directories AND symlink-to-dir (pnpm /
+    // npm workspace links — JetBrains shows these with a chevron).
     const count = this.state.directChildCounts.get(id);
     if (count !== undefined) return count > 0;
     const entry = this.state.byId.get(id);
-    return entry?.kind === 1;
+    return entry !== undefined && isExpandableEntry(entry);
   }
 
   /**
@@ -228,11 +254,11 @@ export class ClientMirrorSnapshot {
       if (skipped < options.offset) {
         skipped++;
       } else {
-        // Same lazy-friendly semantic as hasChildren(id): if the
-        // walker hasn't visited yet, assume directories may have
-        // children so the UI renders a chevron and expansion fires.
+        // Same lazy-friendly semantic as hasChildren(id): unvisited
+        // dirs / symlink-to-dir get a chevron so expand can fire.
         const cnt = this.state.directChildCounts.get(frame.id);
-        const hasChildren = cnt === undefined ? entry.kind === 1 : cnt > 0;
+        const hasChildren =
+          cnt === undefined ? isExpandableEntry(entry) : cnt > 0;
         const base = clientEntryToEntry(entry);
         const row: VisibleRow = {
           ...base,

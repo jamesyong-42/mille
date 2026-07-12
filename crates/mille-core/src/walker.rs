@@ -77,6 +77,11 @@ pub struct WalkedEntry {
     pub mtime_ms: i64,
     pub ctime_ms: i64,
     pub is_symlink: bool,
+    /// When `kind == Symlink`, whether the target is a directory (pnpm /
+    /// npm workspace links). `None` for non-symlinks or when the target
+    /// can't be resolved. UI uses this to render an expandable chevron
+    /// (JetBrains/VS Code "folder symlink" affordance).
+    pub symlink_target_is_dir: Option<bool>,
     pub is_readonly: bool,
     pub is_hidden: bool,
     pub depth: u16,
@@ -153,12 +158,18 @@ fn walk_inner(
 
     if let Some(matcher_arc) = matcher_arc.clone() {
         // The callback fires once per directory with the directory's full
-        // child list. The task assignment explicitly wants us to emit the
-        // ignored entry itself (e.g. `node_modules` the symlink) but block
-        // descent — which we do by clearing `read_children_path`. Tests
-        // for B3 assert the symlink entry is present in the output, so we
-        // do NOT drop the entry from `children`; only the descent is
-        // blocked.
+        // child list. B3 wants us to emit the ignored entry itself (e.g.
+        // `node_modules` the symlink) but block *further* descent into
+        // it when discovered as a child — clear `read_children_path`.
+        //
+        // jwalk's first process_read_dir call is special: `children` is
+        // a 1-element list containing the *walk root*, and
+        // `parent_path` is the root's parent. If the walk root is itself
+        // gitignored (user expanded `node_modules` / `out`), clearing
+        // read_children_path on that entry would prevent listing any
+        // children — the expand UI would show an empty folder. Never
+        // block descent for the walk root itself.
+        let walk_root = root.to_path_buf();
         builder = builder.process_read_dir(move |_depth, parent_path, _rds, children| {
             // First pass: scan for newly-appeared ignore files in this
             // directory so nested rules apply to their siblings.
@@ -201,7 +212,12 @@ fn walk_inner(
                     let is_dir_like =
                         dent.file_type.is_dir() || dent.file_type.is_symlink();
                     if matcher.is_ignored(&logical, is_dir_like) {
-                        dent.read_children_path = None;
+                        // Preserve expand-into-ignored-dir: the walk root
+                        // must keep its read_children_path so depth-1
+                        // listing works when the user opens node_modules.
+                        if logical != walk_root {
+                            dent.read_children_path = None;
+                        }
                     }
                 }
             }
@@ -233,23 +249,40 @@ fn walk_inner(
             continue;
         }
 
+        // Prefer the DirEntry's non-following file_type when available so
+        // symlinks stay classified as Symlink (pnpm workspace links). Fall
+        // back to metadata() when the entry type is missing.
+        let path = dent.path();
+        let entry_ft = dent.file_type();
+        let is_symlink = entry_ft.is_symlink();
+
+        // Metadata: for symlinks use lstat-equivalent for size/mtime of the
+        // link itself; for target-is-dir check, follow once with metadata.
         let meta = match dent.metadata() {
             Ok(m) => m,
             Err(_) => continue,
         };
         let ft = meta.file_type();
-        let is_symlink = ft.is_symlink();
-        let kind = if ft.is_file() {
-            EntryKind::File
-        } else if ft.is_dir() {
-            EntryKind::Directory
-        } else if is_symlink {
-            EntryKind::Symlink
+
+        let (kind, symlink_target_is_dir) = if is_symlink || ft.is_symlink() {
+            // Follow once to learn if this is a folder link (pnpm / npm).
+            let target_is_dir = std::fs::metadata(&path)
+                .map(|m| m.is_dir())
+                .unwrap_or(false);
+            (EntryKind::Symlink, Some(target_is_dir))
+        } else if ft.is_dir() || entry_ft.is_dir() {
+            (EntryKind::Directory, None)
+        } else if ft.is_file() || entry_ft.is_file() {
+            (EntryKind::File, None)
         } else {
-            EntryKind::Unknown
+            (EntryKind::Unknown, None)
         };
 
-        let size = if ft.is_file() { meta.len() } else { 0 };
+        let size = if matches!(kind, EntryKind::File) {
+            meta.len()
+        } else {
+            0
+        };
         let mtime_ms = meta
             .modified()
             .ok()
@@ -258,7 +291,6 @@ fn walk_inner(
         let ctime_ms = ctime_ms_from_metadata(&meta).unwrap_or(mtime_ms);
         let is_readonly = meta.permissions().readonly();
 
-        let path = dent.path();
         let parent_path = if is_walk_root {
             None
         } else {
@@ -273,7 +305,8 @@ fn walk_inner(
             size,
             mtime_ms,
             ctime_ms,
-            is_symlink,
+            is_symlink: is_symlink || ft.is_symlink(),
+            symlink_target_is_dir,
             is_readonly,
             is_hidden,
             depth: depth as u16,
@@ -333,8 +366,10 @@ pub fn populate_store(
         // Suppress unused-variable warning on non-ignore paths.
         let _ = root;
 
+        let is_dir_like = w.kind == EntryKind::Directory
+            || w.symlink_target_is_dir == Some(true);
         let is_ignored = match ignore {
-            Some(m) => m.is_ignored(&w.path, w.kind == EntryKind::Directory),
+            Some(m) => m.is_ignored(&w.path, is_dir_like),
             None => false,
         };
 
@@ -346,7 +381,7 @@ pub fn populate_store(
             size: w.size,
             mtime_ms: w.mtime_ms,
             ctime_ms: w.ctime_ms,
-            symlink_target_is_dir: None,
+            symlink_target_is_dir: w.symlink_target_is_dir,
             path_segments: None,
             is_ignored,
             is_readonly: w.is_readonly,
@@ -751,6 +786,28 @@ mod tests {
             .expect("link entry");
         assert!(link.is_symlink);
         assert_eq!(link.kind, EntryKind::Symlink);
+        assert_eq!(link.symlink_target_is_dir, Some(false));
+    }
+
+    /// pnpm-style package link: symlink whose target is a directory must
+    /// carry `symlink_target_is_dir = true` so the UI can expand it.
+    #[cfg(unix)]
+    #[test]
+    fn walk_marks_symlink_to_dir() {
+        use std::os::unix::fs::symlink;
+        let td = TempDir::new().unwrap();
+        fs::create_dir(td.path().join("pkg")).unwrap();
+        make_file(&td.path().join("pkg"), "index.js", b"x");
+        symlink(td.path().join("pkg"), td.path().join("link")).unwrap();
+
+        let entries = walk(td.path(), WalkOptions::default()).unwrap();
+        let link = entries
+            .iter()
+            .find(|e| e.name == "link")
+            .expect("link entry");
+        assert!(link.is_symlink);
+        assert_eq!(link.kind, EntryKind::Symlink);
+        assert_eq!(link.symlink_target_is_dir, Some(true));
     }
 
     /// B3 regression: a pnpm-style `node_modules` symlink whose target is a
@@ -864,6 +921,54 @@ mod tests {
         assert!(
             !names.contains(&"artifact.bin"),
             "nested gitignore didn't block descent: {:?}",
+            names
+        );
+    }
+}
+
+
+#[cfg(test)]
+mod expand_ignored_dir {
+    use std::fs;
+    use crate::ignore::IgnoreMatcher;
+    use crate::walker::{walk_with_ignore, WalkOptions};
+
+    #[test]
+    fn depth1_walk_into_gitignored_dir_lists_children() {
+        let td = tempfile::tempdir().unwrap();
+        let root = td.path();
+        fs::write(root.join(".gitignore"), "node_modules/\nout/\n").unwrap();
+        let nm = root.join("node_modules");
+        fs::create_dir(&nm).unwrap();
+        fs::write(nm.join("left-pad"), "1").unwrap();
+        fs::create_dir(nm.join("pkg")).unwrap();
+        fs::write(nm.join("pkg").join("index.js"), "x").unwrap();
+
+        let mut matcher = IgnoreMatcher::new();
+        matcher.add_from_file(&root.join(".gitignore")).unwrap();
+
+        let opts = WalkOptions {
+            max_depth: Some(1),
+            include_root: true,
+            include_hidden: true,
+            ..WalkOptions::default()
+        };
+
+        let plain = super::walk(&nm, opts.clone()).unwrap();
+        let plain_names: Vec<_> = plain.iter().map(|w| w.name.as_str()).collect();
+        assert!(
+            plain_names.contains(&"left-pad") && plain_names.contains(&"pkg"),
+            "control: plain walk should list children; got {:?}",
+            plain_names
+        );
+
+        let walked = walk_with_ignore(&nm, opts, &matcher).unwrap();
+        let names: Vec<_> = walked.iter().map(|w| w.name.as_str()).collect();
+        // When the *walk root* is itself an ignored path (user expanded
+        // node_modules), we still need depth-1 children for the tree UI.
+        assert!(
+            names.contains(&"left-pad") && names.contains(&"pkg"),
+            "expected children of ignored dir when walking FROM it; got {:?}",
             names
         );
     }

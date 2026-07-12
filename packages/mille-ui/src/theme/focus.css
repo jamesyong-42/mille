@@ -62,7 +62,12 @@
  */
 .mille-row[data-mille-dragging="true"] { opacity: 0.5; }
 .mille-row[data-mille-drop-target-self="true"] { background: color-mix(in oklch, currentColor 10%, transparent); outline: 1px dashed var(--mille-accent-bg); outline-offset: -1px; }
-.mille-row { position: relative; }
+/*
+ * Drop markers use position:absolute. Do NOT set position:relative on
+ * .mille-row here — the virtualizer needs position:absolute (inline).
+ * Absolute-positioned rows already form the containing block for
+ * ::before/::after markers.
+ */
 .mille-row[data-mille-drop-target-above="true"]::before,
 .mille-row[data-mille-drop-target-below="true"]::after {
   content: ''; position: absolute; left: 0; right: 0; height: 2px; background: var(--mille-accent-bg); pointer-events: none;

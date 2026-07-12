@@ -211,3 +211,27 @@ mod tests {
         assert_eq!(err.code(), ErrorCode::EINVAL);
     }
 }
+
+
+#[cfg(test)]
+mod expand_ignore_debug {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn matcher_on_children_inside_ignored_dir() {
+        let td = tempfile::tempdir().unwrap();
+        let root = td.path();
+        fs::write(root.join(".gitignore"), "node_modules/\n").unwrap();
+        let nm = root.join("node_modules");
+        fs::create_dir(&nm).unwrap();
+        let child = nm.join("left-pad");
+        fs::write(&child, "1").unwrap();
+
+        let mut m = IgnoreMatcher::new();
+        m.add_from_file(&root.join(".gitignore")).unwrap();
+        assert!(m.is_ignored(&nm, true), "nm dir ignored");
+        assert!(m.is_ignored(&child, false), "child file ignored");
+        // walk without process_read_dir would list them
+    }
+}

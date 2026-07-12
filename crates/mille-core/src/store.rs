@@ -20,6 +20,16 @@ use crate::entry::{Entry, EntryId, EntryKind};
 use crate::error::FxError;
 use crate::snapshot::{entry_counts_visible, StoreSnapshot, MAX_ANCESTOR_WALK};
 
+/// Rank for sibling ordering: directories (and symlink-to-dir) before files.
+#[inline]
+fn sibling_kind_rank(entry: &Entry) -> u8 {
+    match entry.kind {
+        EntryKind::Directory => 0,
+        EntryKind::Symlink if entry.symlink_target_is_dir == Some(true) => 0,
+        _ => 1,
+    }
+}
+
 pub struct EntryStore {
     inner: ArcSwap<StoreSnapshot>,
     path_to_id: DashMap<PathBuf, EntryId>,
@@ -68,6 +78,7 @@ impl EntryStore {
         let counts_visible = entry_counts_visible(&entry);
         let size = entry.size;
 
+        let kind_rank = sibling_kind_rank(&entry);
         let current = self.inner.load_full();
         let mut next = (*current).clone();
         next.entries.insert(id, Arc::new(entry));
@@ -76,15 +87,16 @@ impl EntryStore {
             None => next.roots.push(id),
             Some(parent_id) => {
                 let siblings = next.children.entry(parent_id).or_default();
-                // Binary-search by sibling name (raw bytes). O(log n) position find + O(n) insert.
+                // IDE-style order: directories first, then files, each group
+                // A→Z by name (JetBrains / VS Code Project view).
                 let pos = siblings
                     .binary_search_by(|&sib| {
-                        let sib_name = next
-                            .entries
-                            .get(&sib)
-                            .map(|e| e.name.as_str())
-                            .unwrap_or("");
-                        sib_name.cmp(&name)
+                        let sib_e = next.entries.get(&sib);
+                        let sib_rank = sib_e.map(|e| sibling_kind_rank(e)).unwrap_or(1);
+                        let sib_name = sib_e.map(|e| e.name.as_str()).unwrap_or("");
+                        sib_rank
+                            .cmp(&kind_rank)
+                            .then_with(|| sib_name.cmp(&name))
                     })
                     .unwrap_or_else(|e| e);
                 siblings.insert(pos, id);
@@ -278,20 +290,27 @@ impl EntryStore {
         updated.name = new_name.clone();
         next.entries.insert(id, Arc::new(updated));
 
-        // Re-sort siblings: the entry's position is keyed by name.
+        // Re-sort siblings: directories first, then name within group.
         if let Some(parent_id) = entry.parent_id {
             if let Some(siblings) = next.children.get_mut(&parent_id) {
                 if let Some(pos) = siblings.iter().position(|&c| c == id) {
                     siblings.remove(pos);
                 }
+                // Rank from the updated entry (name changed, kind unchanged).
+                let kind_rank = sibling_kind_rank(
+                    next.entries
+                        .get(&id)
+                        .map(|e| e.as_ref())
+                        .unwrap_or(entry.as_ref()),
+                );
                 let insert_pos = siblings
                     .binary_search_by(|&sib| {
-                        let sib_name = next
-                            .entries
-                            .get(&sib)
-                            .map(|e| e.name.as_str())
-                            .unwrap_or("");
-                        sib_name.cmp(&new_name)
+                        let sib_e = next.entries.get(&sib);
+                        let sib_rank = sib_e.map(|e| sibling_kind_rank(e)).unwrap_or(1);
+                        let sib_name = sib_e.map(|e| e.name.as_str()).unwrap_or("");
+                        sib_rank
+                            .cmp(&kind_rank)
+                            .then_with(|| sib_name.cmp(new_name.as_str()))
                     })
                     .unwrap_or_else(|e| e);
                 siblings.insert(insert_pos, id);
@@ -488,14 +507,16 @@ mod tests {
     }
 
     #[test]
-    fn insert_root_appears_in_roots_and_has_no_children() {
+    fn insert_root_appears_in_roots_and_is_expandable_when_unwalked() {
         let s = EntryStore::new();
         let root = s.insert("/r".into(), dir("r", None)).unwrap();
         let snap = s.snapshot();
         assert_eq!(snap.roots(), &[root]);
         assert!(snap.children_of(root).is_empty());
         assert_eq!(snap.direct_child_count(root), None);
-        assert!(!snap.has_children(root));
+        // Lazy-expand contract: unvisited directories report has_children so
+        // the UI shows a chevron and setExpanded can fire a depth-1 walk.
+        assert!(snap.has_children(root));
     }
 
     #[test]

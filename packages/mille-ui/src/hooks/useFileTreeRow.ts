@@ -18,6 +18,7 @@
 
 import {
   useCallback,
+  useContext,
   useEffect,
   useMemo,
   useRef,
@@ -29,18 +30,31 @@ import {
 } from 'react';
 import type { EntryId } from '@vibecook/mille';
 import type { AriaRowProps, FileTreeRowProps } from '../components/types.js';
+import { FileTreeContext } from '../context.js';
 
 // Numeric enum matching api.d.ts §EntryKind.
 const KIND_DIRECTORY = 1;
+const KIND_SYMLINK = 2;
 
-// Base style. Virtualizer supplies absolute positioning via `style`.
+/** JetBrains "library root" folder names — entire subtree gets the tint. */
+function isLibraryRootName(name: string): boolean {
+  return (
+    name === 'node_modules' ||
+    name === '.pnpm-store' ||
+    name === 'bower_components'
+  );
+}
+
+// Base style. Virtualizer supplies absolute positioning via `style`
+// (position/top/left/right/height/transform). Do NOT set position here —
+// a CSS `position: relative` with higher priority would break virtual
+// spacing (flow height + translateY ≈ 2× gaps).
 const ROW_BASE_STYLE: CSSProperties = {
   display: 'flex',
   alignItems: 'center',
-  gap: '4px',
+  gap: '2px',
   boxSizing: 'border-box',
   width: '100%',
-  position: 'relative',
   userSelect: 'none',
 };
 
@@ -92,6 +106,14 @@ export interface UseFileTreeRowRowProps {
   readonly 'data-mille-drop-target-below'?: 'true';
   readonly 'data-mille-decoration-ignored'?: 'true';
   readonly 'data-mille-decoration-strikethrough'?: 'true';
+  /** Entry is gitignored / excluded — style as demoted (library root, etc.). */
+  readonly 'data-mille-ignored'?: 'true';
+  /** This row is the library root folder itself (node_modules, …). */
+  readonly 'data-mille-library-root'?: 'true';
+  /** This row is under a library root (including the root row). */
+  readonly 'data-mille-under-library-root'?: 'true';
+  /** Symlink whose target is a directory (pnpm/npm workspace link). */
+  readonly 'data-mille-symlink-dir'?: 'true';
   readonly className?: string;
   readonly style: CSSProperties;
   readonly tabIndex: 0 | -1;
@@ -218,6 +240,33 @@ export function useFileTreeRow(props: FileTreeRowProps): UseFileTreeRowResult {
     onDragEnd,
   } = props;
 
+  // Optional — headless/unit tests may render a row outside a provider.
+  const treeCtx = useContext(FileTreeContext);
+  const underLibraryRoot = useMemo(() => {
+    if (isLibraryRootName(row.name)) return true;
+    const snap = treeCtx?.snapshot;
+    if (!snap) return false;
+    let parentId = row.parentId;
+    let hops = 0;
+    while (parentId !== null && parentId !== undefined && hops < 64) {
+      const parent = snap.getById(parentId);
+      if (!parent) break;
+      if (isLibraryRootName(parent.name)) return true;
+      parentId = parent.parentId;
+      hops += 1;
+    }
+    return false;
+  }, [treeCtx?.snapshot, row.name, row.parentId]);
+
+  const isLibraryRoot =
+    isLibraryRootName(row.name) &&
+    (row.kind === KIND_DIRECTORY ||
+      row.kind === KIND_SYMLINK ||
+      row.symlinkTargetIsDir === true);
+  const isSymlinkDir =
+    row.symlinkTargetIsDir === true ||
+    (row.kind === KIND_SYMLINK && hasChildren);
+
   // Row DOM ref. Published up through `registerRowElement` so the
   // tree's keyboard handler can synthesize `contextmenu` events here
   // when Shift+F10 / Menu is pressed.
@@ -302,6 +351,11 @@ export function useFileTreeRow(props: FileTreeRowProps): UseFileTreeRowResult {
     else if (dropTargetPosition === 'below') out['data-mille-drop-target-below'] = t;
     if (decorations.fontWeight === 0) out['data-mille-decoration-ignored'] = t;
     if (decorations.strikethrough) out['data-mille-decoration-strikethrough'] = t;
+    // Project-view affordances (WebStorm-style excluded / library roots).
+    if (row.isIgnored) out['data-mille-ignored'] = t;
+    if (isLibraryRoot) out['data-mille-library-root'] = t;
+    if (underLibraryRoot) out['data-mille-under-library-root'] = t;
+    if (isSymlinkDir) out['data-mille-symlink-dir'] = t;
     if (dndEnabled) {
       out.draggable = true;
       if (onDragStart) out.onDragStart = onDragStart;
@@ -319,6 +373,13 @@ export function useFileTreeRow(props: FileTreeRowProps): UseFileTreeRowResult {
     ariaProps,
     selected,
     row.id,
+    row.isIgnored,
+    row.kind,
+    row.name,
+    row.symlinkTargetIsDir,
+    isLibraryRoot,
+    underLibraryRoot,
+    isSymlinkDir,
     depth,
     className,
     rowStyle,
@@ -353,8 +414,12 @@ export function useFileTreeRow(props: FileTreeRowProps): UseFileTreeRowResult {
     onClick: onChevronClick,
   };
 
+  // Symlink-to-dir (pnpm workspace links) should render as folders —
+  // same affordance JetBrains uses for linked packages.
+  const isDirLike =
+    row.kind === KIND_DIRECTORY || row.symlinkTargetIsDir === true;
   const iconProps: UseFileTreeRowIconProps = {
-    entry: row,
+    entry: isDirLike && row.kind !== KIND_DIRECTORY ? { ...row, kind: KIND_DIRECTORY } : row,
     expanded,
     rootLevel: depth === 0,
   };
@@ -369,7 +434,7 @@ export function useFileTreeRow(props: FileTreeRowProps): UseFileTreeRowResult {
   const renameProps: UseFileTreeRowRenameProps | null = isRenaming
     ? {
         initialName: row.name,
-        kind: row.kind === KIND_DIRECTORY ? 'directory' : 'file',
+        kind: isDirLike ? 'directory' : 'file',
         onCommit: onRenameCommit!,
         onCancel: onRenameCancel!,
         ...(validateRename ? { validator: validateRename } : null),

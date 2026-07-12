@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use smallvec::SmallVec;
 
-use crate::entry::{Entry, EntryId};
+use crate::entry::{Entry, EntryId, EntryKind};
 
 /// Max ancestor hops in any summary update — defends against malformed
 /// parent_id cycles (self-reference, etc.). Real trees are ~10-15 deep.
@@ -65,7 +65,19 @@ impl StoreSnapshot {
     }
 
     pub fn has_children(&self, id: EntryId) -> bool {
-        self.children.get(&id).is_some_and(|v| !v.is_empty())
+        if let Some(kids) = self.children.get(&id) {
+            return !kids.is_empty();
+        }
+        // Unwalked: show a chevron for real directories and for
+        // symlink-to-dir (pnpm/npm workspace links), matching the
+        // client mirror. Without this, expand never fires for links.
+        match self.entries.get(&id) {
+            Some(e) => {
+                e.kind == EntryKind::Directory
+                    || e.symlink_target_is_dir == Some(true)
+            }
+            None => false,
+        }
     }
 
     /// Iterate over every (id, entry) pair in the snapshot. Primarily for
@@ -214,7 +226,13 @@ impl StoreSnapshot {
                     skipped += 1;
                 } else {
                     let kids = self.children.get(&id);
-                    let has_children = kids.is_some_and(|v| !v.is_empty());
+                    let has_children = match kids {
+                        Some(v) => !v.is_empty(),
+                        None => {
+                            entry.kind == EntryKind::Directory
+                                || entry.symlink_target_is_dir == Some(true)
+                        }
+                    };
                     out.push(VisibleRowOut {
                         id,
                         depth,

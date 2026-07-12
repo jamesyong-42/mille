@@ -1,27 +1,68 @@
-// Phase 15.3 — mille-ui playground renderer.
-//
-// Replaces the hand-rolled tree from the engine-only reference with the
-// full `<FileTreeProvider>` + `<FileTree>` composition from
-// `@vibecook/mille-ui`. Engine transport (UtilityProcess + port) is
-// unchanged from the reference snapshot at `src.engine-only.reference/`.
-//
-// The toolbar handles light/dark theme toggle, icon-theme swap (default
-// vs material stub), and decoration-provider on/off for git + agent
-// rules. See `./Toolbar.tsx`.
+// Playground — JetBrains-style Project tool window.
+// Structural: pure tree surface first; settings tucked behind a gear.
+// Engine transport (UtilityProcess + MessagePort) is unchanged.
 
-import { useEffect, useMemo, useState, type ReactElement } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactElement,
+} from 'react';
 import { FileTreeProvider, FileTree, useFileTreeRef } from '@vibecook/mille-ui';
 import type { IconTheme } from '@vibecook/mille-ui/icons';
 import { defaultIconTheme } from '@vibecook/mille-ui/icons';
 import { createCommandRegistry, defaultCommands } from '@vibecook/mille-ui/commands';
-import type { FileExplorer } from '@vibecook/mille';
+import type { Entry, FileExplorer, VisibleRow } from '@vibecook/mille';
 import { connectFileExplorer, type PortFileExplorer } from '@vibecook/mille/port';
 import { fxPortReady, onFxPort } from './fx-port';
 import { Toolbar, type ThemeMode } from './Toolbar';
+import { stageIconTheme } from './stageIconTheme';
 
 interface ConnectionState {
   fx: PortFileExplorer;
   workspaceRoot: string;
+}
+
+interface EditorTab {
+  readonly id: string;
+  readonly title: string;
+  readonly kind: 'file' | 'welcome';
+  readonly entryId?: number;
+  readonly body: string;
+  readonly highlighted: boolean;
+}
+
+const WELCOME = `// Project tool window
+//
+// Double-click a file to open it here.
+// ⌘F / Ctrl+F — filter tree
+// F2 — rename · Delete — delete
+// Right-click — context menu
+`;
+
+function basename(path: string): string {
+  const parts = path.replace(/\\/g, '/').split('/').filter(Boolean);
+  return parts[parts.length - 1] ?? path;
+}
+
+function highlightSource(src: string): string {
+  const esc = src
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+  return esc
+    .replace(/(\/\/[^\n]*)/g, '<span class="cm">$1</span>')
+    .replace(/('(?:\\.|[^'])*'|`(?:\\.|[^`])*`)/g, '<span class="str">$1</span>')
+    .replace(
+      /\b(import|from|const|await|export|function|return|new|async|type|interface)\b/g,
+      '<span class="kw">$1</span>',
+    )
+    .replace(/\b(true|false|null|undefined)\b/g, '<span class="ty">$1</span>')
+    .replace(/\b(\d+)\b/g, '<span class="num">$1</span>')
+    .replace(/\b([A-Z][A-Za-z0-9_]*)\b/g, '<span class="ty">$1</span>')
+    .replace(/\b([a-zA-Z_$][\w$]*)\s*(?=\()/g, '<span class="fn">$1</span>');
 }
 
 export function App(): ReactElement {
@@ -33,13 +74,11 @@ export function App(): ReactElement {
     let currentFx: PortFileExplorer | null = null;
 
     async function attach(port: MessagePort, workspaceRoot: string): Promise<void> {
-      console.log(`[renderer] attach(${workspaceRoot}) — calling connectFileExplorer`);
       try {
         const fx = await connectFileExplorer(port, {
           mirrorCap: 20_000,
           prefetchRows: 200,
         });
-        console.log(`[renderer] connected — treeVersion=${fx.getTreeVersion()}`);
         if (disposed) {
           void fx.dispose();
           return;
@@ -48,38 +87,14 @@ export function App(): ReactElement {
         currentFx = fx;
         setConn({ fx, workspaceRoot });
         if (prev !== null) void prev.dispose();
-        // Heartbeat: log every snapshot change so we can see if the
-        // walker's discoveries are flowing as deltas post-handshake.
-        let lastVersion = fx.getTreeVersion();
-        const sub = fx.on('change', () => {
-          const v = fx.getTreeVersion();
-          if (v !== lastVersion) {
-            const snap = fx.getSnapshot();
-            console.log(
-              `[renderer] tree change: v${lastVersion} → v${v}, roots=${snap.roots().length}`,
-            );
-            lastVersion = v;
-          }
-        });
-        // Clean up on next swap.
-        const oldDispose = currentFx.dispose.bind(currentFx);
-        currentFx.dispose = async () => {
-          sub.dispose();
-          await oldDispose();
-        };
       } catch (err) {
         console.error('[renderer] attach failed', err);
         if (!disposed) setError(err instanceof Error ? err.message : String(err));
       }
     }
 
-    void fxPortReady.then(({ port, workspaceRoot }) => {
-      console.log(`[renderer] initial fx-port for ${workspaceRoot}`);
-      return attach(port, workspaceRoot);
-    });
-
+    void fxPortReady.then(({ port, workspaceRoot }) => attach(port, workspaceRoot));
     const offSwap = onFxPort(({ port, workspaceRoot }) => {
-      console.log(`[renderer] swap fx-port for ${workspaceRoot}`);
       setError(null);
       setConn(null);
       void attach(port, workspaceRoot);
@@ -92,14 +107,26 @@ export function App(): ReactElement {
     };
   }, []);
 
-  if (error) return <pre className="error">connection failed: {error}</pre>;
+  if (error) {
+    return (
+      <div className="boot">
+        <div className="boot-card error">
+          <div className="boot-mark" aria-hidden="true" />
+          <h1>Connection failed</h1>
+          <p>The UtilityProcess host could not complete the handshake.</p>
+          <pre>{error}</pre>
+        </div>
+      </div>
+    );
+  }
+
   if (!conn) {
     return (
-      <div className="loading">
-        connecting to mille host…
-        <div className="loading-sub">
-          walking the workspace — large trees (e.g. monorepos with many
-          node_modules) can take up to a minute on first connect.
+      <div className="boot">
+        <div className="boot-card">
+          <div className="boot-mark" aria-hidden="true" />
+          <h1>Opening project…</h1>
+          <p>Connecting to the mille host and walking roots.</p>
         </div>
       </div>
     );
@@ -108,37 +135,36 @@ export function App(): ReactElement {
   return <Explorer fx={conn.fx} root={conn.workspaceRoot} />;
 }
 
-function Explorer({ fx, root }: { fx: PortFileExplorer; root: string }): ReactElement {
-  // Command registry — fresh per fx so the shadow/restore stack starts
-  // empty on reconnect. `defaultCommands` gives us tree structure +
-  // mutation commands (rename / delete / move / copy / paste / open).
+function Explorer({
+  fx,
+  root,
+}: {
+  fx: PortFileExplorer;
+  root: string;
+}): ReactElement {
   const commands = useMemo(() => createCommandRegistry(defaultCommands), []);
-
-  // v0.2 B6 — imperative handle for the tree. Lets the Toolbar's Reset
-  // button actually clear selection / filter / clipboard end-to-end.
   const treeRef = useFileTreeRef();
+  const settingsRef = useRef<HTMLDivElement | null>(null);
 
-  // Theme: toggles `data-theme` on <html>. The tokens.css we import at
-  // entry defines both light and dark palettes gated on that attribute.
   const [theme, setTheme] = useState<ThemeMode>('dark');
   useEffect(() => {
     document.documentElement.dataset['theme'] = theme;
   }, [theme]);
 
-  // Icon theme selection. `'material'` is a stub in v0.1 — swapping to
-  // it surfaces an error in the toolbar and falls back to default so
-  // the tree stays rendered.
-  const [iconThemeId, setIconThemeId] = useState<'default' | 'material'>('default');
+  const [iconThemeId, setIconThemeId] = useState<'stage' | 'default' | 'material'>(
+    'material',
+  );
   const [iconTheme, setIconTheme] = useState<IconTheme>(defaultIconTheme);
-  // 'idle' | 'loading' | 'loaded' | 'error'. Toolbar uses this to
-  // clear the "Loading Material…" toast when the async import lands.
   const [iconThemeStatus, setIconThemeStatus] = useState<
     'idle' | 'loading' | 'loaded' | 'error'
-  >('idle');
+  >('loading');
 
-  // v0.2 B5 — async-load Material Icon Theme bundle on demand. Falls
-  // back to default if the bundle fails (e.g., offline CI stub).
   useEffect(() => {
+    if (iconThemeId === 'stage') {
+      setIconTheme(stageIconTheme);
+      setIconThemeStatus('idle');
+      return;
+    }
     if (iconThemeId === 'default') {
       setIconTheme(defaultIconTheme);
       setIconThemeStatus('idle');
@@ -149,14 +175,13 @@ function Explorer({ fx, root }: { fx: PortFileExplorer; root: string }): ReactEl
     void (async () => {
       try {
         const mod = await import('@vibecook/mille-ui/icons/material');
-        const theme = await mod.loadMaterialIconTheme();
+        const loaded = await mod.loadMaterialIconTheme();
         if (!cancelled) {
-          setIconTheme(theme);
+          setIconTheme(loaded);
           setIconThemeStatus('loaded');
         }
       } catch (err) {
-        // eslint-disable-next-line no-console
-        console.warn('[playground] Material theme failed to load:', err);
+        console.warn('[playground] Material theme failed:', err);
         if (!cancelled) {
           setIconTheme(defaultIconTheme);
           setIconThemeId('default');
@@ -169,45 +194,330 @@ function Explorer({ fx, root }: { fx: PortFileExplorer; root: string }): ReactEl
     };
   }, [iconThemeId]);
 
-  // Port clients don't implement `registerDecorationProvider`; the
-  // decoration pipeline lives on the native `FileExplorer` only. Keep
-  // the toolbar toggles functional but no-op at the port boundary so
-  // the UX stays coherent; a real libgit2/isomorphic-git wiring lands
-  // in v0.2 alongside a host-side decoration forwarder.
+  // Expand workspace roots once (Project view depth-1).
+  const expandedRootsRef = useRef(false);
+  useEffect(() => {
+    expandedRootsRef.current = false;
+    const tryExpand = (): void => {
+      if (expandedRootsRef.current) return;
+      const roots = fx.getSnapshot().roots();
+      if (roots.length === 0) return;
+      expandedRootsRef.current = true;
+      fx.setExpanded({ add: roots.map((r) => r.id) });
+    };
+    tryExpand();
+    const sub = fx.on('change', tryExpand);
+    return () => sub.dispose();
+  }, [fx]);
+
+  const [filterOpen, setFilterOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  /** Editor pane is secondary — off by default so Project feels primary. */
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [treeEpoch, setTreeEpoch] = useState(0);
+
+  useEffect(() => {
+    if (!settingsOpen) return;
+    const onDown = (evt: MouseEvent): void => {
+      if (
+        settingsRef.current !== null &&
+        !settingsRef.current.contains(evt.target as Node)
+      ) {
+        setSettingsOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [settingsOpen]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      const mod = e.metaKey || e.ctrlKey;
+      if (mod && (e.key === 'f' || e.key === 'F')) {
+        const t = e.target;
+        if (
+          t instanceof HTMLElement &&
+          (t.closest('.code-panel') || t.closest('.code-scroll'))
+        ) {
+          return;
+        }
+        e.preventDefault();
+        setFilterOpen(true);
+        requestAnimationFrame(() => treeRef.current?.focusFilter());
+      }
+      if (e.key === 'Escape' && filterOpen) {
+        const active = document.activeElement;
+        if (
+          active instanceof HTMLInputElement &&
+          active.closest('[data-mille-filter], .mille-filter')
+        ) {
+          if (active.value === '') {
+            setFilterOpen(false);
+            treeRef.current?.clearFilter();
+          }
+        }
+      }
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [filterOpen, treeRef]);
+
+  const [tabs, setTabs] = useState<EditorTab[]>(() => [
+    {
+      id: 'welcome',
+      title: 'Welcome',
+      kind: 'welcome',
+      body: WELCOME,
+      highlighted: true,
+    },
+  ]);
+  const [activeTabId, setActiveTabId] = useState('welcome');
+  const openTabIdsRef = useRef(new Set(['welcome']));
+
+  useEffect(() => {
+    openTabIdsRef.current = new Set(tabs.map((t) => t.id));
+  }, [tabs]);
+
+  const activeTab = tabs.find((t) => t.id === activeTabId) ?? tabs[0]!;
+
+  const openEntry = useCallback(
+    async (entry: Entry | VisibleRow) => {
+      if (entry.kind === 1) return;
+      setEditorOpen(true);
+
+      const tabId = `file:${entry.id}`;
+      setActiveTabId(tabId);
+      if (openTabIdsRef.current.has(tabId)) return;
+      openTabIdsRef.current.add(tabId);
+
+      setTabs((prev) => [
+        ...prev.filter((t) => t.kind !== 'welcome'),
+        {
+          id: tabId,
+          title: entry.name,
+          kind: 'file',
+          entryId: entry.id,
+          body: '// loading…',
+          highlighted: false,
+        },
+      ]);
+
+      try {
+        const text = await fx.readText(entry.id);
+        const body = typeof text === 'string' ? text : String(text ?? '');
+        const capped =
+          body.length > 120_000
+            ? `${body.slice(0, 120_000)}\n\n// … truncated`
+            : body;
+        const highlight =
+          /\.(ts|tsx|js|jsx|mjs|cjs|json|rs|md|css|toml|yml|yaml)$/i.test(
+            entry.name,
+          );
+        setTabs((prev) =>
+          prev.map((t) =>
+            t.id === tabId
+              ? { ...t, body: capped, highlighted: highlight }
+              : t,
+          ),
+        );
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        setTabs((prev) =>
+          prev.map((t) =>
+            t.id === tabId
+              ? {
+                  ...t,
+                  body: `// failed to read\n// ${msg}`,
+                  highlighted: true,
+                }
+              : t,
+          ),
+        );
+      }
+    },
+    [fx],
+  );
+
+  const closeTab = useCallback((id: string) => {
+    setTabs((prev) => {
+      const next = prev.filter((t) => t.id !== id);
+      if (next.length === 0) {
+        openTabIdsRef.current = new Set(['welcome']);
+        setActiveTabId('welcome');
+        setEditorOpen(false);
+        return [
+          {
+            id: 'welcome',
+            title: 'Welcome',
+            kind: 'welcome',
+            body: WELCOME,
+            highlighted: true,
+          },
+        ];
+      }
+      openTabIdsRef.current = new Set(next.map((t) => t.id));
+      setActiveTabId((current) =>
+        current === id ? next[next.length - 1]!.id : current,
+      );
+      return next;
+    });
+  }, []);
+
+  const collapseProject = useCallback(() => {
+    treeRef.current?.reset();
+    expandedRootsRef.current = true;
+    setTreeEpoch((n) => n + 1);
+  }, [treeRef]);
+
+  const workspaceLabel = useMemo(() => basename(root), [root]);
 
   return (
     <FileTreeProvider fx={fx as unknown as FileExplorer} commands={commands}>
-      <div className="app">
-        <header>
-          <h1>mille · playground</h1>
-          <div className="meta">
-            <span>root: {root}</span>
-            <span>· version: {fx.getTreeVersion()}</span>
+      <div className={`app${editorOpen ? ' app--split' : ' app--project'}`}>
+        {/* ── Project tool window ─────────────────────────────── */}
+        <aside className="sidebar">
+          <div className="tool-header">
+            <span className="tool-header-title">
+              Project
+              <span className="tool-header-view" title="View mode">
+                ▾
+              </span>
+            </span>
+            <span className="tool-header-meta" title={root}>
+              {workspaceLabel}
+            </span>
+            <button
+              type="button"
+              title="Filter (⌘F)"
+              aria-pressed={filterOpen}
+              onClick={() => {
+                setFilterOpen((v) => {
+                  const next = !v;
+                  if (next) {
+                    requestAnimationFrame(() => treeRef.current?.focusFilter());
+                  } else {
+                    treeRef.current?.clearFilter();
+                  }
+                  return next;
+                });
+              }}
+            >
+              ⌕
+            </button>
+            <button type="button" title="Collapse all" onClick={collapseProject}>
+              ⊟
+            </button>
+            <button
+              type="button"
+              title={editorOpen ? 'Hide editor' : 'Show editor'}
+              aria-pressed={editorOpen}
+              onClick={() => setEditorOpen((v) => !v)}
+            >
+              ⎇
+            </button>
+            <div className="settings-wrap" ref={settingsRef}>
+              <button
+                type="button"
+                title="Settings"
+                aria-expanded={settingsOpen}
+                aria-pressed={settingsOpen}
+                onClick={() => setSettingsOpen((v) => !v)}
+              >
+                ⚙
+              </button>
+              {settingsOpen ? (
+                <div className="settings-popover" role="dialog" aria-label="Settings">
+                  <Toolbar
+                    fx={fx}
+                    rootPath={root}
+                    theme={theme}
+                    onThemeChange={setTheme}
+                    iconThemeId={iconThemeId}
+                    onIconThemeChange={setIconThemeId}
+                    iconThemeStatus={iconThemeStatus}
+                    onReset={() => treeRef.current?.reset()}
+                    compact
+                  />
+                </div>
+              ) : null}
+            </div>
           </div>
-        </header>
-        <Toolbar
-          fx={fx}
-          rootPath={root}
-          theme={theme}
-          onThemeChange={setTheme}
-          iconThemeId={iconThemeId}
-          onIconThemeChange={setIconThemeId}
-          iconThemeStatus={iconThemeStatus}
-          onReset={() => treeRef.current?.reset()}
-        />
-        <div className="tree-container">
-          <FileTree
-            ref={treeRef}
-            ariaLabel="Workspace files"
-            iconTheme={iconTheme}
-            showFilter
-            searchMode="filter"
-            onOpen={(row) => {
-              // eslint-disable-next-line no-console
-              console.log('[playground] open', row);
-            }}
-          />
-        </div>
+
+          <div className="tree-container">
+            <FileTree
+              key={treeEpoch}
+              ref={treeRef}
+              ariaLabel="Project"
+              iconTheme={iconTheme}
+              rowHeight={17}
+              overscan={36}
+              stickyRoots
+              showFilter={filterOpen}
+              searchMode="filter"
+              onOpen={(row) => {
+                void openEntry(row);
+              }}
+            />
+          </div>
+        </aside>
+
+        {/* ── Optional editor (secondary) ─────────────────────── */}
+        {editorOpen ? (
+          <section className="editor" aria-label="Editor">
+            <div className="tab-bar" role="tablist">
+              {tabs.map((tab) => (
+                <button
+                  key={tab.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={tab.id === activeTab.id}
+                  className={`tab${tab.id === activeTab.id ? ' is-active' : ''}`}
+                  onClick={() => setActiveTabId(tab.id)}
+                >
+                  {tab.title}
+                  {tab.kind === 'file' ? (
+                    <span
+                      className="tab-close"
+                      role="button"
+                      tabIndex={0}
+                      aria-label={`Close ${tab.title}`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        closeTab(tab.id);
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          closeTab(tab.id);
+                        }
+                      }}
+                    >
+                      ×
+                    </span>
+                  ) : null}
+                </button>
+              ))}
+            </div>
+            <div className="code-panel">
+              {activeTab.body.startsWith('// failed') ? (
+                <div className="code-error">{activeTab.body}</div>
+              ) : (
+                <pre
+                  className="code-scroll"
+                  dangerouslySetInnerHTML={{
+                    __html: activeTab.highlighted
+                      ? highlightSource(activeTab.body)
+                      : activeTab.body
+                          .replace(/&/g, '&amp;')
+                          .replace(/</g, '&lt;')
+                          .replace(/>/g, '&gt;'),
+                  }}
+                />
+              )}
+            </div>
+          </section>
+        ) : null}
       </div>
     </FileTreeProvider>
   );

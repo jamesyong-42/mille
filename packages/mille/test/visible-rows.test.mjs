@@ -81,7 +81,7 @@ test('visibleRows: expanded root emits children in sorted order', () => {
   assert.equal(rows[3].depth, 1);
 });
 
-test('visibleRows: ignored entries excluded unless includeIgnored', () => {
+test('visibleRows: Project view shows ignored dirs (library roots)', () => {
   const m = createMirror();
   seedDir(m, 1, 'root', null, 2);
   seedFile(m, 10, 'a.txt', 1);
@@ -90,39 +90,39 @@ test('visibleRows: ignored entries excluded unless includeIgnored', () => {
   m.roots.push(1);
   const snap = new ClientMirrorSnapshot(m);
 
+  // JetBrains Project view surfaces excluded folders; UI styles them.
   const rowsDefault = snap.visibleRows({ expanded: new Set([1]), offset: 0, limit: 100 });
-  assert.equal(rowsDefault.length, 2);
-  assert.deepEqual(rowsDefault.map((r) => r.name), ['root', 'a.txt']);
-
-  const rowsAll = snap.visibleRows({
-    expanded: new Set([1]),
-    offset: 0,
-    limit: 100,
-    includeIgnored: true,
-  });
-  assert.equal(rowsAll.length, 3);
-  assert.deepEqual(rowsAll.map((r) => r.name), ['root', 'a.txt', 'node_modules']);
+  assert.equal(rowsDefault.length, 3);
+  // Directories first, then files.
+  assert.deepEqual(rowsDefault.map((r) => r.name), ['root', 'node_modules', 'a.txt']);
 });
 
-test('visibleRows: hidden entries excluded by default', () => {
+test('visibleRows: OS noise hidden; project dotfiles shown', () => {
   const m = createMirror();
-  seedDir(m, 1, 'root', null, 2);
-  seedFile(m, 10, '.env', 1, { isHidden: true });
-  seedFile(m, 11, 'README.md', 1);
-  m.children.set(1, [10, 11]);
+  seedDir(m, 1, 'root', null, 3);
+  seedFile(m, 10, '.DS_Store', 1, { isHidden: true });
+  seedFile(m, 11, '.gitignore', 1, { isHidden: true });
+  seedFile(m, 12, 'README.md', 1);
+  m.children.set(1, [10, 11, 12]);
   m.roots.push(1);
   const snap = new ClientMirrorSnapshot(m);
 
   const rows = snap.visibleRows({ expanded: new Set([1]), offset: 0, limit: 100 });
-  assert.deepEqual(rows.map((r) => r.name), ['root', 'README.md']);
+  assert.deepEqual(rows.map((r) => r.name), ['root', '.gitignore', 'README.md']);
 
+  // includeIgnored reveals OS noise (.DS_Store) too.
   const rowsAll = snap.visibleRows({
     expanded: new Set([1]),
     offset: 0,
     limit: 100,
     includeIgnored: true,
   });
-  assert.deepEqual(rowsAll.map((r) => r.name), ['root', '.env', 'README.md']);
+  assert.deepEqual(rowsAll.map((r) => r.name), [
+    'root',
+    '.DS_Store',
+    '.gitignore',
+    'README.md',
+  ]);
 });
 
 test('visibleRows: offset + limit slicing', () => {
@@ -154,11 +154,11 @@ test('visibleRows: limit=0 returns empty array', () => {
 });
 
 test('visibleRows: invisible-but-expanded parent suppresses its children', () => {
-  // Dir-1 is hidden (or ignored) but expanded. Its children must NOT
-  // appear — they'd render at depth=1 with nothing above them.
+  // `.git` is hard-hidden in Project view. If expanded, its children
+  // must NOT appear — they'd render at depth=1 with nothing above them.
   const m = createMirror();
   seedDir(m, 1, 'visible', null, 1);
-  m.byId.set(2, entry({ id: 2, parentId: null, name: 'hidden', kind: 1, isHidden: true }));
+  m.byId.set(2, entry({ id: 2, parentId: null, name: '.git', kind: 1, isHidden: true }));
   m.directChildCounts.set(2, 2);
   seedFile(m, 20, 'leaked-a', 2);
   seedFile(m, 21, 'leaked-b', 2);
@@ -171,7 +171,7 @@ test('visibleRows: invisible-but-expanded parent suppresses its children', () =>
     offset: 0,
     limit: 100,
   });
-  // Only the visible root should render; 'hidden' and its children dropped.
+  // Only the visible root should render; `.git` and its children dropped.
   assert.equal(rows.length, 1);
   assert.equal(rows[0].name, 'visible');
 });
@@ -237,11 +237,11 @@ test('visibleRows: cache miss (expanded dir without children entry) is skipped s
 
 test('visibleRows: siblings of invisible-expanded parent still render', () => {
   // Regression guard: the DFS pruning must not bleed past the
-  // invisible node. Sibling after a hidden/expanded subtree should
-  // still appear.
+  // invisible node. Sibling after a hard-hidden expanded subtree
+  // (`.git`) should still appear.
   const m = createMirror();
   seedDir(m, 1, 'root', null, 2);
-  m.byId.set(2, entry({ id: 2, parentId: 1, name: 'hidden-dir', kind: 1, isHidden: true }));
+  m.byId.set(2, entry({ id: 2, parentId: 1, name: '.git', kind: 1, isHidden: true }));
   m.directChildCounts.set(2, 1);
   seedFile(m, 20, 'nope', 2);
   m.children.set(2, [20]);

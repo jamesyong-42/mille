@@ -83,21 +83,24 @@ test('visibleRowCount: expanded folder with missing children in mirror → repor
   assert.ok(vc.pendingExpansions.has(2));
 });
 
-test('visibleRowCount: includeIgnored=false filters ignored + hidden', () => {
+test('visibleRowCount: Project view shows ignored + hidden; OS noise optional', () => {
   const m = createMirror();
-  seedDir(m, 1, 'root', null, 3);
+  seedDir(m, 1, 'root', null, 4);
   seedFile(m, 10, 'a.txt', 1);
   seedFile(m, 11, 'node_modules', 1, { isIgnored: true, kind: 1 });
   seedFile(m, 12, '.env', 1, { isHidden: true });
-  m.children.set(1, [10, 11, 12]);
+  seedFile(m, 13, '.DS_Store', 1, { isHidden: true });
+  m.children.set(1, [10, 11, 12, 13]);
   m.roots.push(1);
   const snap = new ClientMirrorSnapshot(m);
 
+  // Default Project view: root + a.txt + node_modules + .env (no .DS_Store).
   const vcDefault = snap.visibleRowCount(new Set([1]));
-  assert.equal(vcDefault.known, 2); // root + a.txt
+  assert.equal(vcDefault.known, 4);
 
+  // includeIgnored also surfaces OS noise.
   const vcAll = snap.visibleRowCount(new Set([1]), true);
-  assert.equal(vcAll.known, 4); // root + a.txt + node_modules + .env
+  assert.equal(vcAll.known, 5);
 });
 
 test('visibleRowCount: reducer pendingExpansions folds into return', () => {
@@ -143,12 +146,11 @@ test('visibleRowCount: reducer pendingExpansions union with DFS-discovered pendi
 });
 
 test('visibleRowCount: invisible-expanded parent suppresses its subtree from known', () => {
-  // Mirrors the same regression guard as visibleRows: an invisible
-  // parent must not leak its descendants into the count, otherwise
-  // known !== visibleRows.length.
+  // Mirrors the same regression guard as visibleRows: a hard-hidden
+  // parent (`.git`) must not leak its descendants into the count.
   const m = createMirror();
   seedDir(m, 1, 'visible', null, 0);
-  m.byId.set(2, entry({ id: 2, parentId: null, name: 'hidden', kind: 1, isHidden: true }));
+  m.byId.set(2, entry({ id: 2, parentId: null, name: '.git', kind: 1, isHidden: true }));
   m.directChildCounts.set(2, 2);
   seedFile(m, 20, 'leaked-a', 2);
   seedFile(m, 21, 'leaked-b', 2);

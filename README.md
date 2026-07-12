@@ -81,10 +81,10 @@ The umbrella package resolves the correct binary via `optionalDependencies`.
 
 ## Documentation
 
-- SPEC: `research/file-explorer/SPEC.md`
-- PLAN: `research/file-explorer/PLAN.md`
+- **Website:** open `docs/index.html` (product) and `docs/api.html` (API reference)
 - Embedding guide: `packages/mille/EMBEDDING.md`
 - Public API: `packages/mille/api.d.ts`
+- SPEC / PLAN: `research/file-explorer/` (when present)
 
 ## License
 

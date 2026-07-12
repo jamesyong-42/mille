@@ -45,18 +45,21 @@ function FileTreeRowImpl(props: FileTreeRowProps): ReactElement {
 
   const iconTheme = props.iconTheme ?? defaultIconTheme;
 
+  // Layout matches JetBrains Project view:
+  //   chevron · icon · VCS badge · name · loading
+  // (decorations sit before the name, not trailing right).
   const rowNode: ReactNode = (
     <div {...rowProps}>
       <IndentGuides depth={depth} />
       <DisclosureChevron {...chevronProps} />
       <FileIcon {...iconProps} theme={iconTheme} />
+      <FileDecorations {...decorationProps} />
       {renameProps !== null ? (
         <FileRenameInput {...renameProps} />
       ) : (
         <span {...nameProps} />
       )}
       {pending ? <LoadingBadge /> : null}
-      <FileDecorations {...decorationProps} />
     </div>
   );
 

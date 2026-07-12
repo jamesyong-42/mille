@@ -1,108 +1,223 @@
 /*
- * Phase 15 — playground app chrome.
- *
- * All rendering-critical tokens live in `@vibecook/mille-ui/tokens.css`
- * (imported in main.tsx). This file only handles the app shell: header,
- * toolbar row, tree container, loading/error panels. Both dark and
- * light themes are supported via `html[data-theme="..."]`; the toolbar
- * toggle sets the attribute from React.
+ * Playground — JetBrains Project tool window (structure first).
  */
 
 :root {
-  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
-  font-size: 13px;
-}
-
-html {
+  --jb-bg: #1e1f22;
+  --jb-panel: #2b2d30;
+  --jb-panel-2: #313335;
+  --jb-border: #3c3f41;
+  --jb-border-soft: rgba(255, 255, 255, 0.06);
+  --jb-text: #bcbec4;
+  --jb-text-bright: #dfdfdf;
+  --jb-text-dim: #6f737a;
+  --jb-sel: #2e436e;
+  --jb-hover: rgba(255, 255, 255, 0.045);
+  --jb-accent: #3574f0;
+  --jb-accent-soft: rgba(53, 116, 240, 0.18);
+  --jb-vcs-m: #6897bb;
+  --jb-vcs-a: #629755;
+  --jb-vcs-d: #c75450;
+  --jb-vcs-u: #d5b778;
+  --jb-vcs-muted: #8a7f6a;
+  --font-ui: "Inter", "Segoe UI", "Helvetica Neue", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, monospace;
+  --tool-header-h: 28px;
   color-scheme: dark;
-  background: #12131a;
-  color: #d8dce3;
 }
 
-html[data-theme='light'] {
+html[data-theme="light"] {
+  --jb-bg: #f2f2f2;
+  --jb-panel: #ffffff;
+  --jb-panel-2: #f7f8fa;
+  --jb-border: #d0d0d0;
+  --jb-border-soft: rgba(0, 0, 0, 0.08);
+  --jb-text: #000000;
+  --jb-text-bright: #000000;
+  --jb-text-dim: #808080;
+  --jb-sel: #d4e2ff;
+  --jb-hover: rgba(0, 0, 0, 0.04);
+  --jb-accent: #3574f0;
+  --jb-accent-soft: rgba(53, 116, 240, 0.12);
+  --jb-vcs-m: #0057a8;
+  --jb-vcs-a: #067d17;
+  --jb-vcs-d: #ad2b2b;
+  --jb-vcs-u: #8a6a00;
+  --jb-vcs-muted: #8a7f6a;
   color-scheme: light;
-  background: #fafbfc;
-  color: #1f2328;
 }
 
-html[data-theme='light'] header {
-  background: #f6f7f9;
-  border-bottom: 1px solid #d0d7de;
-}
-
-html[data-theme='light'] .toolbar {
-  background: #f0f2f4;
-  border-bottom: 1px solid #d0d7de;
-}
-
-html[data-theme='light'] .meta,
-html[data-theme='light'] .toolbar {
-  color: #57606a;
-}
-
-html[data-theme='light'] .error {
-  color: #b22b2b;
-}
-
-* {
+*,
+*::before,
+*::after {
   box-sizing: border-box;
 }
 
-body,
 html,
+body,
 #root {
   margin: 0;
   height: 100%;
+  overflow: hidden;
 }
+
+body {
+  font-family: var(--font-ui);
+  font-size: 13px;
+  line-height: 1.35;
+  background: var(--jb-bg);
+  color: var(--jb-text);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── Shell ─────────────────────────────────────────────────────── */
 
 .app {
   display: flex;
-  flex-direction: column;
   height: 100%;
+  background: var(--jb-bg);
 }
 
-header {
-  padding: 12px 16px;
-  border-bottom: 1px solid #252734;
-  background: #181a24;
+/* Project-only: full-width tool window (WebStorm default feel) */
+.app--project .sidebar {
+  flex: 1 1 auto;
+  width: 100%;
+  max-width: none;
+  border-right: none;
+}
+
+/* Split: project | editor */
+.app--split {
+  display: grid;
+  grid-template-columns: minmax(260px, 34%) 1fr;
+}
+
+/* ── Project tool window ───────────────────────────────────────── */
+
+.sidebar {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--jb-panel);
+  border-right: 1px solid var(--jb-border);
+}
+
+.tool-header {
+  flex: 0 0 26px;
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  padding: 0 4px 0 8px;
+  border-bottom: 1px solid var(--jb-border-soft);
+  user-select: none;
+}
+
+.tool-header-title {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--jb-text-bright);
+  margin-right: 6px;
+}
+
+.tool-header-view {
+  font-size: 9px;
+  color: var(--jb-text-dim);
+  margin-left: 1px;
+}
+
+.tool-header-meta {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--jb-text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tool-header button {
+  all: unset;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 3px;
+  color: var(--jb-text-dim);
+  cursor: pointer;
+  font-size: 13px;
   flex: 0 0 auto;
 }
 
-header h1 {
-  margin: 0 0 4px 0;
-  font-size: 14px;
-  font-weight: 600;
+.tool-header button:hover {
+  background: var(--jb-hover);
+  color: var(--jb-text-bright);
 }
 
-.meta {
-  display: flex;
-  gap: 8px;
-  color: #8b90a3;
-  font-size: 11px;
+.tool-header button[aria-pressed="true"],
+.tool-header button[aria-expanded="true"] {
+  color: var(--jb-accent);
+  background: var(--jb-accent-soft);
 }
+
+.settings-wrap {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.settings-popover {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 60;
+  min-width: 280px;
+  max-width: 360px;
+  padding: 8px;
+  background: var(--jb-panel-2);
+  border: 1px solid var(--jb-border);
+  border-radius: 6px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+}
+
+html[data-theme="light"] .settings-popover {
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.12);
+}
+
+/* ── Settings toolbar (compact vertical) ───────────────────────── */
 
 .toolbar {
   display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 6px 12px;
-  border-bottom: 1px solid #252734;
-  background: #141520;
+  flex-direction: column;
+  gap: 8px;
   font-size: 12px;
-  flex: 0 0 auto;
-  flex-wrap: wrap;
+  color: var(--jb-text);
 }
 
-.toolbar-group {
-  display: inline-flex;
+.toolbar--compact .toolbar-group {
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 6px;
+  padding: 0;
+  border: none;
+}
+
+.toolbar--compact .toolbar-group + .toolbar-group {
+  padding-top: 8px;
+  border-top: 1px solid var(--jb-border-soft);
+  border-left: none;
+  padding-left: 0;
 }
 
 .toolbar-group label {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 5px;
   cursor: pointer;
   user-select: none;
 }
@@ -110,26 +225,37 @@ header h1 {
 .toolbar-group button,
 .toolbar-group select {
   font: inherit;
-  color: inherit;
-  background: transparent;
-  border: 1px solid currentColor;
+  font-size: 12px;
+  color: var(--jb-text);
+  background: var(--jb-panel);
+  border: 1px solid var(--jb-border);
   border-radius: 3px;
-  padding: 2px 8px;
+  padding: 3px 8px;
+  height: 24px;
   cursor: pointer;
 }
 
-.toolbar-group button[aria-pressed='true'] {
-  background: color-mix(in oklch, currentColor 20%, transparent);
+.toolbar-group button:hover,
+.toolbar-group select:hover {
+  border-color: color-mix(in srgb, var(--jb-border) 50%, var(--jb-accent));
+}
+
+.toolbar-group button[aria-pressed="true"] {
+  background: var(--jb-accent-soft);
+  border-color: color-mix(in srgb, var(--jb-accent) 40%, var(--jb-border));
   font-weight: 600;
 }
 
-.toolbar-toast {
-  margin-left: auto;
-  font-size: 11px;
-  color: #f87171;
+.toolbar-group input[type="checkbox"] {
+  accent-color: var(--jb-accent);
 }
 
-/* v0.2 B7 — recent-folders dropdown. Playground-only, no Radix. */
+.toolbar-toast {
+  font-size: 11px;
+  color: var(--jb-vcs-u);
+  line-height: 1.35;
+}
+
 .recents-wrap {
   position: relative;
   display: inline-flex;
@@ -140,25 +266,14 @@ header h1 {
   top: calc(100% + 4px);
   left: 0;
   min-width: 260px;
-  max-width: 440px;
   margin: 0;
   padding: 4px 0;
   list-style: none;
-  background: #1b1d2a;
-  border: 1px solid #2e3142;
+  background: var(--jb-panel);
+  border: 1px solid var(--jb-border);
   border-radius: 4px;
-  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
-  z-index: 50;
-}
-
-html[data-theme='light'] .recents-menu {
-  background: #ffffff;
-  border-color: #d0d7de;
-  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.12);
-}
-
-.recents-menu li {
-  margin: 0;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  z-index: 70;
 }
 
 .recents-menu button,
@@ -166,57 +281,541 @@ html[data-theme='light'] .recents-menu {
   display: block;
   width: 100%;
   text-align: left;
-  padding: 4px 10px;
+  padding: 5px 10px;
   font: inherit;
-  color: inherit;
+  font-size: 12px;
+  color: var(--jb-text);
   background: transparent;
   border: none;
-  border-radius: 0;
   cursor: pointer;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.recents-menu button:hover,
-.recents-menu button:focus-visible {
-  background: color-mix(in oklch, currentColor 12%, transparent);
-  outline: none;
+.recents-menu button:hover {
+  background: var(--jb-sel);
 }
 
 .recents-menu .recents-empty {
-  color: #8b90a3;
+  color: var(--jb-text-dim);
   cursor: default;
 }
 
 .recents-menu hr {
   border: none;
-  border-top: 1px solid #2e3142;
-  margin: 4px 0;
+  border-top: 1px solid var(--jb-border-soft);
+  margin: 3px 0;
 }
 
-html[data-theme='light'] .recents-menu hr {
-  border-top-color: #d0d7de;
-}
+/* ── Tree ──────────────────────────────────────────────────────── */
 
 .tree-container {
   flex: 1 1 auto;
   min-height: 0;
   display: flex;
+  flex-direction: column;
+  /* WebStorm-tight density — minimal chrome, 16–17px rows */
+  --mille-row-height: 17px;
+  --mille-indent-size: 12px;
+  --mille-accent-bg: var(--jb-sel);
+  --mille-accent-fg: var(--jb-text-bright);
+  --mille-row-bg: transparent;
+  --mille-row-bg-hover: var(--jb-hover);
+  --mille-row-bg-selected: var(--jb-sel);
+  --mille-row-bg-selected-focused: var(--jb-sel);
+  --mille-focus-ring: none;
+  --mille-indent-guide: transparent;
+  --mille-chevron-color: var(--jb-text-dim);
+  --mille-decoration-modified: var(--jb-vcs-m);
+  --mille-decoration-added: var(--jb-vcs-a);
+  --mille-decoration-deleted: var(--jb-vcs-d);
+  --mille-decoration-ignored-opacity: 0.55;
+  --mille-sticky-root-bg: var(--jb-panel);
+  --mille-filter-input-bg: var(--jb-bg);
+  --mille-filter-input-border: var(--jb-border);
+  /* Library-root tint (JetBrains node_modules band) */
+  --jb-lib-bg: #3d3a32;
+  --jb-lib-bg-hover: #454139;
+  --jb-lib-bg-sel: color-mix(in srgb, var(--jb-sel) 65%, #5c5240);
+  --jb-lib-label: #a89b7c;
+  color: var(--jb-text);
 }
 
-.tree-container > * {
+html[data-theme="light"] .tree-container {
+  --jb-lib-bg: #ebe4d4;
+  --jb-lib-bg-hover: #e3dcc8;
+  --jb-lib-bg-sel: color-mix(in srgb, var(--jb-sel) 70%, #d4c9a8);
+  --jb-lib-label: #8a7f60;
+}
+
+.tree-container .mille-tree-container {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  gap: 0;
+  padding: 0;
+}
+
+.tree-container .mille-filter,
+.tree-container [data-mille-filter] {
+  padding: 2px 6px 4px;
+}
+
+.tree-container .mille-filter-input,
+.tree-container input[type="search"],
+.tree-container input[role="searchbox"] {
+  font-family: var(--font-ui) !important;
+  font-size: 12px !important;
+  height: 22px !important;
+  border-radius: 2px !important;
+  border: 1px solid var(--jb-border) !important;
+  background: var(--jb-bg) !important;
+  color: var(--jb-text) !important;
+  padding: 0 6px !important;
+}
+
+.tree-container .mille-filter-input:focus,
+.tree-container input[type="search"]:focus {
+  outline: none !important;
+  border-color: var(--jb-accent) !important;
+  box-shadow: 0 0 0 1px var(--jb-accent);
+}
+
+.tree-container .mille-filter-toggle,
+.tree-container [data-mille-filter-toggle] {
+  display: none !important;
+}
+
+.tree-container .mille-tree,
+.tree-container [role="tree"] {
+  font-family: var(--font-ui) !important;
+  font-size: 12px !important;
+  line-height: 1 !important;
+  color: var(--jb-text);
+  outline: none !important;
+}
+
+/*
+ * IMPORTANT: do NOT set position:relative here.
+ * FileTree virtualizes with position:absolute + transform:translateY.
+ * Forcing relative (especially with !important) keeps rows in normal
+ * flow *and* applies translateY — spacing becomes ~2× rowHeight.
+ */
+.tree-container .mille-row {
+  display: flex !important;
+  align-items: center !important;
+  gap: 1px !important;
+  height: var(--mille-row-height) !important;
+  min-height: var(--mille-row-height) !important;
+  max-height: var(--mille-row-height) !important;
+  box-sizing: border-box !important;
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+  padding-right: 4px !important;
+  margin: 0 !important;
+  border: none !important;
+  border-radius: 0 !important;
+  cursor: default;
+  color: var(--jb-text);
+  line-height: 1 !important;
+  overflow: hidden !important;
+}
+
+.tree-container .mille-row:hover {
+  background: var(--jb-hover) !important;
+}
+
+.tree-container .mille-row:focus,
+.tree-container .mille-row:focus-visible {
+  outline: none !important;
+}
+
+.tree-container .mille-row[data-mille-selected="true"],
+.tree-container .mille-row[data-mille-focused="true"],
+.tree-container .mille-row[data-mille-selected="true"][data-mille-focused="true"] {
+  background: var(--jb-sel) !important;
+  color: var(--jb-text-bright) !important;
+}
+
+/* No left accent bar — JetBrains uses full-row fill only */
+.tree-container .mille-row[data-mille-selected="true"]::before,
+.tree-container .mille-row[data-mille-focused="true"]::before {
+  content: none !important;
+}
+
+.tree-container .mille-row[data-mille-drop-target-above="true"]::before,
+.tree-container .mille-row[data-mille-drop-target-below="true"]::after {
+  content: "" !important;
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--jb-accent);
+  pointer-events: none;
+}
+
+.tree-container .mille-row[data-mille-drop-target-above="true"]::before {
+  top: 0;
+}
+.tree-container .mille-row[data-mille-drop-target-below="true"]::after {
+  bottom: 0;
+}
+
+.tree-container .mille-row[data-mille-decoration-ignored="true"] {
+  opacity: var(--mille-decoration-ignored-opacity);
+}
+
+.tree-container .mille-row[data-mille-decoration-strikethrough="true"] .mille-row-name {
+  text-decoration: line-through;
+  color: var(--jb-vcs-d) !important;
+}
+
+.tree-container [data-mille-chevron] {
+  width: 12px !important;
+  height: 12px !important;
+  color: var(--jb-text-dim) !important;
+  flex: 0 0 12px !important;
+  margin: 0 !important;
+}
+
+.tree-container [data-mille-chevron] svg {
+  width: 9px !important;
+  height: 9px !important;
+}
+
+.tree-container .mille-row [role="img"],
+.tree-container .mille-row img {
+  width: 15px !important;
+  height: 15px !important;
+  flex: 0 0 15px !important;
+  min-width: 15px !important;
+  position: relative;
+}
+
+.tree-container .mille-row [role="img"] svg {
+  width: 15px !important;
+  height: 15px !important;
+  display: block;
+}
+
+.tree-container .mille-row-name,
+.tree-container [data-mille-row-name] {
+  font-family: var(--font-ui) !important;
+  font-size: 12px !important;
+  font-weight: 400 !important;
+  color: inherit !important;
+  padding-left: 2px !important;
+  margin: 0 !important;
+}
+
+/* Symlink → directory (pnpm links): WebStorm-style corner arrow on icon */
+.tree-container .mille-row[data-mille-symlink-dir="true"] [role="img"]::after {
+  content: "";
+  position: absolute;
+  right: -1px;
+  bottom: -1px;
+  width: 8px;
+  height: 8px;
+  background: var(--jb-panel);
+  border-radius: 1px;
+  /* small arrow glyph as mask */
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--jb-text-dim) 70%, transparent);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 8'%3E%3Cpath d='M1.5 5.5 L1.5 1.5 L5.5 1.5 M1.5 1.5 L6.5 6.5' fill='none' stroke='%23bcbec4' stroke-width='1.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-size: 7px 7px;
+  background-repeat: no-repeat;
+  background-position: center;
+  pointer-events: none;
+  z-index: 1;
+}
+
+html[data-theme="light"] .tree-container .mille-row[data-mille-symlink-dir="true"] [role="img"]::after {
+  background-color: #fff;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 8'%3E%3Cpath d='M1.5 5.5 L1.5 1.5 L5.5 1.5 M1.5 1.5 L6.5 6.5' fill='none' stroke='%23666' stroke-width='1.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-size: 7px 7px;
+  background-repeat: no-repeat;
+  background-position: center;
+}
+
+/* Under library root, arrow badge matches the brown band */
+.tree-container .mille-row[data-mille-under-library-root="true"][data-mille-symlink-dir="true"] [role="img"]::after {
+  background-color: var(--jb-lib-bg);
+}
+
+.tree-container [data-mille-indent-guide] {
+  border-inline-start-color: transparent !important;
+}
+
+.tree-container .mille-row[data-mille-sticky-root="true"] {
+  font-weight: 600;
+  color: var(--jb-text-bright);
+  border-bottom: 1px solid var(--jb-border-soft);
+}
+
+/* VCS badges sit before the name (JetBrains layout) */
+.tree-container .mille-decorations,
+.tree-container [data-mille-decorations] {
+  margin-left: 0 !important;
+  margin-right: 0 !important;
+  gap: 1px !important;
+  padding: 0 !important;
+  flex: 0 0 auto !important;
+  opacity: 1;
+  order: 0;
+}
+
+.tree-container .mille-decoration-badge,
+.tree-container .mille-decoration-letter,
+.tree-container [data-mille-decoration-badge],
+.tree-container [data-mille-decoration-letter] {
+  font-family: var(--font-mono) !important;
+  font-size: 11px !important;
+  font-weight: 700 !important;
+  padding: 0 !important;
+  background: transparent !important;
+  line-height: 1 !important;
+}
+
+/* Color the filename by VCS status (JetBrains) */
+.tree-container .mille-row:has([data-mille-decoration-badge="M"]) .mille-row-name,
+.tree-container .mille-row:has([data-mille-decoration-letter="M"]) .mille-row-name {
+  color: var(--jb-vcs-m) !important;
+}
+.tree-container .mille-row:has([data-mille-decoration-badge="A"]) .mille-row-name,
+.tree-container .mille-row:has([data-mille-decoration-badge="?"]) .mille-row-name {
+  color: var(--jb-vcs-a) !important;
+}
+.tree-container .mille-row:has([data-mille-decoration-badge="D"]) .mille-row-name {
+  color: var(--jb-vcs-d) !important;
+}
+.tree-container .mille-row:has([data-mille-decoration-badge="U"]) .mille-row-name,
+.tree-container .mille-row:has([data-mille-decoration-badge="C"]) .mille-row-name,
+.tree-container .mille-row:has([data-mille-decoration-badge="R"]) .mille-row-name {
+  color: var(--jb-vcs-u) !important;
+}
+.tree-container .mille-row:has([data-mille-decoration-badge$="*"]) .mille-row-name {
+  color: var(--jb-vcs-muted) !important;
+}
+/* Propagated folder dirt — small muted mark, not "M*" text */
+.tree-container [data-mille-decoration-badge$="*"] {
+  font-size: 0 !important;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--jb-vcs-muted) !important;
+  min-width: 5px !important;
+  overflow: hidden;
+  align-self: center;
+}
+
+/* Excluded / ignored entries outside library roots — slightly muted */
+.tree-container .mille-row[data-mille-ignored="true"]:not([data-mille-under-library-root="true"]) .mille-row-name {
+  opacity: 0.72;
+}
+
+/*
+ * Entire node_modules / library-root *subtree* shares the yellow-brown
+ * band (JetBrains Project view). Applies to the root row and every
+ * descendant — @vibecook/mille, files, nested node_modules, etc.
+ */
+.tree-container .mille-row[data-mille-under-library-root="true"] {
+  background: var(--jb-lib-bg) !important;
+}
+.tree-container .mille-row[data-mille-under-library-root="true"]:hover {
+  background: var(--jb-lib-bg-hover) !important;
+}
+.tree-container .mille-row[data-mille-under-library-root="true"][data-mille-selected="true"],
+.tree-container .mille-row[data-mille-under-library-root="true"][data-mille-focused="true"] {
+  background: var(--jb-lib-bg-sel) !important;
+}
+
+/* Label only on the library-root folder itself */
+.tree-container .mille-row[data-mille-library-root="true"] .mille-row-name {
+  opacity: 0.95;
+}
+.tree-container .mille-row[data-mille-library-root="true"] .mille-row-name::after {
+  content: " library root";
+  margin-left: 6px;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--jb-lib-label);
+  letter-spacing: 0;
+}
+
+/* ── Editor (secondary) ────────────────────────────────────────── */
+
+.editor {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--jb-bg);
+  border-left: 1px solid var(--jb-border);
+}
+
+.tab-bar {
+  flex: 0 0 30px;
+  display: flex;
+  align-items: stretch;
+  overflow-x: auto;
+  background: var(--jb-panel);
+  border-bottom: 1px solid var(--jb-border);
+  padding: 0 4px;
+}
+
+.tab {
+  flex: 0 0 auto;
+  font-size: 12px;
+  color: var(--jb-text-dim);
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 0 12px;
+  cursor: pointer;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tab:hover {
+  color: var(--jb-text);
+  background: var(--jb-hover);
+}
+
+.tab.is-active {
+  color: var(--jb-text-bright);
+  border-bottom-color: var(--jb-accent);
+}
+
+.tab .tab-close {
+  opacity: 0.4;
+  font-size: 14px;
+  border: none;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  padding: 0 2px;
+  border-radius: 2px;
+}
+
+.tab .tab-close:hover {
+  opacity: 1;
+  color: var(--jb-vcs-d);
+}
+
+.code-panel {
   flex: 1 1 auto;
   min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
-.loading,
-.error {
-  padding: 24px;
-  color: #8b90a3;
+.code-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  margin: 0;
+  padding: 12px 16px;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--jb-text);
+  white-space: pre;
+  tab-size: 2;
 }
 
-.error {
-  color: #f87171;
+.code-scroll .kw {
+  color: #cf8e6d;
+}
+.code-scroll .fn {
+  color: #56a8f5;
+}
+.code-scroll .str {
+  color: #6aab73;
+}
+.code-scroll .cm {
+  color: #7a7e85;
+  font-style: italic;
+}
+.code-scroll .ty {
+  color: #b3ae60;
+}
+.code-scroll .num {
+  color: #2aacb8;
+}
+
+.code-error {
+  padding: 24px 16px;
+  color: var(--jb-vcs-d);
+}
+
+/* ── Boot ──────────────────────────────────────────────────────── */
+
+.boot {
+  height: 100%;
+  display: grid;
+  place-items: center;
+  background: var(--jb-bg);
+  padding: 32px;
+}
+
+.boot-card {
+  width: min(100%, 380px);
+  padding: 22px;
+  border-radius: 6px;
+  border: 1px solid var(--jb-border);
+  background: var(--jb-panel);
+  text-align: center;
+}
+
+.boot-card .boot-mark {
+  width: 28px;
+  height: 28px;
+  margin: 0 auto 12px;
+  border-radius: 5px;
+  background: linear-gradient(145deg, var(--jb-accent), #5b8def);
+}
+
+.boot-card h1 {
+  margin: 0 0 6px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--jb-text-bright);
+}
+
+.boot-card p {
+  margin: 0;
+  font-size: 12px;
+  color: var(--jb-text-dim);
+}
+
+.boot-card.error h1 {
+  color: var(--jb-vcs-d);
+}
+
+.boot-card pre {
+  margin: 10px 0 0;
+  text-align: left;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--jb-vcs-d);
   white-space: pre-wrap;
+}
+
+@media (max-width: 720px) {
+  .app--split {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(200px, 45%) 1fr;
+  }
+
+  .sidebar {
+    border-right: none;
+    border-bottom: 1px solid var(--jb-border);
+  }
 }

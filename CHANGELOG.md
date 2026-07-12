@@ -1,5 +1,40 @@
 # mille changelog
 
+## 0.2.1 — 2026-07-12
+
+Explorer correctness + soft-duotone icons + docs site. No public-API breaks.
+
+### Engine (`@vibecook/mille`)
+
+- **Expand gitignored folders.** Expanding a walk-root that is itself
+  ignored (e.g. `node_modules`, `out/`) no longer clears
+  `read_children_path`, so Project-view “show ignored” folders populate.
+- **Symlink expandability.** Walker records `symlinkTargetIsDir` from
+  target metadata; `hasChildren` treats directory-target symlinks as
+  expandable. UI/mirror `isExpandableEntry` matches (pnpm package
+  links open as folders).
+- **Project-view visible rows.** Folders-first sibling rank; default
+  visibility keeps ignored/hidden entries while still hiding `.git` and
+  `.DS_Store`. Library-root / symlink data attributes for chrome styling.
+
+### UI (`@vibecook/mille-ui`)
+
+- **Soft-duotone icon theme** — `duotoneIconTheme` via
+  `@vibecook/mille-ui/icons/duotone` (also re-exported from
+  `@vibecook/mille-ui/icons`). Compact filled folders + language-accent
+  file chips; playground default.
+- **Row layout / virtualizer.** Dropped `position: relative !important`
+  on rows so absolute + `translateY` virtualization no longer doubles
+  vertical gaps. VCS badges render before the name; library-root and
+  symlink markers for IDE chrome.
+
+### Docs & playground
+
+- Static product site (`docs/index.html`) + API reference (`docs/api.html`).
+- Icon theme comparison page (`docs/icons-preview.html`).
+- Playground reshaped as a JetBrains-style Project tool window
+  (density, library roots, gear settings, duotone default).
+
 ## 0.2.0 — 2026-04-25
 
 Engine correctness + Track A completion. Builds on v0.1; no breaking API

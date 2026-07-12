@@ -1,6 +1,6 @@
 {
   "name": "@vibecook/mille-win32-x64-msvc",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Prebuilt native binary for @vibecook/mille on win32-x64-msvc.",
   "license": "MIT",
   "repository": {
@@ -11,8 +11,12 @@
   "files": [
     "mille.*.node"
   ],
-  "os": ["win32"],
-  "cpu": ["x64"],
+  "os": [
+    "win32"
+  ],
+  "cpu": [
+    "x64"
+  ],
   "engines": {
     "node": ">=18"
   }

@@ -1,6 +1,6 @@
 {
   "name": "@vibecook/mille-linux-arm64-gnu",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Prebuilt native binary for @vibecook/mille on linux-arm64-gnu.",
   "license": "MIT",
   "repository": {
@@ -11,9 +11,15 @@
   "files": [
     "mille.*.node"
   ],
-  "os": ["linux"],
-  "cpu": ["arm64"],
-  "libc": ["glibc"],
+  "os": [
+    "linux"
+  ],
+  "cpu": [
+    "arm64"
+  ],
+  "libc": [
+    "glibc"
+  ],
   "engines": {
     "node": ">=18"
   }

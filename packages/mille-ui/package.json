@@ -1,6 +1,6 @@
 {
   "name": "@vibecook/mille-ui",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "React file-tree UI companion to @vibecook/mille. Virtualized, accessible, VS Code File Icon Theme compatible.",
   "license": "MIT",
   "type": "module",
@@ -35,6 +35,10 @@
     "./icons/default": {
       "types": "./dist/icons-default.d.ts",
       "import": "./dist/icons-default.js"
+    },
+    "./icons/duotone": {
+      "types": "./dist/icons-duotone.d.ts",
+      "import": "./dist/icons-duotone.js"
     },
     "./icons/material": {
       "types": "./dist/icons-material.d.ts",
@@ -81,18 +85,34 @@
   },
   "size-limit": [
     {
-      "name": "headless (SPEC §12 target 12 KB, limit 20 KB; 13 KB is the fail-on-regression boundary post-B8)",
+      "name": "headless (SPEC \u00a712 target 12 KB, limit 20 KB; 13 KB is the fail-on-regression boundary post-B8)",
       "path": "dist/headless.js",
       "limit": "13 KB",
       "gzip": true,
-      "ignore": ["react", "react-dom", "@vibecook/mille", "@tanstack/react-virtual", "@radix-ui/react-context-menu", "@radix-ui/react-dialog", "@radix-ui/react-tooltip"]
+      "ignore": [
+        "react",
+        "react-dom",
+        "@vibecook/mille",
+        "@tanstack/react-virtual",
+        "@radix-ui/react-context-menu",
+        "@radix-ui/react-dialog",
+        "@radix-ui/react-tooltip"
+      ]
     },
     {
-      "name": "index (SPEC §12 target 45 KB, limit 75 KB)",
+      "name": "index (SPEC \u00a712 target 45 KB, limit 75 KB)",
       "path": "dist/index.js",
       "limit": "75 KB",
       "gzip": true,
-      "ignore": ["react", "react-dom", "@vibecook/mille", "@tanstack/react-virtual", "@radix-ui/react-context-menu", "@radix-ui/react-dialog", "@radix-ui/react-tooltip"]
+      "ignore": [
+        "react",
+        "react-dom",
+        "@vibecook/mille",
+        "@tanstack/react-virtual",
+        "@radix-ui/react-context-menu",
+        "@radix-ui/react-dialog",
+        "@radix-ui/react-tooltip"
+      ]
     }
   ],
   "peerDependencies": {

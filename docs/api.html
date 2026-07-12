@@ -693,11 +693,11 @@
     <div class="content">
       <div class="toc-mobile">
         <button type="button" id="toc-open">Contents</button>
-        <span style="color:var(--mist);font-size:0.88rem">@vibecook/mille · v0.2</span>
+        <span style="color:var(--mist);font-size:0.88rem">@vibecook/mille · v0.2.1</span>
       </div>
 
       <header class="page-hero">
-        <p class="eyebrow">API reference · v0.2.0</p>
+        <p class="eyebrow">API reference · v0.2.1</p>
         <h1>Public surface</h1>
         <p>
           The types and factories you integrate against. Authoritative declarations live in
@@ -1267,16 +1267,17 @@
                 <tr><td>ariaLabel</td><td>string</td><td>Required for accessibility</td></tr>
                 <tr><td>rowHeight<span class="opt">?</span></td><td>number</td><td>Default <code>22</code></td></tr>
                 <tr><td>overscan<span class="opt">?</span></td><td>number</td><td>Default <code>20</code></td></tr>
-                <tr><td>iconTheme<span class="opt">?</span></td><td>IconTheme</td><td>VS Code File Icon Theme compatible</td></tr>
+                <tr><td>iconTheme<span class="opt">?</span></td><td>IconTheme</td><td>VS Code File Icon Theme compatible. Prefer <code>duotoneIconTheme</code>, <code>defaultIconTheme</code>, or <code>loadMaterialIconTheme()</code></td></tr>
                 <tr><td>emptyState<span class="opt">?</span></td><td>ReactNode</td><td></td></tr>
                 <tr><td>loadingState<span class="opt">?</span></td><td>ReactNode</td><td></td></tr>
                 <tr><td>ref<span class="opt">?</span></td><td>FileTreeRef</td><td>Imperative handle (v0.2)</td></tr>
               </tbody>
             </table>
             <pre class="code-block"><span class="kw">import</span> { <span class="fn">FileTree</span> } <span class="kw">from</span> <span class="str">'@vibecook/mille-ui'</span>;
+<span class="kw">import</span> { <span class="fn">duotoneIconTheme</span> } <span class="kw">from</span> <span class="str">'@vibecook/mille-ui/icons/duotone'</span>;
 <span class="kw">import</span> <span class="str">'@vibecook/mille-ui/tokens.css'</span>;
 
-&lt;<span class="ty">FileTree</span> fx={fx} ariaLabel=<span class="str">"Files"</span> rowHeight={22} /&gt;;</pre>
+&lt;<span class="ty">FileTree</span> fx={fx} ariaLabel=<span class="str">"Files"</span> rowHeight={22} iconTheme={duotoneIconTheme} /&gt;;</pre>
           </div>
         </article>
 
@@ -1323,7 +1324,9 @@
                 <tr><td>…/git</td><td></td><td>registerGitDecorations (host-wired client)</td></tr>
                 <tr><td>…/git/node</td><td></td><td>createShellGitClient — spawns git status</td></tr>
                 <tr><td>…/agent-rules</td><td></td><td>.cursor/rules, CLAUDE.md, .kiro badges</td></tr>
-                <tr><td>…/icons/default</td><td></td><td>Built-in folder + file icons</td></tr>
+                <tr><td>…/icons</td><td></td><td>Re-exports default + duotone themes</td></tr>
+                <tr><td>…/icons/default</td><td></td><td>Monoline folder + file icons</td></tr>
+                <tr><td>…/icons/duotone</td><td></td><td>Soft-duotone set (product default)</td></tr>
                 <tr><td>…/icons/material</td><td></td><td>Material Icon Theme bundle</td></tr>
                 <tr><td>…/testing</td><td></td><td>createFakeEngine for unit tests</td></tr>
                 <tr><td>…/tokens.css</td><td></td><td>CSS variables for the styled tree</td></tr>
@@ -1344,7 +1347,7 @@
 
   <footer>
     <div class="footer-inner">
-      <span>mille API · v0.2.0 · MIT</span>
+      <span>mille API · v0.2.1 · MIT</span>
       <span>
         <a href="index.html">Home</a>
         ·

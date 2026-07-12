@@ -35,8 +35,8 @@ import {
 import type { PortFileExplorer } from '@vibecook/mille/port';
 
 export type ThemeMode = 'light' | 'dark';
-/** `stage` = playground mock icons (default). */
-export type IconThemeId = 'stage' | 'default' | 'material';
+/** Soft-duotone is the product/playground default. */
+export type IconThemeId = 'duotone' | 'default' | 'stage' | 'material';
 
 /**
  * v0.2 B7 — compact path display for the recents dropdown. Absolute
@@ -162,7 +162,9 @@ export function Toolbar(props: ToolbarProps): ReactElement {
             ? 'Stage icons (docs mock).'
             : next === 'default'
               ? 'Default monoline icons.'
-              : null,
+              : next === 'duotone'
+                ? 'Soft duotone icons.'
+                : null,
       );
       onIconThemeChange(next);
     },
@@ -406,8 +408,9 @@ export function Toolbar(props: ToolbarProps): ReactElement {
               handleIconThemeChange(e.target.value as IconThemeId)
             }
           >
-            <option value="material">Material</option>
+            <option value="duotone">Duotone</option>
             <option value="default">Default</option>
+            <option value="material">Material</option>
             <option value="stage">Stage</option>
           </select>
         </label>

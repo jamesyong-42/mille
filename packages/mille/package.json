@@ -1,6 +1,6 @@
 {
   "name": "@vibecook/mille",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "High-performance file explorer library for Electron IDEs. Native Rust core via NAPI-RS.",
   "license": "MIT",
   "type": "module",

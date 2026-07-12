@@ -64,12 +64,30 @@ export function Sidebar() {
 | `@vibecook/mille-ui/headless`       | Structural components + class catalog.  |
 | `@vibecook/mille-ui/git`            | Git decoration provider (host-wired).   |
 | `@vibecook/mille-ui/agent-rules`    | `.cursor/rules`, `CLAUDE.md`, `.kiro`.  |
-| `@vibecook/mille-ui/icons/default`  | Built-in folder + file icon set.        |
+| `@vibecook/mille-ui/icons/default`  | Built-in monoline folder + file set.    |
+| `@vibecook/mille-ui/icons/duotone`  | Soft-duotone set (scannable, compact).  |
+| `@vibecook/mille-ui/icons/material` | Material Icon Theme bundle (publish-time). |
 | `@vibecook/mille-ui/testing`        | `createFakeEngine` for unit tests.      |
+
+## Icon themes
+
+```tsx
+import { FileTree } from '@vibecook/mille-ui';
+import { duotoneIconTheme } from '@vibecook/mille-ui/icons/duotone';
+// or: defaultIconTheme, loadMaterialIconTheme()
+
+<FileTree fx={fx} ariaLabel="Files" iconTheme={duotoneIconTheme} />
+```
+
+- **default** — monoline outline set (library default when no theme is set).
+- **duotone** — filled folders + language accent chips (product / playground default).
+- **material** — full VS Code Material Icon Theme JSON via `loadMaterialIconTheme()`.
+
+Any VS Code File Icon Theme–compatible object also works via `iconTheme`.
 
 ## Status
 
-v0.1.0 — released 2026-04-20. See [CHANGELOG.md](./CHANGELOG.md).
+v0.2.1 — released 2026-07-12. See [CHANGELOG.md](./CHANGELOG.md).
 
 ## License
 

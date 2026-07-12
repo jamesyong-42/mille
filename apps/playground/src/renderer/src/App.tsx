@@ -12,7 +12,7 @@ import {
 } from 'react';
 import { FileTreeProvider, FileTree, useFileTreeRef } from '@vibecook/mille-ui';
 import type { IconTheme } from '@vibecook/mille-ui/icons';
-import { defaultIconTheme } from '@vibecook/mille-ui/icons';
+import { defaultIconTheme, duotoneIconTheme } from '@vibecook/mille-ui/icons';
 import { createCommandRegistry, defaultCommands } from '@vibecook/mille-ui/commands';
 import type { Entry, FileExplorer, VisibleRow } from '@vibecook/mille';
 import { connectFileExplorer, type PortFileExplorer } from '@vibecook/mille/port';
@@ -151,15 +151,21 @@ function Explorer({
     document.documentElement.dataset['theme'] = theme;
   }, [theme]);
 
-  const [iconThemeId, setIconThemeId] = useState<'stage' | 'default' | 'material'>(
-    'material',
-  );
-  const [iconTheme, setIconTheme] = useState<IconTheme>(defaultIconTheme);
+  // Soft-duotone is the product default (see docs/icons-preview.html).
+  const [iconThemeId, setIconThemeId] = useState<
+    'duotone' | 'default' | 'stage' | 'material'
+  >('duotone');
+  const [iconTheme, setIconTheme] = useState<IconTheme>(duotoneIconTheme);
   const [iconThemeStatus, setIconThemeStatus] = useState<
     'idle' | 'loading' | 'loaded' | 'error'
-  >('loading');
+  >('idle');
 
   useEffect(() => {
+    if (iconThemeId === 'duotone') {
+      setIconTheme(duotoneIconTheme);
+      setIconThemeStatus('idle');
+      return;
+    }
     if (iconThemeId === 'stage') {
       setIconTheme(stageIconTheme);
       setIconThemeStatus('idle');
@@ -183,8 +189,8 @@ function Explorer({
       } catch (err) {
         console.warn('[playground] Material theme failed:', err);
         if (!cancelled) {
-          setIconTheme(defaultIconTheme);
-          setIconThemeId('default');
+          setIconTheme(duotoneIconTheme);
+          setIconThemeId('duotone');
           setIconThemeStatus('error');
         }
       }

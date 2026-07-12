@@ -1,6 +1,6 @@
 {
   "name": "@vibecook/mille-darwin-arm64",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Prebuilt native binary for @vibecook/mille on darwin-arm64.",
   "license": "MIT",
   "repository": {
@@ -11,8 +11,12 @@
   "files": [
     "mille.*.node"
   ],
-  "os": ["darwin"],
-  "cpu": ["arm64"],
+  "os": [
+    "darwin"
+  ],
+  "cpu": [
+    "arm64"
+  ],
   "engines": {
     "node": ">=18"
   }

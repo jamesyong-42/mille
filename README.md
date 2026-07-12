@@ -21,15 +21,16 @@ snapshots, and a React adapter.
 
 ### @vibecook/mille-ui
 
-React file-tree UI companion to `@vibecook/mille`. `v0.2.0` available.
+React file-tree UI companion to `@vibecook/mille`. `v0.2.1` available.
 See `packages/mille-ui/README.md` and `packages/mille-ui/CHANGELOG.md`.
 
 ## Status
 
-v0.2.0 released 2026-04-25. Roots-in-deltas, lazy list-on-expand,
-symlink-aware ignore, port-side decoration pipeline, real shell-based
-GitClient, Material Icon Theme bundle, imperative `FileTreeRef`, and a
-headless bundle trim from 21.69 KB → 12.46 KB gzip. See `CHANGELOG.md`.
+v0.2.1 released 2026-07-12. Soft-duotone icon theme, Project-view
+explorer correctness (expand ignored folders + pnpm symlink packages),
+virtualizer spacing fix, and a static docs site. Builds on v0.2.0
+(roots-in-deltas, lazy list-on-expand, decorations pipeline, Material
+icons, `FileTreeRef`). See `CHANGELOG.md`.
 
 ## Quickstart
 
@@ -82,6 +83,7 @@ The umbrella package resolves the correct binary via `optionalDependencies`.
 ## Documentation
 
 - **Website:** open `docs/index.html` (product) and `docs/api.html` (API reference)
+- **Icon themes:** `docs/icons-preview.html` (default / duotone / material comparison)
 - Embedding guide: `packages/mille/EMBEDDING.md`
 - Public API: `packages/mille/api.d.ts`
 - SPEC / PLAN: `research/file-explorer/` (when present)

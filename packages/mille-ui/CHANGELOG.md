@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.2.1 — 2026-07-12
+
+Soft-duotone icons + Project-view row polish. Additive; no public-API breaks.
+
+### Added
+
+- **`duotoneIconTheme`** — `@vibecook/mille-ui/icons/duotone` (and
+  re-export from `@vibecook/mille-ui/icons`). Soft-duotone set: filled
+  blue folders and dark file bodies with a language-color chip. Designed
+  for dense IDE sidebars; playground default.
+- **Library / symlink row affordances** — data attributes for library
+  roots and directory-target symlinks so host chrome can style them
+  (e.g. node_modules tint, symlink mark).
+
+### Fixed
+
+- Virtualized rows no longer double vertical spacing (`position:
+  relative !important` removed so `translateY` virtualization works).
+- Expand chevrons track `symlinkTargetIsDir` / unwalked dirs correctly
+  for pnpm-style package links.
+- VCS decoration badges paint before the filename (Project-view order).
+
 ## 0.2.0 — 2026-04-25
 
 Demo-ready release. Track A complete (port-side decorations + real git

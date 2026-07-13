@@ -95,5 +95,8 @@
         "aarch64-unknown-linux-musl"
       ]
     }
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

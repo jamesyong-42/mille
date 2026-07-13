@@ -1,5 +1,16 @@
 name: Release
 
+# Publish @vibecook/mille monorepo packages via npm Trusted Publishing (OIDC).
+# No long-lived NPM_TOKEN required after each package has a Trusted Publisher
+# configured on npmjs.com pointing at this workflow file (release.yml).
+#
+# First-time packages: publish once with a human/npm login (see scripts below
+# or an initial Automation token), then add Trusted Publisher on each package:
+#   Organization/user: jamesyong-42
+#   Repository:        mille
+#   Workflow filename: release.yml
+#   Allowed actions:   npm publish
+
 on:
   push:
     tags:
@@ -22,9 +33,7 @@ env:
 
 jobs:
   # ------------------------------------------------------------------
-  # Native build matrix — mirror of ci.yml's `build` job.
-  # Duplicated intentionally for Phase 0; factor into a reusable
-  # workflow once the matrix stabilizes.
+  # Native build matrix — 8 platform triples.
   # ------------------------------------------------------------------
   build:
     name: Build ${{ matrix.settings.target }}
@@ -84,7 +93,7 @@ jobs:
         if: ${{ !matrix.settings.docker }}
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: pnpm
 
       - name: Install Rust toolchain
@@ -153,7 +162,7 @@ jobs:
           retention-days: 7
 
   # ------------------------------------------------------------------
-  # Collect all 8 artifacts, run napi pre-publish, publish to npm.
+  # Collect artifacts + publish via npm Trusted Publishing (OIDC).
   # ------------------------------------------------------------------
   publish:
     name: Publish to npm
@@ -161,21 +170,22 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write
+      id-token: write # required for npm OIDC trusted publishing
     steps:
       - uses: actions/checkout@v4
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
-        # version from package.json packageManager (pnpm@10.x)
 
+      # Node ≥ 22.14 and npm ≥ 11.5.1 required for OIDC trusted publishing.
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
-          cache: pnpm
+          node-version: 22
           registry-url: https://registry.npmjs.org
-          always-auth: true
+
+      - name: Install npm with OIDC support
+        run: npm install -g npm@latest
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile=false
@@ -218,28 +228,19 @@ jobs:
       - name: Stamp optionalDependencies versions
         run: pnpm exec napi pre-publish -t npm --no-gh-release
 
-      - name: Check NPM_TOKEN
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      # Build JS packages so dist/ ships in the tarball (dist/ is gitignored).
+      - name: Build TypeScript packages
         run: |
-          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
-            echo "::error::Repository secret NPM_TOKEN is missing or empty."
-            echo "Create an npm Automation token with publish rights for @vibecook,"
-            echo "then:  gh secret set NPM_TOKEN"
-            exit 1
-          fi
-          echo "NPM_TOKEN is set (length ${#NODE_AUTH_TOKEN})"
+          pnpm --filter @vibecook/mille run build:ts
+          pnpm --filter @vibecook/mille-ui run build
 
       - name: Publish (dry-run)
         if: ${{ inputs.dry_run == true }}
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: pnpm -r publish --access public --no-git-checks --dry-run
 
+      # OIDC: npm CLI detects GITHUB_ACTIONS + id-token and exchanges for a
+      # short-lived publish token. No NODE_AUTH_TOKEN / NPM_TOKEN needed once
+      # each package has a Trusted Publisher for release.yml.
       - name: Publish
         if: ${{ inputs.dry_run != true }}
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: pnpm -r publish --access public --no-git-checks

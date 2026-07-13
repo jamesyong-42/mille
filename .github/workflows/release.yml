@@ -175,6 +175,7 @@ jobs:
           node-version: 20
           cache: pnpm
           registry-url: https://registry.npmjs.org
+          always-auth: true
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile=false
@@ -186,21 +187,59 @@ jobs:
           pattern: bindings-*
           merge-multiple: false
 
+      # napi artifacts (cli 3.7) skips our layout ("mille" vs default "index").
+      # Place binaries into packages/mille-{triple}/ by hand.
       - name: Move binaries into per-platform packages
-        # @napi-rs/cli 3.7+: --dir renamed to --output-dir (-d)
-        run: pnpm exec napi artifacts --npm-dir packages --output-dir artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          placed=0
+          for f in artifacts/bindings-*/packages/mille/mille.*.node; do
+            base=$(basename "$f")
+            triple=${base#mille.}
+            triple=${triple%.node}
+            dest="packages/mille-${triple}"
+            if [[ ! -d "$dest" ]]; then
+              echo "::error::missing package dir $dest for $f"
+              exit 1
+            fi
+            cp -v "$f" "$dest/"
+            placed=$((placed + 1))
+          done
+          echo "Placed ${placed} native binaries"
+          if [[ "$placed" -ne 8 ]]; then
+            echo "::error::expected 8 binaries, got ${placed}"
+            find artifacts -name '*.node' -print
+            exit 1
+          fi
+          ls -la packages/mille-*/mille.*.node
 
       - name: Stamp optionalDependencies versions
         run: pnpm exec napi pre-publish -t npm --no-gh-release
+
+      - name: Check NPM_TOKEN
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "::error::Repository secret NPM_TOKEN is missing or empty."
+            echo "Create an npm Automation token with publish rights for @vibecook,"
+            echo "then:  gh secret set NPM_TOKEN"
+            exit 1
+          fi
+          echo "NPM_TOKEN is set (length ${#NODE_AUTH_TOKEN})"
 
       - name: Publish (dry-run)
         if: ${{ inputs.dry_run == true }}
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: pnpm -r publish --access public --no-git-checks --dry-run
 
       - name: Publish
         if: ${{ inputs.dry_run != true }}
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: pnpm -r publish --access public --no-git-checks

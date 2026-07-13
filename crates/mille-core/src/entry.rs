@@ -136,8 +136,7 @@ mod tests {
     #[test]
     fn capability_roundtrips_via_serde() {
         let caps = Capability::READ_WRITE | Capability::CASE_SENSITIVE | Capability::REALPATH;
-        let encoded =
-            bincode::serde::encode_to_vec(caps, bincode::config::standard()).unwrap();
+        let encoded = bincode::serde::encode_to_vec(caps, bincode::config::standard()).unwrap();
         let (decoded, _): (Capability, usize) =
             bincode::serde::decode_from_slice(&encoded, bincode::config::standard()).unwrap();
         assert_eq!(caps, decoded);
@@ -159,8 +158,7 @@ mod tests {
             is_readonly: false,
             is_hidden: false,
         };
-        let encoded =
-            bincode::serde::encode_to_vec(&entry, bincode::config::standard()).unwrap();
+        let encoded = bincode::serde::encode_to_vec(&entry, bincode::config::standard()).unwrap();
         let (decoded, _): (Entry, usize) =
             bincode::serde::decode_from_slice(&encoded, bincode::config::standard()).unwrap();
         assert_eq!(entry, decoded);

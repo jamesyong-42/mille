@@ -36,13 +36,12 @@ pub(crate) fn bulk_threshold_reached<T>(items: &[T]) -> bool {
 /// by `mille_core::resume::{write_snapshot, read_snapshot}`, so the two
 /// paths agree on endianness and integer encoding.
 pub(crate) fn encode_bulk<T: Serialize>(value: &T) -> Result<Buffer> {
-    let bytes = bincode::serde::encode_to_vec(value, bincode::config::standard())
-        .map_err(|e| {
-            fx_error_to_napi(mille_core::FxError::InternalBug(format!(
-                "bincode encode failed: {}",
-                e
-            )))
-        })?;
+    let bytes = bincode::serde::encode_to_vec(value, bincode::config::standard()).map_err(|e| {
+        fx_error_to_napi(mille_core::FxError::InternalBug(format!(
+            "bincode encode failed: {}",
+            e
+        )))
+    })?;
     Ok(Buffer::from(bytes))
 }
 

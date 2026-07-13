@@ -15,9 +15,7 @@ use mille_core::{EntryId, EntryKind, EntryStore, FxError, Watcher};
 
 use crate::error::{fx_error_to_napi, io_to_fx};
 use crate::events::{Channel, EventBus};
-use crate::mutations::{
-    kind_from_u8, resolve_entry_path, stat_to_entry, DeleteOptionsJs,
-};
+use crate::mutations::{kind_from_u8, resolve_entry_path, stat_to_entry, DeleteOptionsJs};
 use crate::snapshot::MirrorSnapshot;
 use crate::types::{
     ChangeNoticeJs, ChangeSetJs, EntryJs, ErrorPayloadJs, FileSystemEventJs, SearchHitJs,
@@ -158,8 +156,8 @@ impl FileExplorer {
     #[napi(js_name = "populateFromRoots")]
     pub async fn populate_from_roots(&self) -> Result<u32> {
         use mille_core::{
-            build_ignore_matcher_from_walk, populate_store, walk, walk_with_ignore,
-            IgnoreMatcher, WalkOptions,
+            build_ignore_matcher_from_walk, populate_store, walk, walk_with_ignore, IgnoreMatcher,
+            WalkOptions,
         };
 
         let mut total: u32 = 0;
@@ -186,8 +184,7 @@ impl FileExplorer {
                         let _ = seeded.add_from_file(&candidate);
                     }
                 }
-                let w = walk_with_ignore(root, options, &seeded)
-                    .map_err(fx_error_to_napi)?;
+                let w = walk_with_ignore(root, options, &seeded).map_err(fx_error_to_napi)?;
                 // Rebuild a full matcher from every ignore file we
                 // actually observed during the walk so the is_ignored
                 // flag on the resulting entries is consistent with
@@ -230,13 +227,16 @@ impl FileExplorer {
         include_root: Option<bool>,
     ) -> Result<u32> {
         use mille_core::{
-            build_ignore_matcher_from_walk, populate_store, walk, walk_with_ignore,
-            IgnoreMatcher, WalkOptions,
+            build_ignore_matcher_from_walk, populate_store, walk, walk_with_ignore, IgnoreMatcher,
+            WalkOptions,
         };
 
         let p = PathBuf::from(&path);
         if !p.is_absolute() {
-            return Err(Error::from_reason(format!("path must be absolute: {}", path)));
+            return Err(Error::from_reason(format!(
+                "path must be absolute: {}",
+                path
+            )));
         }
 
         // Only walk inside one of the configured roots. This both protects
@@ -248,10 +248,7 @@ impl FileExplorer {
             .find(|r| p == **r || p.starts_with(r))
             .cloned()
             .ok_or_else(|| {
-                Error::from_reason(format!(
-                    "path {:?} is not under any configured root",
-                    p
-                ))
+                Error::from_reason(format!("path {:?} is not under any configured root", p))
             })?;
 
         let options = WalkOptions {
@@ -271,7 +268,12 @@ impl FileExplorer {
             // root down to the target directory — a lazy expand at
             // `repo/packages/foo` should still honor `repo/.gitignore`.
             let mut anchor = root.clone();
-            for seg in p.strip_prefix(&root).ok().into_iter().flat_map(|r| r.iter()) {
+            for seg in p
+                .strip_prefix(&root)
+                .ok()
+                .into_iter()
+                .flat_map(|r| r.iter())
+            {
                 for name in mille_core::IGNORE_FILE_NAMES {
                     let candidate = anchor.join(name);
                     if candidate.is_file() {
@@ -332,19 +334,14 @@ impl FileExplorer {
 
     /// Create a file or directory under `parent_id`. Phase 5 scope: leaf only.
     #[napi]
-    pub async fn create(
-        &self,
-        parent_id: i64,
-        name: String,
-        kind: u8,
-    ) -> Result<EntryJs> {
+    pub async fn create(&self, parent_id: i64, name: String, kind: u8) -> Result<EntryJs> {
         let kind_enum = kind_from_u8(kind).map_err(fx_error_to_napi)?;
         let parent_eid = EntryId(parent_id as u64);
 
         // Resolve parent path against the current snapshot.
         let snap = self.store.snapshot();
-        let parent_path = resolve_entry_path(snap.as_ref(), &self.roots, parent_eid)
-            .ok_or_else(|| {
+        let parent_path =
+            resolve_entry_path(snap.as_ref(), &self.roots, parent_eid).ok_or_else(|| {
                 fx_error_to_napi(FxError::InvalidInput(format!(
                     "parent id {} not found in snapshot",
                     parent_id
@@ -386,31 +383,25 @@ impl FileExplorer {
     pub async fn rename(&self, id: i64, new_name: String) -> Result<EntryJs> {
         let eid = EntryId(id as u64);
         let snap = self.store.snapshot();
-        let old_path = resolve_entry_path(snap.as_ref(), &self.roots, eid)
-            .ok_or_else(|| {
-                fx_error_to_napi(FxError::InvalidInput(format!(
-                    "id {} not found in snapshot",
-                    id
-                )))
-            })?;
-        let parent_path = old_path
-            .parent()
-            .map(|p| p.to_path_buf())
-            .ok_or_else(|| {
-                fx_error_to_napi(FxError::InvalidInput(format!(
-                    "cannot rename a root: id {}",
-                    id
-                )))
-            })?;
+        let old_path = resolve_entry_path(snap.as_ref(), &self.roots, eid).ok_or_else(|| {
+            fx_error_to_napi(FxError::InvalidInput(format!(
+                "id {} not found in snapshot",
+                id
+            )))
+        })?;
+        let parent_path = old_path.parent().map(|p| p.to_path_buf()).ok_or_else(|| {
+            fx_error_to_napi(FxError::InvalidInput(format!(
+                "cannot rename a root: id {}",
+                id
+            )))
+        })?;
         let new_path = parent_path.join(&new_name);
 
         tokio::fs::rename(&old_path, &new_path)
             .await
             .map_err(|e| fx_error_to_napi(io_to_fx(e, old_path.clone())))?;
 
-        self.store
-            .rename(eid, new_path)
-            .map_err(fx_error_to_napi)?;
+        self.store.rename(eid, new_path).map_err(fx_error_to_napi)?;
 
         let arc = self
             .store
@@ -432,22 +423,19 @@ impl FileExplorer {
         let new_parent_eid = EntryId(new_parent_id as u64);
         let snap = self.store.snapshot();
 
-        let old_path = resolve_entry_path(snap.as_ref(), &self.roots, eid)
+        let old_path = resolve_entry_path(snap.as_ref(), &self.roots, eid).ok_or_else(|| {
+            fx_error_to_napi(FxError::InvalidInput(format!(
+                "id {} not found in snapshot",
+                id
+            )))
+        })?;
+        let new_parent_path = resolve_entry_path(snap.as_ref(), &self.roots, new_parent_eid)
             .ok_or_else(|| {
                 fx_error_to_napi(FxError::InvalidInput(format!(
-                    "id {} not found in snapshot",
-                    id
+                    "new_parent id {} not found in snapshot",
+                    new_parent_id
                 )))
             })?;
-        let new_parent_path =
-            resolve_entry_path(snap.as_ref(), &self.roots, new_parent_eid).ok_or_else(
-                || {
-                    fx_error_to_napi(FxError::InvalidInput(format!(
-                        "new_parent id {} not found in snapshot",
-                        new_parent_id
-                    )))
-                },
-            )?;
 
         let effective_name = new_name.unwrap_or_else(|| {
             old_path
@@ -464,9 +452,7 @@ impl FileExplorer {
 
         // Store still only supports leaf rename today; reparenting to a
         // different parent lands with the Phase 2 walker refactor.
-        self.store
-            .rename(eid, new_path)
-            .map_err(fx_error_to_napi)?;
+        self.store.rename(eid, new_path).map_err(fx_error_to_napi)?;
 
         let arc = self
             .store
@@ -478,16 +464,9 @@ impl FileExplorer {
     /// Delete an entry. Directories with children require recursive: true.
     /// `trash` is accepted but currently falls back to permanent delete.
     #[napi]
-    pub async fn delete(
-        &self,
-        id: i64,
-        options: Option<DeleteOptionsJs>,
-    ) -> Result<()> {
+    pub async fn delete(&self, id: i64, options: Option<DeleteOptionsJs>) -> Result<()> {
         let eid = EntryId(id as u64);
-        let recursive = options
-            .as_ref()
-            .and_then(|o| o.recursive)
-            .unwrap_or(false);
+        let recursive = options.as_ref().and_then(|o| o.recursive).unwrap_or(false);
 
         let snap = self.store.snapshot();
         let path = resolve_entry_path(snap.as_ref(), &self.roots, eid).ok_or_else(|| {
@@ -497,7 +476,10 @@ impl FileExplorer {
             )))
         })?;
         let entry = snap.get(eid).ok_or_else(|| {
-            fx_error_to_napi(FxError::InvalidInput(format!("id {} vanished mid-delete", id)))
+            fx_error_to_napi(FxError::InvalidInput(format!(
+                "id {} vanished mid-delete",
+                id
+            )))
         })?;
 
         match entry.kind {
@@ -551,18 +533,19 @@ impl FileExplorer {
                 id
             )))
         })?;
-        let new_parent_path =
-            resolve_entry_path(snap.as_ref(), &self.roots, new_parent_eid).ok_or_else(
-                || {
-                    fx_error_to_napi(FxError::InvalidInput(format!(
-                        "new_parent id {} not found in snapshot",
-                        new_parent_id
-                    )))
-                },
-            )?;
+        let new_parent_path = resolve_entry_path(snap.as_ref(), &self.roots, new_parent_eid)
+            .ok_or_else(|| {
+                fx_error_to_napi(FxError::InvalidInput(format!(
+                    "new_parent id {} not found in snapshot",
+                    new_parent_id
+                )))
+            })?;
 
         let src_entry = snap.get(eid).ok_or_else(|| {
-            fx_error_to_napi(FxError::InvalidInput(format!("id {} vanished mid-copy", id)))
+            fx_error_to_napi(FxError::InvalidInput(format!(
+                "id {} vanished mid-copy",
+                id
+            )))
         })?;
         if src_entry.kind == EntryKind::Directory {
             return Err(fx_error_to_napi(FxError::Unsupported(
@@ -679,7 +662,13 @@ impl FileExplorer {
     #[napi(js_name = "onChange")]
     pub fn on_change(
         &self,
-        listener: ThreadsafeFunction<ChangeNoticeJs, Unknown<'static>, ChangeNoticeJs, Status, false>,
+        listener: ThreadsafeFunction<
+            ChangeNoticeJs,
+            Unknown<'static>,
+            ChangeNoticeJs,
+            Status,
+            false,
+        >,
     ) -> u64 {
         self.events.subscribe_change(Channel::Change, listener)
     }
@@ -688,7 +677,13 @@ impl FileExplorer {
     #[napi(js_name = "onChangeTree")]
     pub fn on_change_tree(
         &self,
-        listener: ThreadsafeFunction<ChangeNoticeJs, Unknown<'static>, ChangeNoticeJs, Status, false>,
+        listener: ThreadsafeFunction<
+            ChangeNoticeJs,
+            Unknown<'static>,
+            ChangeNoticeJs,
+            Status,
+            false,
+        >,
     ) -> u64 {
         self.events.subscribe_change(Channel::ChangeTree, listener)
     }
@@ -698,7 +693,13 @@ impl FileExplorer {
     #[napi(js_name = "onChangeDecorations")]
     pub fn on_change_decorations(
         &self,
-        listener: ThreadsafeFunction<ChangeNoticeJs, Unknown<'static>, ChangeNoticeJs, Status, false>,
+        listener: ThreadsafeFunction<
+            ChangeNoticeJs,
+            Unknown<'static>,
+            ChangeNoticeJs,
+            Status,
+            false,
+        >,
     ) -> u64 {
         self.events
             .subscribe_change(Channel::ChangeDecorations, listener)
@@ -807,11 +808,7 @@ impl FileExplorer {
     /// The client-port path (search-over-the-wire) is Phase 10+ and
     /// is not wired here — this method is local-mode only.
     #[napi]
-    pub fn search(
-        &self,
-        query: String,
-        options: Option<SearchOptionsJs>,
-    ) -> Vec<SearchHitJs> {
+    pub fn search(&self, query: String, options: Option<SearchOptionsJs>) -> Vec<SearchHitJs> {
         let snap = self.store.snapshot();
         let opts = options
             .map(|o| mille_core::SearchOptions {

@@ -82,9 +82,7 @@ impl VolatileTracker {
 
         if samples.len() as u32 > self.threshold {
             // Flip to volatile on breach; update last_breach on continued breach.
-            self.volatile_since
-                .entry(dir.to_path_buf())
-                .or_insert(now);
+            self.volatile_since.entry(dir.to_path_buf()).or_insert(now);
             self.last_breach.insert(dir.to_path_buf(), now);
         }
         // If count <= threshold, do NOT refresh last_breach even if already
@@ -137,11 +135,7 @@ mod tests {
 
     fn tracker() -> VolatileTracker {
         // Small threshold speeds up tests without changing semantics.
-        VolatileTracker::with_config(
-            200,
-            Duration::from_secs(1),
-            Duration::from_secs(2),
-        )
+        VolatileTracker::with_config(200, Duration::from_secs(1), Duration::from_secs(2))
     }
 
     #[test]
@@ -244,11 +238,8 @@ mod tests {
     #[test]
     fn tracker_releases_after_activity_drops_below_threshold() {
         // Use a small threshold and short cooldown to exercise release.
-        let mut t = VolatileTracker::with_config(
-            10,
-            Duration::from_secs(1),
-            Duration::from_millis(500),
-        );
+        let mut t =
+            VolatileTracker::with_config(10, Duration::from_secs(1), Duration::from_millis(500));
         let base = Instant::now();
         let dir = PathBuf::from("/a");
 

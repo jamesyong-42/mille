@@ -143,7 +143,9 @@ mod tests {
         let s = EntryStore::new();
         let a = s.insert(PathBuf::from("/a"), dir("a", None)).unwrap();
         let b = s.insert(PathBuf::from("/a/b"), dir("b", Some(a))).unwrap();
-        let c = s.insert(PathBuf::from("/a/b/c"), dir("c", Some(b))).unwrap();
+        let c = s
+            .insert(PathBuf::from("/a/b/c"), dir("c", Some(b)))
+            .unwrap();
         let f = s
             .insert(PathBuf::from("/a/b/c/d.txt"), leaf("d.txt", Some(c)))
             .unwrap();

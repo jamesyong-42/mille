@@ -72,10 +72,7 @@ impl StoreSnapshot {
         // symlink-to-dir (pnpm/npm workspace links), matching the
         // client mirror. Without this, expand never fires for links.
         match self.entries.get(&id) {
-            Some(e) => {
-                e.kind == EntryKind::Directory
-                    || e.symlink_target_is_dir == Some(true)
-            }
+            Some(e) => e.kind == EntryKind::Directory || e.symlink_target_is_dir == Some(true),
             None => false,
         }
     }
@@ -89,7 +86,10 @@ impl StoreSnapshot {
     /// Visible-descendant count for the subtree rooted at `id` (inclusive).
     /// Returns 0 for unknown ids so callers can blindly sum.
     pub fn subtree_visible_count(&self, id: EntryId) -> u32 {
-        self.descendant_visible_counts.get(&id).copied().unwrap_or(0)
+        self.descendant_visible_counts
+            .get(&id)
+            .copied()
+            .unwrap_or(0)
     }
 
     /// Total byte size of files in the subtree rooted at `id` (inclusive).
@@ -174,7 +174,9 @@ impl StoreSnapshot {
         stack.push(root);
 
         while let Some(id) = stack.pop() {
-            let Some(entry) = self.entries.get(&id) else { continue };
+            let Some(entry) = self.entries.get(&id) else {
+                continue;
+            };
             let visible = include_ignored || entry_counts_visible(entry);
             if visible {
                 *known = known.saturating_add(1);
@@ -219,7 +221,9 @@ impl StoreSnapshot {
         }
 
         while let Some((id, depth)) = stack.pop() {
-            let Some(entry) = self.entries.get(&id) else { continue };
+            let Some(entry) = self.entries.get(&id) else {
+                continue;
+            };
             let visible = query.include_ignored || entry_counts_visible(entry);
             if visible {
                 if skipped < query.offset {
@@ -387,9 +391,36 @@ mod tests {
         let a = EntryId(1);
         let b = EntryId(2);
         let c = EntryId(3);
-        seed(&mut snap, a, None, "a", EntryKind::Directory, 0, false, false);
-        seed(&mut snap, b, Some(a), "b", EntryKind::Directory, 0, false, false);
-        seed(&mut snap, c, Some(b), "c", EntryKind::File, 50, false, false);
+        seed(
+            &mut snap,
+            a,
+            None,
+            "a",
+            EntryKind::Directory,
+            0,
+            false,
+            false,
+        );
+        seed(
+            &mut snap,
+            b,
+            Some(a),
+            "b",
+            EntryKind::Directory,
+            0,
+            false,
+            false,
+        );
+        seed(
+            &mut snap,
+            c,
+            Some(b),
+            "c",
+            EntryKind::File,
+            50,
+            false,
+            false,
+        );
         assert_eq!(snap.subtree_visible_count(a), 3);
         assert_eq!(snap.subtree_visible_count(b), 2);
         assert_eq!(snap.subtree_visible_count(c), 1);
@@ -404,9 +435,36 @@ mod tests {
         let d = EntryId(1);
         let f1 = EntryId(2);
         let f2 = EntryId(3);
-        seed(&mut snap, d, None, "d", EntryKind::Directory, 0, false, false);
-        seed(&mut snap, f1, Some(d), "f1", EntryKind::File, 100, false, false);
-        seed(&mut snap, f2, Some(d), "f2", EntryKind::File, 200, false, false);
+        seed(
+            &mut snap,
+            d,
+            None,
+            "d",
+            EntryKind::Directory,
+            0,
+            false,
+            false,
+        );
+        seed(
+            &mut snap,
+            f1,
+            Some(d),
+            "f1",
+            EntryKind::File,
+            100,
+            false,
+            false,
+        );
+        seed(
+            &mut snap,
+            f2,
+            Some(d),
+            "f2",
+            EntryKind::File,
+            200,
+            false,
+            false,
+        );
         assert_eq!(snap.subtree_total_size(d), 300);
         assert_eq!(snap.subtree_visible_count(d), 3);
     }
@@ -433,7 +491,16 @@ mod tests {
     fn single_root_visible_count_is_one() {
         let mut snap = StoreSnapshot::empty();
         let r = EntryId(1);
-        seed(&mut snap, r, None, "r", EntryKind::Directory, 0, false, false);
+        seed(
+            &mut snap,
+            r,
+            None,
+            "r",
+            EntryKind::Directory,
+            0,
+            false,
+            false,
+        );
         let expanded: HashSet<EntryId> = HashSet::new();
         assert_eq!(snap.visible_row_count(&expanded, false).known, 1);
     }
@@ -445,7 +512,16 @@ mod tests {
         let a = EntryId(2);
         let b = EntryId(3);
         let c = EntryId(4);
-        seed(&mut snap, r, None, "r", EntryKind::Directory, 0, false, false);
+        seed(
+            &mut snap,
+            r,
+            None,
+            "r",
+            EntryKind::Directory,
+            0,
+            false,
+            false,
+        );
         seed(&mut snap, a, Some(r), "a", EntryKind::File, 0, false, false);
         seed(&mut snap, b, Some(r), "b", EntryKind::File, 0, false, false);
         seed(&mut snap, c, Some(r), "c", EntryKind::File, 0, false, false);
@@ -472,7 +548,16 @@ mod tests {
         let mut snap = StoreSnapshot::empty();
         let r = EntryId(1);
         let a = EntryId(2);
-        seed(&mut snap, r, None, "r", EntryKind::Directory, 0, false, false);
+        seed(
+            &mut snap,
+            r,
+            None,
+            "r",
+            EntryKind::Directory,
+            0,
+            false,
+            false,
+        );
         seed(&mut snap, a, Some(r), "a", EntryKind::File, 0, false, false);
 
         let expanded: HashSet<EntryId> = HashSet::new();
@@ -495,9 +580,36 @@ mod tests {
         let r = EntryId(1);
         let good = EntryId(2);
         let ign = EntryId(3);
-        seed(&mut snap, r, None, "r", EntryKind::Directory, 0, false, false);
-        seed(&mut snap, good, Some(r), "good", EntryKind::File, 0, false, false);
-        seed(&mut snap, ign, Some(r), "ign", EntryKind::File, 0, true, false);
+        seed(
+            &mut snap,
+            r,
+            None,
+            "r",
+            EntryKind::Directory,
+            0,
+            false,
+            false,
+        );
+        seed(
+            &mut snap,
+            good,
+            Some(r),
+            "good",
+            EntryKind::File,
+            0,
+            false,
+            false,
+        );
+        seed(
+            &mut snap,
+            ign,
+            Some(r),
+            "ign",
+            EntryKind::File,
+            0,
+            true,
+            false,
+        );
 
         let mut expanded: HashSet<EntryId> = HashSet::new();
         expanded.insert(r);
@@ -511,8 +623,26 @@ mod tests {
         let mut snap = StoreSnapshot::empty();
         let a = EntryId(1);
         let b = EntryId(2);
-        seed(&mut snap, a, None, "a", EntryKind::Directory, 0, false, false);
-        seed(&mut snap, b, Some(a), "b", EntryKind::Directory, 0, false, false);
+        seed(
+            &mut snap,
+            a,
+            None,
+            "a",
+            EntryKind::Directory,
+            0,
+            false,
+            false,
+        );
+        seed(
+            &mut snap,
+            b,
+            Some(a),
+            "b",
+            EntryKind::Directory,
+            0,
+            false,
+            false,
+        );
         // b is expanded but has no children map entry — worker hasn't delivered.
 
         let mut expanded: HashSet<EntryId> = HashSet::new();
@@ -528,7 +658,16 @@ mod tests {
     fn viewport_offset_and_limit_slice_correctly() {
         let mut snap = StoreSnapshot::empty();
         let r = EntryId(1);
-        seed(&mut snap, r, None, "r", EntryKind::Directory, 0, false, false);
+        seed(
+            &mut snap,
+            r,
+            None,
+            "r",
+            EntryKind::Directory,
+            0,
+            false,
+            false,
+        );
         let mut expanded: HashSet<EntryId> = HashSet::new();
         expanded.insert(r);
         let ids: Vec<EntryId> = (0..10)
@@ -567,8 +706,26 @@ mod tests {
         let r = EntryId(1);
         let d = EntryId(2);
         let g = EntryId(3);
-        seed(&mut snap, r, None, "r", EntryKind::Directory, 0, false, false);
-        seed(&mut snap, d, Some(r), "d", EntryKind::Directory, 0, true, false);
+        seed(
+            &mut snap,
+            r,
+            None,
+            "r",
+            EntryKind::Directory,
+            0,
+            false,
+            false,
+        );
+        seed(
+            &mut snap,
+            d,
+            Some(r),
+            "d",
+            EntryKind::Directory,
+            0,
+            true,
+            false,
+        );
         seed(&mut snap, g, Some(d), "g", EntryKind::File, 0, false, false);
 
         let mut expanded: HashSet<EntryId> = HashSet::new();

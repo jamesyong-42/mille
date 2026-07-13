@@ -38,7 +38,9 @@ pub enum RawEvent {
     /// Phase 3.3-3.5 rename pairing converts some of these into Renamed.
     Any(PathBuf),
     /// Watcher backlog overflowed. Subtree flagged coarse; caller re-walks.
-    Overflow { root: PathBuf },
+    Overflow {
+        root: PathBuf,
+    },
     /// Transient platform-level error. Not fatal; logged.
     Error(String),
 }
@@ -69,10 +71,7 @@ impl Default for WatcherOptions {
 enum NotifyBackend {
     Raw(RecommendedWatcher),
     Debounced(
-        notify_debouncer_full::Debouncer<
-            RecommendedWatcher,
-            notify_debouncer_full::FileIdMap,
-        >,
+        notify_debouncer_full::Debouncer<RecommendedWatcher, notify_debouncer_full::FileIdMap>,
     ),
 }
 
@@ -470,7 +469,10 @@ pub enum FsChangeEvent {
     /// Pair detection failed — an Unknown half aged out of the pairer's
     /// window without a partner. SPEC §9.4: emit honestly; consumers may
     /// treat as a delete of `missing_half` or re-walk the subtree.
-    RenameDegraded { missing_half: PathBuf, reason: String },
+    RenameDegraded {
+        missing_half: PathBuf,
+        reason: String,
+    },
     /// Watcher backlog overflow on this root; caller should re-walk it.
     Coarse { root: PathBuf },
     /// Transient platform-level error (not fatal).
@@ -523,7 +525,9 @@ pub fn coalesce_events(raw: &[RawEvent]) -> Vec<FsChangeEvent> {
                 out.push(FsChangeEvent::Coarse { root: root.clone() });
             }
             RawEvent::Error(msg) => {
-                out.push(FsChangeEvent::Error { message: msg.clone() });
+                out.push(FsChangeEvent::Error {
+                    message: msg.clone(),
+                });
             }
             RawEvent::Created(p)
             | RawEvent::Modified(p)
@@ -1376,7 +1380,9 @@ mod tests {
             FsChangeEvent::Modified { path: pb("/b") },
             FsChangeEvent::Deleted { path: pb("/c") },
             FsChangeEvent::Coarse { root: pb("/r") },
-            FsChangeEvent::Error { message: "x".into() },
+            FsChangeEvent::Error {
+                message: "x".into(),
+            },
         ];
         let out = p.feed(inp.clone(), Instant::now());
         assert_eq!(out, inp);
@@ -1409,10 +1415,7 @@ mod tests {
     fn pairer_flushes_unpaired_after_window() {
         let mut p = RenamePairer::new(Duration::from_millis(100));
         let t0 = Instant::now();
-        let _ = p.feed(
-            vec![FsChangeEvent::Unknown { path: pb("/a") }],
-            t0,
-        );
+        let _ = p.feed(vec![FsChangeEvent::Unknown { path: pb("/a") }], t0);
         assert_eq!(p.pending_count(), 1);
 
         // Next feed past the window — expect RenameDegraded.
@@ -1465,7 +1468,9 @@ mod tests {
             vec![
                 FsChangeEvent::Coarse { root: pb("/r") },
                 FsChangeEvent::Unknown { path: a.clone() },
-                FsChangeEvent::Error { message: "x".into() },
+                FsChangeEvent::Error {
+                    message: "x".into(),
+                },
                 FsChangeEvent::Unknown { path: b.clone() },
             ],
             Instant::now(),
@@ -1500,13 +1505,7 @@ mod tests {
             t0,
         );
         assert_eq!(out.len(), 1);
-        assert_eq!(
-            out[0],
-            FsChangeEvent::Renamed {
-                from: a,
-                to: b,
-            }
-        );
+        assert_eq!(out[0], FsChangeEvent::Renamed { from: a, to: b });
         assert_eq!(p.pending_count(), 1, "third unknown queued");
 
         let out2 = p.feed(vec![], t0 + Duration::from_millis(250));

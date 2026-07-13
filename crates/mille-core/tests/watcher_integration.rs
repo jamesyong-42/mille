@@ -140,17 +140,17 @@ fn intent_cache_passes_through_unrecorded_delete() {
 fn volatile_tracker_flips_and_releases() {
     // Tighter config so we don't need to synthesize thousands of events
     // while still exercising real breach -> cooldown -> release.
-    let mut t = VolatileTracker::with_config(
-        200,
-        Duration::from_millis(500),
-        Duration::from_millis(300),
-    );
+    let mut t =
+        VolatileTracker::with_config(200, Duration::from_millis(500), Duration::from_millis(300));
     let base = Instant::now();
     let dir = pb("/hot");
 
     // 300 events crammed into 400ms — exceeds 200 inside the 500ms window.
     for i in 0..300 {
-        t.record(&dir, base + Duration::from_millis((i as u64) + (i as u64) / 3));
+        t.record(
+            &dir,
+            base + Duration::from_millis((i as u64) + (i as u64) / 3),
+        );
     }
     assert!(t.is_volatile(&dir), "dir should have flipped volatile");
 
@@ -169,11 +169,7 @@ fn volatile_tracker_flips_and_releases() {
 
 #[test]
 fn volatile_tracker_does_not_starve_calm_dirs() {
-    let mut t = VolatileTracker::with_config(
-        200,
-        Duration::from_secs(1),
-        Duration::from_secs(2),
-    );
+    let mut t = VolatileTracker::with_config(200, Duration::from_secs(1), Duration::from_secs(2));
     let base = Instant::now();
     let hot = pb("/hot");
     let calm = pb("/calm");
@@ -197,7 +193,9 @@ fn pairer_degrades_lonely_unknown_after_window() {
     let mut pairer = RenamePairer::new(Duration::from_millis(100));
     let t0 = Instant::now();
     let _ = pairer.feed(
-        vec![FsChangeEvent::Unknown { path: pb("/lonely") }],
+        vec![FsChangeEvent::Unknown {
+            path: pb("/lonely"),
+        }],
         t0,
     );
     assert_eq!(pairer.pending_count(), 1);
@@ -293,10 +291,9 @@ fn macos_real_rename_end_to_end() {
 #[cfg(target_os = "macos")]
 fn path_of_raw(ev: &RawEvent) -> Option<&Path> {
     match ev {
-        RawEvent::Created(p)
-        | RawEvent::Modified(p)
-        | RawEvent::Deleted(p)
-        | RawEvent::Any(p) => Some(p.as_path()),
+        RawEvent::Created(p) | RawEvent::Modified(p) | RawEvent::Deleted(p) | RawEvent::Any(p) => {
+            Some(p.as_path())
+        }
         _ => None,
     }
 }

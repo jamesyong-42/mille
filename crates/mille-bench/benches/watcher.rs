@@ -121,11 +121,8 @@ fn bench_volatile_tracker_record_hot_dir(c: &mut Criterion) {
     let dir = pb("/hot");
     c.bench_function("volatile_tracker_record_hot_dir", |b| {
         b.iter(|| {
-            let mut t = VolatileTracker::with_config(
-                200,
-                Duration::from_secs(1),
-                Duration::from_secs(2),
-            );
+            let mut t =
+                VolatileTracker::with_config(200, Duration::from_secs(1), Duration::from_secs(2));
             let base = Instant::now();
             for i in 0..1000u64 {
                 t.record(black_box(&dir), base + Duration::from_micros(i));

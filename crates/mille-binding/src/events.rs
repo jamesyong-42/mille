@@ -261,7 +261,10 @@ where
     let mut iter = snapshot.iter();
     let last = iter.next_back();
     for tsfn in iter {
-        tsfn.call(clone_payload(&payload), ThreadsafeFunctionCallMode::NonBlocking);
+        tsfn.call(
+            clone_payload(&payload),
+            ThreadsafeFunctionCallMode::NonBlocking,
+        );
     }
     if let Some(tsfn) = last {
         tsfn.call(payload, ThreadsafeFunctionCallMode::NonBlocking);

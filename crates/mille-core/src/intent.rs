@@ -183,7 +183,11 @@ mod tests {
         let mut c = IntentCache::with_ttl(Duration::from_millis(500));
         let now = Instant::now();
         c.record(PathBuf::from("/a"), IntentKind::Modify, now);
-        c.record(PathBuf::from("/b"), IntentKind::Modify, now + Duration::from_secs(2));
+        c.record(
+            PathBuf::from("/b"),
+            IntentKind::Modify,
+            now + Duration::from_secs(2),
+        );
         let later = now + Duration::from_secs(1);
         c.sweep(later);
         // /a expired at now+0.5s, should be gone; /b expires at now+2.5s, kept.

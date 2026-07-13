@@ -61,11 +61,7 @@ impl Default for SearchOptions {
 ///
 /// Empty query returns an empty vec — we don't want to leak a "rank 0,
 /// match everything" corpus through to UI on a stray keystroke.
-pub fn search(
-    snap: &StoreSnapshot,
-    query: &str,
-    options: &SearchOptions,
-) -> Vec<SearchHit> {
+pub fn search(snap: &StoreSnapshot, query: &str, options: &SearchOptions) -> Vec<SearchHit> {
     use nucleo::pattern::{AtomKind, CaseMatching, Normalization, Pattern};
     use nucleo::{Config, Matcher, Utf32String};
 

@@ -54,11 +54,7 @@ impl ErrorCode {
         // Clone the io::Error through its raw_os_error / kind since io::Error
         // itself isn't Clone.
         let source = clone_io_error(err);
-        FxError::Io {
-            code,
-            path,
-            source,
-        }
+        FxError::Io { code, path, source }
     }
 }
 
@@ -193,13 +189,14 @@ mod tests {
 
     #[test]
     fn fx_error_code_per_variant() {
-        let io = ErrorCode::from_io_error(
-            &std::io::Error::from_raw_os_error(13),
-            PathBuf::from("/x"),
-        );
+        let io =
+            ErrorCode::from_io_error(&std::io::Error::from_raw_os_error(13), PathBuf::from("/x"));
         assert_eq!(io.code(), ErrorCode::EACCES);
 
-        assert_eq!(FxError::Unsupported("x".into()).code(), ErrorCode::EUNSUPPORTED);
+        assert_eq!(
+            FxError::Unsupported("x".into()).code(),
+            ErrorCode::EUNSUPPORTED
+        );
         assert_eq!(FxError::Cancelled.code(), ErrorCode::ECANCELED);
         assert_eq!(FxError::InvalidInput("x".into()).code(), ErrorCode::EINVAL);
         assert_eq!(FxError::InternalBug("x".into()).code(), ErrorCode::EUNKNOWN);

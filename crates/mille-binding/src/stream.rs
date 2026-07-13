@@ -51,7 +51,9 @@ impl FileReadStream {
             let mut reader = match File::open(&path).await {
                 Ok(f) => f,
                 Err(e) => {
-                    let _ = tx.send(Err(fx_error_to_napi(io_to_fx(e, path.clone())))).await;
+                    let _ = tx
+                        .send(Err(fx_error_to_napi(io_to_fx(e, path.clone()))))
+                        .await;
                     return;
                 }
             };

@@ -136,8 +136,7 @@ fn bench_pnpm_style_ignore(c: &mut Criterion) {
 
     c.bench_function("walker_pnpm_style_ignored_10k_repo_100k_store", |b| {
         b.iter(|| {
-            let _ =
-                walk_with_ignore(repo.path(), WalkOptions::default(), &seeded).unwrap();
+            let _ = walk_with_ignore(repo.path(), WalkOptions::default(), &seeded).unwrap();
         })
     });
 }

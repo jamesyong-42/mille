@@ -247,9 +247,7 @@ fn fs_mutation_strategy() -> impl Strategy<Value = FsMutation> {
     ]
 }
 
-fn fs_mutation_sequence(
-    range: std::ops::Range<usize>,
-) -> impl Strategy<Value = Vec<FsMutation>> {
+fn fs_mutation_sequence(range: std::ops::Range<usize>) -> impl Strategy<Value = Vec<FsMutation>> {
     prop::collection::vec(fs_mutation_strategy(), range)
 }
 

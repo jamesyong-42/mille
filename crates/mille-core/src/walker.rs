@@ -135,7 +135,7 @@ fn walk_inner(
     let mut builder = WalkDir::new(root)
         .parallelism(parallelism)
         .follow_links(follow)
-        .skip_hidden(false)  // we handle hidden filtering ourselves per `include_hidden`
+        .skip_hidden(false) // we handle hidden filtering ourselves per `include_hidden`
         .sort(true);
     if let Some(d) = options.max_depth {
         builder = builder.max_depth(d);
@@ -209,8 +209,7 @@ fn walk_inner(
                     // `pattern/` rules match. jwalk gives us the
                     // symlink's own file_type (not the target), so treat
                     // symlinks as dir-like for matching purposes.
-                    let is_dir_like =
-                        dent.file_type.is_dir() || dent.file_type.is_symlink();
+                    let is_dir_like = dent.file_type.is_dir() || dent.file_type.is_symlink();
                     if matcher.is_ignored(&logical, is_dir_like) {
                         // Preserve expand-into-ignored-dir: the walk root
                         // must keep its read_children_path so depth-1
@@ -283,11 +282,7 @@ fn walk_inner(
         } else {
             0
         };
-        let mtime_ms = meta
-            .modified()
-            .ok()
-            .and_then(system_time_ms)
-            .unwrap_or(0);
+        let mtime_ms = meta.modified().ok().and_then(system_time_ms).unwrap_or(0);
         let ctime_ms = ctime_ms_from_metadata(&meta).unwrap_or(mtime_ms);
         let is_readonly = meta.permissions().readonly();
 
@@ -366,8 +361,7 @@ pub fn populate_store(
         // Suppress unused-variable warning on non-ignore paths.
         let _ = root;
 
-        let is_dir_like = w.kind == EntryKind::Directory
-            || w.symlink_target_is_dir == Some(true);
+        let is_dir_like = w.kind == EntryKind::Directory || w.symlink_target_is_dir == Some(true);
         let is_ignored = match ignore {
             Some(m) => m.is_ignored(&w.path, is_dir_like),
             None => false,
@@ -652,7 +646,9 @@ mod tests {
         let debug = store.get_by_path(&td.path().join("debug.log")).unwrap();
         let main = store.get_by_path(&td.path().join("main.rs")).unwrap();
         let build = store.get_by_path(&td.path().join("build")).unwrap();
-        let output = store.get_by_path(&td.path().join("build/output.bin")).unwrap();
+        let output = store
+            .get_by_path(&td.path().join("build/output.bin"))
+            .unwrap();
 
         assert!(debug.is_ignored);
         assert!(!main.is_ignored);
@@ -818,8 +814,8 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn walk_with_ignore_skips_gitignored_symlink_target() {
-        use std::os::unix::fs::symlink;
         use crate::ignore::IgnoreMatcher;
+        use std::os::unix::fs::symlink;
 
         // Set up the "store" sibling with a bunch of files the walker
         // must NOT reach.
@@ -863,7 +859,11 @@ mod tests {
 
         // The symlink entry itself is present (file-tree UIs want to show
         // it in the list even when ignored).
-        assert!(names.contains(&"node_modules"), "expected node_modules in {:?}", names);
+        assert!(
+            names.contains(&"node_modules"),
+            "expected node_modules in {:?}",
+            names
+        );
         // The repo's real files are present.
         assert!(names.contains(&".gitignore"));
         assert!(names.contains(&"src"));
@@ -926,12 +926,11 @@ mod tests {
     }
 }
 
-
 #[cfg(test)]
 mod expand_ignored_dir {
-    use std::fs;
     use crate::ignore::IgnoreMatcher;
     use crate::walker::{walk_with_ignore, WalkOptions};
+    use std::fs;
 
     #[test]
     fn depth1_walk_into_gitignored_dir_lists_children() {

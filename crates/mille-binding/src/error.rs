@@ -61,10 +61,8 @@ mod tests {
 
     #[test]
     fn io_error_encodes_code_and_path() {
-        let fx = ErrorCode::from_io_error(
-            &std::io::Error::from_raw_os_error(2),
-            PathBuf::from("/a/b"),
-        );
+        let fx =
+            ErrorCode::from_io_error(&std::io::Error::from_raw_os_error(2), PathBuf::from("/a/b"));
         let napi_err = fx_error_to_napi(fx);
         let reason = napi_err.reason.as_str();
         assert!(reason.starts_with("FX|ENOENT|/a/b|"), "got {reason}");

@@ -99,7 +99,11 @@ pub(crate) async fn stat_to_entry(
         EntryKind::Unknown
     };
 
-    let size = if kind == EntryKind::File { meta.len() } else { 0 };
+    let size = if kind == EntryKind::File {
+        meta.len()
+    } else {
+        0
+    };
     let mtime_ms = mtime_ms_from_meta(&meta);
     let ctime_ms = ctime_ms_from_meta(&meta);
     let symlink_target_is_dir = if kind == EntryKind::Symlink {

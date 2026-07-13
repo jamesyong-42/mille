@@ -295,8 +295,7 @@ pub fn events_since(snap: &ResumeSnapshot) -> Result<Vec<ResumeEvent>, FxError> 
     // Build the snapshot path-set once: (mtime_ms, size) keyed by absolute
     // path. Entries whose path can't be materialized (unreachable from any
     // root) are skipped — they can't be diffed against disk either way.
-    let mut snap_paths: HashMap<PathBuf, (i64, u64)> =
-        HashMap::with_capacity(snap.entries.len());
+    let mut snap_paths: HashMap<PathBuf, (i64, u64)> = HashMap::with_capacity(snap.entries.len());
     for (id, entry) in snap.entries.iter() {
         if let Some(p) = entry_path(snap, *id) {
             snap_paths.insert(p, (entry.mtime_ms, entry.size));
@@ -323,7 +322,10 @@ pub fn events_since(snap: &ResumeSnapshot) -> Result<Vec<ResumeEvent>, FxError> 
             },
         ) {
             Ok(w) => w,
-            Err(FxError::Io { code: ErrorCode::ENOENT, .. }) => {
+            Err(FxError::Io {
+                code: ErrorCode::ENOENT,
+                ..
+            }) => {
                 out.push(ResumeEvent::RootDisappeared { root: root.clone() });
                 continue;
             }
@@ -331,18 +333,15 @@ pub fn events_since(snap: &ResumeSnapshot) -> Result<Vec<ResumeEvent>, FxError> 
         };
 
         // Collect the disk view keyed by absolute path.
-        let mut disk_paths: HashMap<PathBuf, (i64, u64)> =
-            HashMap::with_capacity(walked.len());
+        let mut disk_paths: HashMap<PathBuf, (i64, u64)> = HashMap::with_capacity(walked.len());
         for w in &walked {
             disk_paths.insert(w.path.clone(), (w.mtime_ms, w.size));
         }
 
         // Scope the snapshot-side path-set to this root's subtree so we
         // don't mis-flag entries from sibling roots as Disappeared here.
-        let snap_subtree: HashSet<&PathBuf> = snap_paths
-            .keys()
-            .filter(|p| p.starts_with(root))
-            .collect();
+        let snap_subtree: HashSet<&PathBuf> =
+            snap_paths.keys().filter(|p| p.starts_with(root)).collect();
 
         // Appeared: on disk, not in snapshot.
         for p in disk_paths.keys() {
@@ -354,11 +353,15 @@ pub fn events_since(snap: &ResumeSnapshot) -> Result<Vec<ResumeEvent>, FxError> 
         // Disappeared + Modified.
         for snap_p in snap_subtree {
             match disk_paths.get(snap_p) {
-                None => out.push(ResumeEvent::Disappeared { path: snap_p.clone() }),
+                None => out.push(ResumeEvent::Disappeared {
+                    path: snap_p.clone(),
+                }),
                 Some(&(disk_mtime, disk_size)) => {
                     let (snap_mtime, snap_size) = snap_paths[snap_p];
                     if disk_mtime != snap_mtime || disk_size != snap_size {
-                        out.push(ResumeEvent::Modified { path: snap_p.clone() });
+                        out.push(ResumeEvent::Modified {
+                            path: snap_p.clone(),
+                        });
                     }
                 }
             }
@@ -536,7 +539,10 @@ mod tests {
         let loaded = read_snapshot(&path).unwrap();
 
         // Root subtree: 2 visible (root + a), 42 bytes total.
-        assert_eq!(loaded.descendant_visible_counts.get(&root).copied(), Some(2));
+        assert_eq!(
+            loaded.descendant_visible_counts.get(&root).copied(),
+            Some(2)
+        );
         assert_eq!(loaded.descendant_total_sizes.get(&root).copied(), Some(42));
     }
 
@@ -788,6 +794,9 @@ mod tests {
             )),
             "expected Appeared(new.txt) in root A, got {events:?}"
         );
-        assert!(in_b.is_empty(), "root B should have no events, got {in_b:?}");
+        assert!(
+            in_b.is_empty(),
+            "root B should have no events, got {in_b:?}"
+        );
     }
 }

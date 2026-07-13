@@ -14,11 +14,7 @@ use tempfile::TempDir;
 /// Example: `build_tree(3, 10, 10)` → 3-deep tree where every dir has 10
 /// subdirs + 10 files. Total entries ≈ dirs_per_level × depth levels of
 /// branching plus leaves.
-pub fn build_tree(
-    depth: usize,
-    dirs_per_level: usize,
-    files_per_dir: usize,
-) -> (TempDir, usize) {
+pub fn build_tree(depth: usize, dirs_per_level: usize, files_per_dir: usize) -> (TempDir, usize) {
     let td = TempDir::new().expect("tempdir");
     let mut total = 0;
     build_recursive(td.path(), depth, dirs_per_level, files_per_dir, &mut total);
@@ -80,8 +76,7 @@ mod tests {
             .unwrap();
 
         let t0 = Instant::now();
-        let walked =
-            walk_with_ignore(repo.path(), WalkOptions::default(), &matcher).unwrap();
+        let walked = walk_with_ignore(repo.path(), WalkOptions::default(), &matcher).unwrap();
         let elapsed = t0.elapsed();
 
         // Confirm we didn't descend the symlink.
@@ -114,10 +109,7 @@ mod tests {
 /// either before the walk finishes would yank the fixture. The symlink
 /// points at `store` via its absolute path, matching what pnpm does.
 #[cfg(unix)]
-pub fn pnpm_style_fixture(
-    repo_entries: usize,
-    store_entries: usize,
-) -> (TempDir, TempDir) {
+pub fn pnpm_style_fixture(repo_entries: usize, store_entries: usize) -> (TempDir, TempDir) {
     use std::os::unix::fs::symlink;
     let repo = TempDir::new().expect("repo tempdir");
     let store = TempDir::new().expect("store tempdir");

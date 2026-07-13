@@ -58,7 +58,11 @@ impl MirrorSnapshot {
         self.inner
             .roots()
             .iter()
-            .filter_map(|id| self.inner.get(*id).map(|arc| EntryJs::from_core(arc.as_ref())))
+            .filter_map(|id| {
+                self.inner
+                    .get(*id)
+                    .map(|arc| EntryJs::from_core(arc.as_ref()))
+            })
             .collect()
     }
 
@@ -69,7 +73,9 @@ impl MirrorSnapshot {
         // (allocator caps at 2^53, well below i64::MAX) so out-of-range is
         // the caller's problem — they get None from the lookup anyway.
         let eid = EntryId(id as u64);
-        self.inner.get(eid).map(|arc| EntryJs::from_core(arc.as_ref()))
+        self.inner
+            .get(eid)
+            .map(|arc| EntryJs::from_core(arc.as_ref()))
     }
 
     /// Direct-child count for a directory id. None if the id isn't known
@@ -105,8 +111,11 @@ impl MirrorSnapshot {
     /// `include_ignored` defaults to false, matching SPEC §4.9.2.
     #[napi(js_name = "visibleRows")]
     pub fn visible_rows(&self, options: VisibleRowsOptionsJs) -> Vec<VisibleRowJs> {
-        let expanded: HashSet<EntryId> =
-            options.expanded.iter().map(|id| EntryId(*id as u64)).collect();
+        let expanded: HashSet<EntryId> = options
+            .expanded
+            .iter()
+            .map(|id| EntryId(*id as u64))
+            .collect();
 
         let query = mille_core::VisibleRowsQuery {
             expanded: &expanded,
@@ -136,12 +145,12 @@ impl MirrorSnapshot {
     /// `visibleRows` (struct-marshaled) remains the preferred path for
     /// small viewports and stays the default for API parity.
     #[napi(js_name = "visibleRowsBin")]
-    pub fn visible_rows_bin(
-        &self,
-        options: VisibleRowsOptionsJs,
-    ) -> napi::Result<Buffer> {
-        let expanded: HashSet<EntryId> =
-            options.expanded.iter().map(|id| EntryId(*id as u64)).collect();
+    pub fn visible_rows_bin(&self, options: VisibleRowsOptionsJs) -> napi::Result<Buffer> {
+        let expanded: HashSet<EntryId> = options
+            .expanded
+            .iter()
+            .map(|id| EntryId(*id as u64))
+            .collect();
 
         let query = mille_core::VisibleRowsQuery {
             expanded: &expanded,

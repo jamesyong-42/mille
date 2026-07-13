@@ -148,9 +148,7 @@ impl InMemoryNode {
                 is_symlink: false,
             },
             InMemoryNode::Symlink {
-                mtime_ms,
-                ctime_ms,
-                ..
+                mtime_ms, ctime_ms, ..
             } => FsMetadata {
                 kind: EntryKind::Symlink,
                 size: 0,
@@ -327,9 +325,9 @@ impl Fs for InMemoryFs {
         match &*node {
             InMemoryNode::File { data, .. } => Ok(data.clone()),
             InMemoryNode::Directory { .. } => Err(Self::eisdir(path)),
-            InMemoryNode::Symlink { .. } => Err(FxError::Unsupported(
-                "symlink read not implemented".into(),
-            )),
+            InMemoryNode::Symlink { .. } => {
+                Err(FxError::Unsupported("symlink read not implemented".into()))
+            }
         }
     }
 
@@ -453,9 +451,8 @@ impl Fs for InMemoryFs {
         let from_parent = Self::parent_of(from).ok_or_else(|| {
             FxError::InvalidInput(format!("from has no parent: {}", from.display()))
         })?;
-        let to_parent = Self::parent_of(to).ok_or_else(|| {
-            FxError::InvalidInput(format!("to has no parent: {}", to.display()))
-        })?;
+        let to_parent = Self::parent_of(to)
+            .ok_or_else(|| FxError::InvalidInput(format!("to has no parent: {}", to.display())))?;
         self.require_dir(&to_parent)?;
 
         let from_name = Self::file_name_os(from)?;

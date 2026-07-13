@@ -55,11 +55,14 @@ impl ChangeSet {
     pub fn merge(&mut self, other: ChangeSet) {
         self.changed_ids.extend(other.changed_ids);
         self.reparented_ids.extend(other.reparented_ids);
-        self.subtree_roots_changed.extend(other.subtree_roots_changed);
+        self.subtree_roots_changed
+            .extend(other.subtree_roots_changed);
         self.child_set_changed.extend(other.child_set_changed);
         // Version bookends: preserve earliest `from` and latest `to`. A zero
         // `from_version` on either side means "unset" — take the non-zero one.
-        if self.from_version == 0 || (other.from_version != 0 && other.from_version < self.from_version) {
+        if self.from_version == 0
+            || (other.from_version != 0 && other.from_version < self.from_version)
+        {
             self.from_version = other.from_version;
         }
         if other.to_version > self.to_version {
@@ -119,5 +122,4 @@ mod tests {
         assert_eq!(a.from_version, 5);
         assert_eq!(a.to_version, 9);
     }
-
 }

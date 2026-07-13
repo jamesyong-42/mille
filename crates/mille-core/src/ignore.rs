@@ -39,9 +39,12 @@ impl IgnoreMatcher {
     /// Load an ignore file from disk. `root` is the directory the ignore file
     /// lives in — paths in the file are resolved relative to it.
     pub fn add_from_file(&mut self, ignore_file: &Path) -> Result<(), FxError> {
-        let root = ignore_file.parent().ok_or_else(|| FxError::InvalidInput(
-            format!("ignore file {:?} has no parent directory", ignore_file),
-        ))?;
+        let root = ignore_file.parent().ok_or_else(|| {
+            FxError::InvalidInput(format!(
+                "ignore file {:?} has no parent directory",
+                ignore_file
+            ))
+        })?;
         let mut builder = GitignoreBuilder::new(root);
         if let Some(e) = builder.add(ignore_file) {
             return Err(FxError::Io {
@@ -56,7 +59,8 @@ impl IgnoreMatcher {
             source: std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()),
         })?;
         self.matchers.push((root.to_path_buf(), gi));
-        self.sources.push(IgnoreSource::File(ignore_file.to_path_buf()));
+        self.sources
+            .push(IgnoreSource::File(ignore_file.to_path_buf()));
         Ok(())
     }
 
@@ -151,7 +155,8 @@ mod tests {
     fn string_pattern_ignores_match() {
         let td = TempDir::new().unwrap();
         let mut m = IgnoreMatcher::new();
-        m.add_from_string(td.path(), "*.log\nnode_modules/\n").unwrap();
+        m.add_from_string(td.path(), "*.log\nnode_modules/\n")
+            .unwrap();
         assert!(m.is_ignored(&td.path().join("debug.log"), false));
         assert!(m.is_ignored(&td.path().join("node_modules"), true));
         assert!(m.is_ignored(&td.path().join("node_modules/react"), true));
@@ -211,7 +216,6 @@ mod tests {
         assert_eq!(err.code(), ErrorCode::EINVAL);
     }
 }
-
 
 #[cfg(test)]
 mod expand_ignore_debug {

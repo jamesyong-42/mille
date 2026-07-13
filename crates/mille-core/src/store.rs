@@ -94,9 +94,7 @@ impl EntryStore {
                         let sib_e = next.entries.get(&sib);
                         let sib_rank = sib_e.map(|e| sibling_kind_rank(e)).unwrap_or(1);
                         let sib_name = sib_e.map(|e| e.name.as_str()).unwrap_or("");
-                        sib_rank
-                            .cmp(&kind_rank)
-                            .then_with(|| sib_name.cmp(&name))
+                        sib_rank.cmp(&kind_rank).then_with(|| sib_name.cmp(&name))
                     })
                     .unwrap_or_else(|e| e);
                 siblings.insert(pos, id);
@@ -171,7 +169,11 @@ impl EntryStore {
 
         // Self-only contribution; the cache slot holds subtree totals, which
         // would double-count when descendants' own cache entries are still live.
-        let vis_contribution = if entry_counts_visible(&existing) { 1u32 } else { 0 };
+        let vis_contribution = if entry_counts_visible(&existing) {
+            1u32
+        } else {
+            0
+        };
         let size_contribution = existing.size;
         let parent_for_walk = existing.parent_id;
 
@@ -277,9 +279,7 @@ impl EntryStore {
         let new_name = new_path
             .file_name()
             .and_then(|n| n.to_str())
-            .ok_or_else(|| {
-                FxError::InvalidInput("new_path has no valid UTF-8 filename".into())
-            })?
+            .ok_or_else(|| FxError::InvalidInput("new_path has no valid UTF-8 filename".into()))?
             .to_string();
 
         let current = self.inner.load_full();
@@ -469,9 +469,7 @@ mod tests {
     #[test]
     fn rename_missing_id_is_invalid_input() {
         let s = EntryStore::new();
-        let err = s
-            .rename(EntryId(42), "/x".into())
-            .unwrap_err();
+        let err = s.rename(EntryId(42), "/x".into()).unwrap_err();
         assert_eq!(err.code(), crate::error::ErrorCode::EINVAL);
     }
 
@@ -565,7 +563,10 @@ mod tests {
         s.remove(root).unwrap();
         let snap = s.snapshot();
         assert!(snap.roots().is_empty());
-        assert!(snap.get(child).is_some(), "child still present though dangling");
+        assert!(
+            snap.get(child).is_some(),
+            "child still present though dangling"
+        );
     }
 
     #[test]
@@ -670,7 +671,10 @@ mod tests {
         let result = s.insert("/cycle/z".into(), leaf("z", Some(id_x)));
         let elapsed = start.elapsed();
 
-        assert!(result.is_ok(), "insert with cyclic parent should still return");
+        assert!(
+            result.is_ok(),
+            "insert with cyclic parent should still return"
+        );
         assert!(
             elapsed < Duration::from_secs(1),
             "cycle defense failed: insert took {:?}",
@@ -685,9 +689,7 @@ mod tests {
         let s = EntryStore::new();
         let root = s.insert("/r".into(), dir("r", None)).unwrap();
         let d = s.insert("/r/d".into(), dir("d", Some(root))).unwrap();
-        let leaf_id = s
-            .insert("/r/d/f".into(), leaf("f", Some(d)))
-            .unwrap();
+        let leaf_id = s.insert("/r/d/f".into(), leaf("f", Some(d))).unwrap();
 
         assert_eq!(s.snapshot().subtree_visible_count(root), 3);
 
@@ -765,7 +767,10 @@ mod tests {
         s.rename(id, "/b".into()).unwrap();
         let cs = s.take_pending_changes();
         assert!(cs.changed_ids.contains(&id));
-        assert!(cs.reparented_ids.is_empty(), "leaf rename does not reparent");
+        assert!(
+            cs.reparented_ids.is_empty(),
+            "leaf rename does not reparent"
+        );
     }
 
     #[test]

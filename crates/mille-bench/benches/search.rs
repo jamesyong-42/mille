@@ -8,10 +8,7 @@ use criterion::{criterion_group, criterion_main, Criterion};
 use mille_bench::medium_tree;
 use mille_core::{populate_store, search, walk, EntryStore, SearchOptions, WalkOptions};
 
-fn build_snapshot() -> (
-    tempfile::TempDir,
-    std::sync::Arc<mille_core::StoreSnapshot>,
-) {
+fn build_snapshot() -> (tempfile::TempDir, std::sync::Arc<mille_core::StoreSnapshot>) {
     let (td, _) = medium_tree();
     let walked = walk(td.path(), WalkOptions::default()).expect("walk");
     let store = EntryStore::new();

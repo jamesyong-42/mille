@@ -187,7 +187,8 @@ jobs:
           merge-multiple: false
 
       - name: Move binaries into per-platform packages
-        run: pnpm exec napi artifacts --npm-dir packages --dir artifacts
+        # @napi-rs/cli 3.7+: --dir renamed to --output-dir (-d)
+        run: pnpm exec napi artifacts --npm-dir packages --output-dir artifacts
 
       - name: Stamp optionalDependencies versions
         run: pnpm exec napi pre-publish -t npm --no-gh-release

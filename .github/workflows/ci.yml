@@ -109,7 +109,8 @@ jobs:
             target: aarch64-apple-darwin
             build: pnpm build:napi --target aarch64-apple-darwin
 
-          - host: macos-13
+          # Cross-compile on arm64 macos-14 — macos-13 Intel is retired/scarce.
+          - host: macos-14
             target: x86_64-apple-darwin
             build: pnpm build:napi --target x86_64-apple-darwin
 

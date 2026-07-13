@@ -11,7 +11,10 @@
 //! exits cleanly if the OS didn't deliver events in time. Real regressions
 //! are caught by the pure-logic pipeline tests, which are deterministic.
 
-use std::path::{Path, PathBuf};
+#[cfg(target_os = "macos")]
+use std::path::Path;
+use std::path::PathBuf;
+#[cfg(target_os = "macos")]
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 

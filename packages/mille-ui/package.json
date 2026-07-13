@@ -78,7 +78,7 @@
     "build:material": "node scripts/build-material.mjs",
     "prepublishOnly": "node scripts/build-material.mjs && pnpm run build",
     "typecheck": "tsc --noEmit",
-    "test": "node --test \"test/*.test.mjs\"",
+    "test": "node --test test/*.test.mjs",
     "size": "size-limit",
     "size:why": "size-limit --why",
     "bench": "node bench/scroll-expand.mjs"

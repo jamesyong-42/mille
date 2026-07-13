@@ -113,7 +113,8 @@ jobs:
           shell: bash
           run: |
             set -euo pipefail
-            npm install -g pnpm@10.33.0
+            # Image may already ship pnpm; --force avoids EEXIST on alpine.
+            npm install -g pnpm@10.33.0 --force
             pnpm install --frozen-lockfile=false
             ${{ matrix.settings.build }}
 

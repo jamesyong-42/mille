@@ -42,14 +42,21 @@ function isMusl(): boolean {
 
 function loadLocal(): unknown | null {
   // Dev build path: the `.node` is emitted next to api.d.ts (one dir up
-  // from dist/). The second candidate handles future restructures where
-  // src/ gets nested deeper without failing the loader silently.
-  const candidates = [
-    join(__dirname, '..', `mille.${process.platform}-${process.arch}.node`),
-    join(__dirname, '..', '..', `mille.${process.platform}-${process.arch}.node`),
+  // from dist/). napi-rs names Linux/Windows binaries with an ABI suffix
+  // (`-gnu` / `-musl` / `-msvc`); Darwin is just `platform-arch`.
+  const base = `mille.${process.platform}-${process.arch}`;
+  const names = [
+    `${base}.node`,
+    `${base}-gnu.node`,
+    `${base}-musl.node`,
+    `${base}-msvc.node`,
   ];
-  for (const c of candidates) {
-    if (existsSync(c)) return require(c);
+  const roots = [join(__dirname, '..'), join(__dirname, '..', '..')];
+  for (const root of roots) {
+    for (const name of names) {
+      const c = join(root, name);
+      if (existsSync(c)) return require(c);
+    }
   }
   return null;
 }

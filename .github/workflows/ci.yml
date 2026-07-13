@@ -39,8 +39,10 @@ jobs:
       - name: cargo clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
+      # Exclude mille-binding: cdylib links against Node's N-API and cannot
+      # produce a standalone test binary on bare Ubuntu.
       - name: cargo test
-        run: cargo test --workspace
+        run: cargo test --workspace --exclude mille-binding
 
   # ------------------------------------------------------------------
   # JS / TS checks on host only.
@@ -64,9 +66,21 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile=false
 
-      # dist/ is gitignored; typecheck needs emitted .d.ts from @vibecook/mille.
-      - name: Build TS packages
-        run: pnpm --filter @vibecook/mille run build:ts && pnpm --filter @vibecook/mille-ui run build
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: js-napi
+
+      # Integration tests load the N-API binary; dist/ is gitignored so we
+      # also emit TypeScript before typecheck.
+      - name: Build native + TS packages
+        run: |
+          pnpm --filter @vibecook/mille run build:napi:debug
+          pnpm --filter @vibecook/mille run build:ts
+          pnpm --filter @vibecook/mille-ui run build
 
       - name: Typecheck
         run: pnpm -r --if-present typecheck
@@ -152,7 +166,9 @@ jobs:
         with:
           key: ${{ matrix.settings.target }}
 
+      # Host install only for non-docker jobs (docker reinstalls inside the image).
       - name: Install dependencies
+        if: ${{ !matrix.settings.docker }}
         run: pnpm install --frozen-lockfile=false
 
       # Host-native or cross-compile via @napi-rs/cli (handles QEMU / napi-cross internally).
@@ -168,14 +184,16 @@ jobs:
         uses: addnab/docker-run-action@v3
         with:
           image: ${{ matrix.settings.docker }}
-          options: -v ${{ github.workspace }}:/build -w /build
+          options: -v ${{ github.workspace }}:/build -w /build -e CI=true
           # Default action shell is `sh` (no pipefail). Install pnpm via npm
           # so we skip Corepack signature-key rotation failures on older images.
           shell: bash
           run: |
             set -euo pipefail
+            export CI=true
             # Image may already ship pnpm; --force avoids EEXIST on alpine.
             npm install -g pnpm@10.33.0 --force
+            pnpm config set confirmModulesPurge false
             pnpm install --frozen-lockfile=false
             ${{ matrix.settings.build }}
 

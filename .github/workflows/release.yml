@@ -94,7 +94,9 @@ jobs:
         with:
           key: release-${{ matrix.settings.target }}
 
+      # Host install only for non-docker jobs (docker reinstalls inside the image).
       - name: Install dependencies
+        if: ${{ !matrix.settings.docker }}
         run: pnpm install --frozen-lockfile=false
 
       - name: Build (host)
@@ -107,14 +109,16 @@ jobs:
         uses: addnab/docker-run-action@v3
         with:
           image: ${{ matrix.settings.docker }}
-          options: -v ${{ github.workspace }}:/build -w /build
+          options: -v ${{ github.workspace }}:/build -w /build -e CI=true
           # Default action shell is `sh` (no pipefail). Install pnpm via npm
           # so we skip Corepack signature-key rotation failures on older images.
           shell: bash
           run: |
             set -euo pipefail
+            export CI=true
             # Image may already ship pnpm; --force avoids EEXIST on alpine.
             npm install -g pnpm@10.33.0 --force
+            pnpm config set confirmModulesPurge false
             pnpm install --frozen-lockfile=false
             ${{ matrix.settings.build }}
 

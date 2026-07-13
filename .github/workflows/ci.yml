@@ -64,6 +64,10 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile=false
 
+      # dist/ is gitignored; typecheck needs emitted .d.ts from @vibecook/mille.
+      - name: Build TS packages
+        run: pnpm --filter @vibecook/mille run build:ts && pnpm --filter @vibecook/mille-ui run build
+
       - name: Typecheck
         run: pnpm -r --if-present typecheck
 
@@ -73,9 +77,6 @@ jobs:
       # v0.2 B8 — mille-ui bundle size assertion. Fails CI on regression.
       # Budgets live in `packages/mille-ui/package.json` under
       # `size-limit`; see SPEC §12 for targets.
-      - name: Build mille-ui
-        run: pnpm --filter @vibecook/mille-ui run build
-
       - name: mille-ui size check
         run: pnpm --filter @vibecook/mille-ui run size
 
@@ -168,9 +169,12 @@ jobs:
         with:
           image: ${{ matrix.settings.docker }}
           options: -v ${{ github.workspace }}:/build -w /build
+          # Default action shell is `sh` (no pipefail). Install pnpm via npm
+          # so we skip Corepack signature-key rotation failures on older images.
+          shell: bash
           run: |
             set -euo pipefail
-            corepack enable
+            npm install -g pnpm@10.33.0
             pnpm install --frozen-lockfile=false
             ${{ matrix.settings.build }}
 

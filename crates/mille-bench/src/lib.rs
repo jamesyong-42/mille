@@ -55,6 +55,42 @@ pub fn medium_tree() -> (TempDir, usize) {
     build_tree(3, 5, 10)
 }
 
+/// v0.2 B3 — pnpm-class fixture.
+///
+/// Builds two trees:
+/// - `repo`: a ~`repo_entries`-entry workspace with a root `.gitignore`
+///   listing `node_modules/` plus a `node_modules` symlink into `store`.
+/// - `store`: a ~`store_entries`-entry populated directory, the stand-in
+///   for pnpm's central `.pnpm/` hard-linked store.
+///
+/// Both TempDirs are returned so the caller controls lifetime; dropping
+/// either before the walk finishes would yank the fixture. The symlink
+/// points at `store` via its absolute path, matching what pnpm does.
+#[cfg(unix)]
+pub fn pnpm_style_fixture(repo_entries: usize, store_entries: usize) -> (TempDir, TempDir) {
+    use std::os::unix::fs::symlink;
+    let repo = TempDir::new().expect("repo tempdir");
+    let store = TempDir::new().expect("store tempdir");
+
+    // Populate the store with flat files to keep setup fast.
+    for i in 0..store_entries {
+        let p = store.path().join(format!("store_file_{:06}.js", i));
+        fs::write(&p, b"x").expect("write store file");
+    }
+
+    // Populate the repo: `.gitignore`, a `src/` dir with repo_entries files,
+    // plus the `node_modules` symlink into the store.
+    fs::write(repo.path().join(".gitignore"), "node_modules/\n").expect("gitignore");
+    let src = repo.path().join("src");
+    fs::create_dir(&src).expect("mkdir src");
+    for i in 0..repo_entries {
+        let p = src.join(format!("mod_{:05}.rs", i));
+        fs::write(&p, b"pub fn x() {}").expect("write src file");
+    }
+    symlink(store.path(), repo.path().join("node_modules")).expect("symlink");
+    (repo, store)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -95,40 +131,4 @@ mod tests {
             elapsed
         );
     }
-}
-
-/// v0.2 B3 — pnpm-class fixture.
-///
-/// Builds two trees:
-/// - `repo`: a ~`repo_entries`-entry workspace with a root `.gitignore`
-///   listing `node_modules/` plus a `node_modules` symlink into `store`.
-/// - `store`: a ~`store_entries`-entry populated directory, the stand-in
-///   for pnpm's central `.pnpm/` hard-linked store.
-///
-/// Both TempDirs are returned so the caller controls lifetime; dropping
-/// either before the walk finishes would yank the fixture. The symlink
-/// points at `store` via its absolute path, matching what pnpm does.
-#[cfg(unix)]
-pub fn pnpm_style_fixture(repo_entries: usize, store_entries: usize) -> (TempDir, TempDir) {
-    use std::os::unix::fs::symlink;
-    let repo = TempDir::new().expect("repo tempdir");
-    let store = TempDir::new().expect("store tempdir");
-
-    // Populate the store with flat files to keep setup fast.
-    for i in 0..store_entries {
-        let p = store.path().join(format!("store_file_{:06}.js", i));
-        fs::write(&p, b"x").expect("write store file");
-    }
-
-    // Populate the repo: `.gitignore`, a `src/` dir with repo_entries files,
-    // plus the `node_modules` symlink into the store.
-    fs::write(repo.path().join(".gitignore"), "node_modules/\n").expect("gitignore");
-    let src = repo.path().join("src");
-    fs::create_dir(&src).expect("mkdir src");
-    for i in 0..repo_entries {
-        let p = src.join(format!("mod_{:05}.rs", i));
-        fs::write(&p, b"pub fn x() {}").expect("write src file");
-    }
-    symlink(store.path(), repo.path().join("node_modules")).expect("symlink");
-    (repo, store)
 }

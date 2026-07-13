@@ -85,6 +85,7 @@ pub struct VisibleRowJs {
 }
 
 impl VisibleRowJs {
+    #[allow(dead_code)] // alternate constructor; from_core_row is the live path
     pub(crate) fn from_core(row: &VisibleRowOut, entry: &Entry) -> Self {
         Self {
             id: entry_id_to_i64(entry.id),
@@ -156,6 +157,7 @@ pub struct VisibleRowCountJs {
 }
 
 impl VisibleRowCountJs {
+    #[allow(dead_code)] // wired when JS surface exposes visibleRowCount
     pub(crate) fn from_core(c: &VisibleRowCount) -> Self {
         Self {
             known: c.known,

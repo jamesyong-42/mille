@@ -103,6 +103,8 @@ enum InMemoryNode {
         ctime_ms: i64,
         readonly: bool,
     },
+    // Constructed when symlink support is wired into InMemoryFs mutators.
+    #[allow(dead_code)]
     Symlink {
         target: PathBuf,
         mtime_ms: i64,

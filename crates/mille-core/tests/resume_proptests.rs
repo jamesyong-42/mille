@@ -170,6 +170,7 @@ proptest! {
 
 #[derive(Clone, Debug)]
 #[allow(dead_code)]
+#[allow(clippy::enum_variant_names)]
 enum FsMutation {
     CreateFile { rel_path: PathBuf, bytes: Vec<u8> },
     DeleteFile { rel_path: PathBuf },

@@ -23,7 +23,7 @@ use crate::entry::EntryKind;
 use crate::error::{ErrorCode, FxError};
 use crate::ignore::{IgnoreMatcher, IGNORE_FILE_NAMES};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum SymlinkPolicy {
     /// Never descend into symlinked directories.
     Never,
@@ -31,13 +31,8 @@ pub enum SymlinkPolicy {
     Always,
     /// Phase 2.3: behaviorally equivalent to Never. PLAN 13.1 adds (dev,inode)
     /// dedup + ancestor-cycle detection to make this the correct default.
+    #[default]
     Smart,
-}
-
-impl Default for SymlinkPolicy {
-    fn default() -> Self {
-        SymlinkPolicy::Smart
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -147,14 +142,10 @@ fn walk_inner(
     // We also track discovered ignore files during the walk so a nested
     // `.gitignore` takes effect before its sibling directories are
     // descended.
-    let matcher_arc: Option<Arc<Mutex<IgnoreMatcher>>> = if let Some(existing) = ignore {
-        // Seed the live matcher with the caller's pre-loaded rules. When
-        // the caller already built a matcher from disk we move those
-        // entries into the shared cell so the closure sees them.
-        Some(Arc::new(Mutex::new(existing.clone_rules())))
-    } else {
-        None
-    };
+    // Seed the live matcher with the caller's pre-loaded rules so the
+    // process_read_dir closure sees them.
+    let matcher_arc: Option<Arc<Mutex<IgnoreMatcher>>> =
+        ignore.map(|existing| Arc::new(Mutex::new(existing.clone_rules())));
 
     if let Some(matcher_arc) = matcher_arc.clone() {
         // The callback fires once per directory with the directory's full
@@ -173,19 +164,17 @@ fn walk_inner(
         builder = builder.process_read_dir(move |_depth, parent_path, _rds, children| {
             // First pass: scan for newly-appeared ignore files in this
             // directory so nested rules apply to their siblings.
-            for result in children.iter() {
-                if let Ok(dent) = result {
-                    let name = match dent.file_name.to_str() {
-                        Some(s) => s,
-                        None => continue,
-                    };
-                    if !dent.file_type.is_file() {
-                        continue;
-                    }
-                    if IGNORE_FILE_NAMES.iter().any(|n| *n == name) {
-                        let ignore_file = parent_path.join(name);
-                        let _ = matcher_arc.lock().add_from_file(&ignore_file);
-                    }
+            for dent in children.iter().flatten() {
+                let name = match dent.file_name.to_str() {
+                    Some(s) => s,
+                    None => continue,
+                };
+                if !dent.file_type.is_file() {
+                    continue;
+                }
+                if IGNORE_FILE_NAMES.contains(&name) {
+                    let ignore_file = parent_path.join(name);
+                    let _ = matcher_arc.lock().add_from_file(&ignore_file);
                 }
             }
 
@@ -197,26 +186,24 @@ fn walk_inner(
             // store. The entry itself is still yielded, and the emit
             // phase below will mark it `is_ignored` via the matcher.
             let matcher = matcher_arc.lock();
-            for result in children.iter_mut() {
-                if let Ok(dent) = result {
-                    let name = match dent.file_name.to_str() {
-                        Some(s) => s,
-                        None => continue,
-                    };
-                    let logical = parent_path.join(name);
-                    // For directory-like entries (real dirs or symlinks
-                    // whose target may be a dir) we pass is_dir=true so
-                    // `pattern/` rules match. jwalk gives us the
-                    // symlink's own file_type (not the target), so treat
-                    // symlinks as dir-like for matching purposes.
-                    let is_dir_like = dent.file_type.is_dir() || dent.file_type.is_symlink();
-                    if matcher.is_ignored(&logical, is_dir_like) {
-                        // Preserve expand-into-ignored-dir: the walk root
-                        // must keep its read_children_path so depth-1
-                        // listing works when the user opens node_modules.
-                        if logical != walk_root {
-                            dent.read_children_path = None;
-                        }
+            for dent in children.iter_mut().flatten() {
+                let name = match dent.file_name.to_str() {
+                    Some(s) => s,
+                    None => continue,
+                };
+                let logical = parent_path.join(name);
+                // For directory-like entries (real dirs or symlinks
+                // whose target may be a dir) we pass is_dir=true so
+                // `pattern/` rules match. jwalk gives us the
+                // symlink's own file_type (not the target), so treat
+                // symlinks as dir-like for matching purposes.
+                let is_dir_like = dent.file_type.is_dir() || dent.file_type.is_symlink();
+                if matcher.is_ignored(&logical, is_dir_like) {
+                    // Preserve expand-into-ignored-dir: the walk root
+                    // must keep its read_children_path so depth-1
+                    // listing works when the user opens node_modules.
+                    if logical != walk_root {
+                        dent.read_children_path = None;
                     }
                 }
             }
@@ -397,10 +384,7 @@ pub fn build_ignore_matcher_from_walk(
 ) -> Result<crate::ignore::IgnoreMatcher, FxError> {
     let mut matcher = crate::ignore::IgnoreMatcher::new();
     for w in walked {
-        if crate::ignore::IGNORE_FILE_NAMES
-            .iter()
-            .any(|n| w.name.as_str() == *n)
-        {
+        if crate::ignore::IGNORE_FILE_NAMES.contains(&w.name.as_str()) {
             matcher.add_from_file(&w.path)?;
         }
     }
@@ -419,7 +403,7 @@ fn ctime_ms_from_metadata(m: &std::fs::Metadata) -> Option<i64> {
     use std::os::unix::fs::MetadataExt;
     let secs = m.ctime();
     let nanos = m.ctime_nsec();
-    Some(secs.saturating_mul(1_000) + (nanos / 1_000_000) as i64)
+    Some(secs.saturating_mul(1_000) + (nanos / 1_000_000))
 }
 
 #[cfg(not(unix))]

@@ -108,9 +108,12 @@ jobs:
         with:
           image: ${{ matrix.settings.docker }}
           options: -v ${{ github.workspace }}:/build -w /build
+          # Default action shell is `sh` (no pipefail). Install pnpm via npm
+          # so we skip Corepack signature-key rotation failures on older images.
+          shell: bash
           run: |
             set -euo pipefail
-            corepack enable
+            npm install -g pnpm@10.33.0
             pnpm install --frozen-lockfile=false
             ${{ matrix.settings.build }}
 

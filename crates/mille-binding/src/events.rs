@@ -324,6 +324,8 @@ fn clone_entry(entry: &crate::types::EntryJs) -> crate::types::EntryJs {
     }
 }
 
+// Signature matches `call_all`'s `Fn(&T) -> T` with `T = Vec<_>` (not a slice).
+#[allow(clippy::ptr_arg)]
 fn clone_batch(events: &Vec<FileSystemEventJs>) -> Vec<FileSystemEventJs> {
     events.iter().map(clone_event).collect()
 }

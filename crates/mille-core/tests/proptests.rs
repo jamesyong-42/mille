@@ -179,8 +179,8 @@ fn writer_plus_readers_no_deadlock() {
                 let id = store.insert(path, leaf(&format!("n{}", i))).unwrap();
                 live.push(id);
             }
-            for i in 0..REMOVES {
-                store.remove(live[i]);
+            for id in live.into_iter().take(REMOVES) {
+                store.remove(id);
             }
         })
     };

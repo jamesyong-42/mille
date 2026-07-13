@@ -46,7 +46,11 @@ pub struct ExplorerOptionsJs {
 }
 
 /// Resolved form of ExplorerOptionsJs with defaults applied.
+/// Several fields are stored for future phases (watch debounce, compact
+/// folders, exclude globs, crash-resume path, cache cap) and are not yet
+/// read by the live methods.
 #[derive(Clone)]
+#[allow(dead_code)]
 pub(crate) struct ResolvedOptions {
     pub respect_ignore: bool,
     pub follow_symlinks: mille_core::SymlinkPolicy,
@@ -62,6 +66,7 @@ pub(crate) struct ResolvedOptions {
 #[napi]
 pub struct FileExplorer {
     pub(crate) store: Arc<EntryStore>,
+    #[allow(dead_code)] // held for drop/unwatch paths; not read yet
     pub(crate) watcher: Arc<std::sync::Mutex<Option<Watcher>>>,
     pub(crate) roots: Vec<PathBuf>,
     pub(crate) options: ResolvedOptions,

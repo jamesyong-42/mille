@@ -27,6 +27,7 @@ pub const BINCODE_THRESHOLD: usize = 100;
 /// of per-row struct marshaling. Thin helper so call sites can read as
 /// `if bulk_threshold_reached(&rows) { ... }` without repeating the
 /// constant.
+#[allow(dead_code)] // reserved for Phase bulk-encode call sites; covered by unit tests
 pub(crate) fn bulk_threshold_reached<T>(items: &[T]) -> bool {
     items.len() > BINCODE_THRESHOLD
 }

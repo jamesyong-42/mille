@@ -57,10 +57,7 @@ impl VolatileTracker {
     /// exceeds threshold within `window`.
     pub fn record(&mut self, dir: &Path, now: Instant) {
         let cap = (self.threshold as usize).saturating_mul(2).max(4);
-        let samples = self
-            .activity
-            .entry(dir.to_path_buf())
-            .or_insert_with(VecDeque::new);
+        let samples = self.activity.entry(dir.to_path_buf()).or_default();
 
         // Drop stale samples outside the sliding window.
         let cutoff = now.checked_sub(self.window);

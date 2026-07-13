@@ -312,6 +312,7 @@ mod tests {
 
     /// Directly seed a snapshot mirroring the EntryStore::insert summary logic.
     /// Local to the unit tests; store-level coverage lives in store.rs.
+    #[allow(clippy::too_many_arguments)]
     fn seed(
         snap: &mut StoreSnapshot,
         id: EntryId,

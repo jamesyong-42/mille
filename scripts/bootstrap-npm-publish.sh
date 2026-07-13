@@ -83,10 +83,18 @@ pnpm --filter @vibecook/mille-ui run build
 
 publish_one() {
   local filter="$1"
-  local extra=("${@:2}")
+  shift
   echo ""
   echo ">>> publishing $filter"
-  pnpm --filter "$filter" publish --access public --no-git-checks "${OTP_ARGS[@]+"${OTP_ARGS[@]}"}" "${extra[@]}"
+  # Under set -u, empty arrays need ${arr[@]+"${arr[@]}"} — or use "$@" after shift.
+  local -a cmd=(pnpm --filter "$filter" publish --access public --no-git-checks)
+  if [[ ${#OTP_ARGS[@]} -gt 0 ]]; then
+    cmd+=("${OTP_ARGS[@]}")
+  fi
+  if [[ $# -gt 0 ]]; then
+    cmd+=("$@")
+  fi
+  "${cmd[@]}"
 }
 
 # Platform packages first, then umbrella, then UI

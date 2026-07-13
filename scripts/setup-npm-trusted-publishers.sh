@@ -86,12 +86,13 @@ for pkg in "${PACKAGES[@]}"; do
   fi
 
   if [[ "$DRY_RUN" == true ]]; then
-    echo "    [dry-run] npm trust github $pkg --file $WORKFLOW --repo $REPO --yes"
+    echo "    [dry-run] npm trust github $pkg --file $WORKFLOW --repo $REPO --allow-publish --yes"
     ok+=("$pkg (dry-run)")
     continue
   fi
 
-  trust_cmd=(npm trust github "$pkg" --file "$WORKFLOW" --repo "$REPO" --yes)
+  # npm ≥ 12 requires --allow-publish (and/or --allow-stage-publish)
+  trust_cmd=(npm trust github "$pkg" --file "$WORKFLOW" --repo "$REPO" --allow-publish --yes)
   if [[ ${#OTP_ARGS[@]} -gt 0 ]]; then
     trust_cmd+=("${OTP_ARGS[@]}")
   fi

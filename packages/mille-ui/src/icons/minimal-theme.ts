@@ -1,7 +1,7 @@
 // Minimal archival icon theme.
 //
 // The spaghetti-ui-design Structure panel is text-first: folders use
-// [+]/[-] disclosure and uppercase names; files have no glyphs. This
+// [+]/[-] disclosure; files have no glyphs. This
 // theme supplies empty 16×16 placeholders so the resolver still
 // succeeds when a host passes iconTheme without the CSS hide rule.
 // Prefer pairing with `@vibecook/mille-ui/theme/minimal.css` which

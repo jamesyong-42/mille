@@ -7,8 +7,7 @@
  *   row: flex items-center py-1 px-2
  *        paddingLeft: depth * 12 + 8
  *   disclosure: w-4 center opacity-60 mr-1 → "[+]" / "[-]" (folders only)
- *   folder label: uppercase tracking-widest text-[9px]
- *   file label: 10px tracking-tight, no glyph
+ *   folder / file labels: mono 10px tracking-tight, no glyph
  *   selected: bg ink / text paper  (light #2b2623 / #fcfaf6;
  *             dark  #d4cbbd / #141312)
  *   hover: ink @ 5%
@@ -267,38 +266,9 @@
 
 /* ── Labels ─────────────────────────────────────────────────────── */
 
-/* Folder: uppercase tracking-widest (0.1em) text-[9px] */
-[data-mille-theme="minimal"]
-  .mille-row[data-mille-kind="directory"]
-  .mille-row-name,
-[data-mille-theme="minimal"]
-  .mille-row[data-mille-kind="directory"]
-  [data-mille-row-name],
-[data-mille-theme="minimal"]
-  .mille-row[data-mille-symlink-dir="true"]
-  .mille-row-name,
-[data-mille-theme="minimal"]
-  .mille-row[data-mille-symlink-dir="true"]
-  [data-mille-row-name] {
-  text-transform: uppercase;
-  letter-spacing: 0.1em; /* tracking-widest */
-  font-size: 9px;
-  font-weight: 400;
-}
-
-/* File: text-[10px] tracking-tight */
-[data-mille-theme="minimal"]
-  .mille-row[data-mille-kind="file"]
-  .mille-row-name,
-[data-mille-theme="minimal"]
-  .mille-row[data-mille-kind="file"]
-  [data-mille-row-name],
-[data-mille-theme="minimal"]
-  .mille-row[data-mille-kind="symlink"]:not([data-mille-symlink-dir="true"])
-  .mille-row-name,
-[data-mille-theme="minimal"]
-  .mille-row[data-mille-kind="symlink"]:not([data-mille-symlink-dir="true"])
-  [data-mille-row-name] {
+/* Folder + file labels: keep natural casing, mono 10px tracking-tight */
+[data-mille-theme="minimal"] .mille-row-name,
+[data-mille-theme="minimal"] [data-mille-row-name] {
   letter-spacing: -0.025em;
   font-size: 10px;
   text-transform: none;

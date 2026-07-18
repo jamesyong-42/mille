@@ -1022,7 +1022,7 @@ html[data-theme="dark"] .tree-container[data-mille-theme="minimal"] {
   padding-left: 0 !important;
 }
 
-/* Folder: uppercase tracking-widest (0.1em) text-[9px] */
+/* Folder labels keep natural casing (same as files) */
 .tree-container[data-mille-theme="minimal"]
   .mille-row[data-mille-kind="directory"]
   .mille-row-name,
@@ -1035,9 +1035,9 @@ html[data-theme="dark"] .tree-container[data-mille-theme="minimal"] {
 .tree-container[data-mille-theme="minimal"]
   .mille-row[data-mille-symlink-dir="true"]
   [data-mille-row-name] {
-  text-transform: uppercase !important;
-  letter-spacing: 0.1em !important;
-  font-size: 9px !important;
+  text-transform: none !important;
+  letter-spacing: -0.025em !important;
+  font-size: 10px !important;
 }
 
 /* Disclosure: w-4 · opacity-60 · mr-1 · [+]/[-] */

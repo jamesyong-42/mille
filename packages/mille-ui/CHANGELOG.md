@@ -9,7 +9,7 @@
   `@vibecook/mille-ui/theme/minimal.css` (activate with
   `data-mille-theme="minimal"`). Icons: `minimalIconTheme` via
   `@vibecook/mille-ui/icons/minimal`. Matches: mono 10px / folder
-  uppercase tracking-widest 9px, `[+]`/`[-]` w-4 disclosure, inverted
+  natural-case mono labels, `[+]`/`[-]` w-4 disclosure, inverted
   selection, dashed indent rails, `depth*12+8` padding, section
   `px-2 py-2` gutter.
 - **`data-mille-kind`** on rows (`directory` | `file` | `symlink`) so

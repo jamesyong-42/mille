@@ -14,6 +14,8 @@
   /* Row geometry */
   --mille-row-height: 22px;
   --mille-indent-size: 8px;
+  /* Extra base padding before depth*indent (themes may set this). */
+  --mille-row-padding-inline: 0px;
 
   /* Row backgrounds */
   --mille-row-bg: transparent;
@@ -28,6 +30,7 @@
 
   /* Structural affordances */
   --mille-indent-guide: color-mix(in oklch, currentColor 10%, transparent);
+  --mille-indent-guide-style: solid;
   --mille-chevron-color: currentColor;
 
   /* SCM / decoration colors */

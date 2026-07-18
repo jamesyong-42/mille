@@ -304,7 +304,9 @@ export function useFileTreeRow(props: FileTreeRowProps): UseFileTreeRowResult {
   const rowStyle: CSSProperties = useMemo(() => {
     return {
       ...ROW_BASE_STYLE,
-      paddingInlineStart: `calc(${depth} * var(--mille-indent-size, 8px))`,
+      // Base inline padding (`--mille-row-padding-inline`) lets themes
+      // match designs that use depth*indent + gutter (e.g. minimal).
+      paddingInlineStart: `calc(${depth} * var(--mille-indent-size, 8px) + var(--mille-row-padding-inline, 0px))`,
       height: 'var(--mille-row-height, 22px)',
       ...(isStickyRoot
         ? {
@@ -339,6 +341,14 @@ export function useFileTreeRow(props: FileTreeRowProps): UseFileTreeRowResult {
     if (ariaProps['aria-setsize'] !== undefined) out['aria-setsize'] = ariaProps['aria-setsize'];
     if (ariaProps['aria-posinset'] !== undefined) out['aria-posinset'] = ariaProps['aria-posinset'];
     if (hasChildren) out['aria-expanded'] = expanded;
+    // Kind attribute so host themes can style directories (e.g. uppercase
+    // folder labels) without re-implementing the row view.
+    out['data-mille-kind'] =
+      row.kind === KIND_DIRECTORY
+        ? 'directory'
+        : row.kind === KIND_SYMLINK
+          ? 'symlink'
+          : 'file';
     if (selected) out['data-mille-selected'] = t;
     if (focused) out['data-mille-focused'] = t;
     if (pending) out['data-mille-pending'] = t;

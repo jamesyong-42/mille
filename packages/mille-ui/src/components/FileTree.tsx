@@ -1149,6 +1149,8 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
               onChevronClick(row.id, rowExpanded);
             },
             onClick: (e: ReactMouseEvent<HTMLElement>) => {
+              const withMod =
+                multiSelect && (e.shiftKey || e.metaKey || e.ctrlKey);
               if (multiSelect && e.shiftKey) {
                 const anchor = selection.anchorId ?? selection.focusedId ?? row.id;
                 const allIds: EntryId[] = visibleRows.map((r) => r.id);
@@ -1158,11 +1160,22 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
               } else {
                 selection.selectOne(row.id);
               }
+              // Single-click expands/collapses folders (entire row, not
+              // just the chevron). Matches Finder / the archival design.
+              // `detail === 1` skips the second click of a double-click
+              // so a folder is not toggled twice and left closed.
+              if (
+                row.hasChildren &&
+                !withMod &&
+                e.detail === 1
+              ) {
+                onChevronClick(row.id, rowExpanded);
+              }
             },
             onDoubleClick: () => {
-              if (row.hasChildren) {
-                onChevronClick(row.id, rowExpanded);
-              } else if (onOpen) {
+              // Folders already toggle on single-click; double-click only
+              // opens leaf entries (files).
+              if (!row.hasChildren && onOpen) {
                 onOpen(row);
               }
             },

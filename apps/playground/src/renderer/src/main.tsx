@@ -13,6 +13,7 @@ import './fx-port';
 import { createRoot } from 'react-dom/client';
 import { App } from './App';
 import '@vibecook/mille-ui/tokens.css';
+import '@vibecook/mille-ui/theme/minimal.css';
 import './index.css';
 
 // StrictMode intentionally omitted: its double-render interacts badly

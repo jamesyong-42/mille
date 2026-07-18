@@ -44,6 +44,11 @@
       "types": "./dist/icons-material.d.ts",
       "import": "./dist/icons-material.js"
     },
+    "./icons/minimal": {
+      "types": "./dist/icons-minimal.d.ts",
+      "import": "./dist/icons-minimal.js"
+    },
+    "./theme/minimal.css": "./dist/theme/minimal.css",
     "./git": {
       "types": "./dist/git.d.ts",
       "import": "./dist/git.js"
@@ -74,7 +79,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "build": "tsc --build && node -e \"const fs=require('fs');const tokens=fs.readFileSync('src/theme/tokens.css','utf8');const focus=fs.readFileSync('src/theme/focus.css','utf8');const combined=tokens+'\\n'+focus;fs.mkdirSync('dist',{recursive:true});fs.writeFileSync('dist/tokens.css',combined);fs.writeFileSync('tokens.css',combined)\"",
+    "build": "tsc --build && node -e \"const fs=require('fs');const tokens=fs.readFileSync('src/theme/tokens.css','utf8');const focus=fs.readFileSync('src/theme/focus.css','utf8');const combined=tokens+'\\n'+focus;fs.mkdirSync('dist',{recursive:true});fs.writeFileSync('dist/tokens.css',combined);fs.writeFileSync('tokens.css',combined);fs.mkdirSync('dist/theme',{recursive:true});fs.copyFileSync('src/theme/minimal.css','dist/theme/minimal.css')\"",
     "build:material": "node scripts/build-material.mjs",
     "prepublishOnly": "node scripts/build-material.mjs && pnpm run build",
     "typecheck": "tsc --noEmit",

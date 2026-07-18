@@ -1,0 +1,444 @@
+/*
+ * @vibecook/mille-ui — Minimal archival theme.
+ *
+ * Faithful port of spaghetti-ui-design `FileTreeNode` (Structure panel):
+ *
+ *   font-mono text-[10px] tracking-tight
+ *   row: flex items-center py-1 px-2
+ *        paddingLeft: depth * 12 + 8
+ *   disclosure: w-4 center opacity-60 mr-1 → "[+]" / "[-]" (folders only)
+ *   folder label: uppercase tracking-widest text-[9px]
+ *   file label: 10px tracking-tight, no glyph
+ *   selected: bg ink / text paper  (light #2b2623 / #fcfaf6;
+ *             dark  #d4cbbd / #141312)
+ *   hover: ink @ 5%
+ *   children rail: border-l border-dashed ink/20 with ml-3 (12px)
+ *   section pad: px-2 py-2
+ *
+ * Usage:
+ *   import '@vibecook/mille-ui/theme/minimal.css';
+ *   <div data-mille-theme="minimal">
+ *     <FileTree iconTheme={minimalIconTheme} rowHeight={26} ... />
+ *   </div>
+ */
+
+/* ── Tokens (light paper) ───────────────────────────────────────── */
+
+:where([data-mille-theme="minimal"]) {
+  /*
+   * Geometry from FileTreeNode:
+   *   paddingLeft = depth * 12 + 8
+   *   py-1 (~4+4) + 10px mono ≈ 26px row
+   *   section wrapper px-2 → 8px tree gutter
+   *   children ml-3 → 12px indent step / dashed rail pitch
+   */
+  --mille-row-height: 26px;
+  --mille-indent-size: 12px;
+  --mille-row-padding-inline: 8px;
+  --mille-tree-gutter-inline: 8px;
+
+  /* Ink on paper */
+  --mille-ink: #2b2623;
+  --mille-paper: #f1ede4;
+  --mille-paper-bright: #fcfaf6;
+
+  --mille-row-bg: transparent;
+  --mille-row-bg-hover: color-mix(in srgb, var(--mille-ink) 5%, transparent);
+  /* Inverted selection: solid ink, paper text */
+  --mille-row-bg-selected: var(--mille-ink);
+  --mille-row-bg-selected-focused: var(--mille-ink);
+
+  --mille-accent-bg: var(--mille-ink);
+  --mille-accent-fg: var(--mille-paper-bright);
+  --mille-focus-ring: 1px solid color-mix(in srgb, var(--mille-ink) 40%, transparent);
+
+  /* Continuous dashed children rail — border-[#2b2623]/20 */
+  --mille-indent-guide: color-mix(in srgb, var(--mille-ink) 20%, transparent);
+  --mille-indent-guide-style: dashed;
+  /* Disclosure opacity-60 */
+  --mille-chevron-color: color-mix(in srgb, var(--mille-ink) 60%, transparent);
+
+  /* Archival SCM inks (design accentHex / modelInk) */
+  --mille-decoration-modified: #786037;
+  --mille-decoration-added: #4f6b4a;
+  --mille-decoration-deleted: #9a3b28;
+  --mille-decoration-conflict: #3f5c6b;
+  --mille-decoration-renamed: #786037;
+  --mille-decoration-untracked: #4f6b4a;
+  --mille-decoration-ignored: color-mix(in srgb, var(--mille-ink) 45%, transparent);
+  --mille-decoration-ignored-opacity: 0.55;
+  --mille-decoration-modified-muted: #a68b64;
+  --mille-decoration-added-muted: #6d8a68;
+  --mille-decoration-deleted-muted: #b56a58;
+  --mille-decoration-conflict-muted: #6a8490;
+  --mille-decoration-renamed-muted: #a68b64;
+  --mille-decoration-untracked-muted: #6d8a68;
+  --mille-decoration-ignored-muted: color-mix(in srgb, var(--mille-ink) 40%, transparent);
+
+  --mille-rename-input-bg: var(--mille-paper-bright);
+  --mille-rename-input-ring: var(--mille-ink);
+  /* No sticky-root chrome in the design — blend into paper */
+  --mille-sticky-root-bg: transparent;
+  --mille-filter-input-bg: transparent;
+  --mille-filter-input-border: color-mix(in srgb, var(--mille-ink) 25%, transparent);
+  --mille-filter-toggle-border: color-mix(in srgb, var(--mille-ink) 25%, transparent);
+  --mille-filter-toggle-active-bg: color-mix(in srgb, var(--mille-ink) 8%, transparent);
+
+  color: var(--mille-ink);
+  font-family: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  font-size: 10px;
+  letter-spacing: -0.025em; /* tracking-tight */
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Dark: warm parchment ink on deep paper */
+:where([data-theme="dark"] [data-mille-theme="minimal"]),
+:where(.dark [data-mille-theme="minimal"]),
+:where([data-mille-theme="minimal"][data-theme="dark"]),
+:where([data-mille-theme="minimal"].dark) {
+  --mille-ink: #d4cbbd;
+  --mille-paper: #141312;
+  --mille-paper-bright: #141312;
+
+  --mille-row-bg-hover: color-mix(in srgb, var(--mille-ink) 5%, transparent);
+  --mille-row-bg-selected: var(--mille-ink);
+  --mille-row-bg-selected-focused: var(--mille-ink);
+
+  --mille-accent-bg: var(--mille-ink);
+  --mille-accent-fg: #141312;
+  --mille-focus-ring: 1px solid color-mix(in srgb, var(--mille-ink) 40%, transparent);
+
+  --mille-indent-guide: color-mix(in srgb, var(--mille-ink) 20%, transparent);
+  --mille-chevron-color: color-mix(in srgb, var(--mille-ink) 60%, transparent);
+
+  --mille-decoration-modified: #c4a96a;
+  --mille-decoration-added: #8ba888;
+  --mille-decoration-deleted: #c9755f;
+  --mille-decoration-conflict: #7fa6b5;
+  --mille-decoration-renamed: #c4a96a;
+  --mille-decoration-untracked: #8ba888;
+  --mille-decoration-ignored: color-mix(in srgb, var(--mille-ink) 45%, transparent);
+  --mille-decoration-ignored-opacity: 0.5;
+  --mille-decoration-modified-muted: #a68b64;
+  --mille-decoration-added-muted: #6d8a68;
+  --mille-decoration-deleted-muted: #a85a48;
+  --mille-decoration-conflict-muted: #5f8490;
+  --mille-decoration-renamed-muted: #a68b64;
+  --mille-decoration-untracked-muted: #6d8a68;
+
+  --mille-rename-input-bg: #0f0e0d;
+  --mille-rename-input-ring: var(--mille-ink);
+  --mille-sticky-root-bg: transparent;
+  --mille-filter-input-border: color-mix(in srgb, var(--mille-ink) 25%, transparent);
+  --mille-filter-toggle-border: color-mix(in srgb, var(--mille-ink) 25%, transparent);
+  --mille-filter-toggle-active-bg: color-mix(in srgb, var(--mille-ink) 8%, transparent);
+
+  color: var(--mille-ink);
+}
+
+/*
+ * Layout / state rules intentionally avoid :where() so they beat the
+ * shared focus.css selectors (.mille-row[data-mille-focused], etc.).
+ */
+
+/* ── Tree chrome — section px-2 py-2 ────────────────────────────── */
+
+[data-mille-theme="minimal"] .mille-tree,
+[data-mille-theme="minimal"] [role="tree"],
+[data-mille-theme="minimal"] [data-mille-tree-state] {
+  padding-inline: var(--mille-tree-gutter-inline, 8px);
+  padding-block: 8px; /* py-2 */
+  box-sizing: border-box;
+}
+
+/* ── Row chrome — py-1 px-2 feel ────────────────────────────────── */
+
+/*
+ * Baseline (critical for glitch-free selection):
+ *  - NEVER use the `background` shorthand — it resets background-clip
+ *    to border-box and flashes a full-width bar on state changes.
+ *  - Always keep background-clip: content-box so indent rails stay clear.
+ *  - No transitions on background (prevents wide→narrow morph).
+ *  - No focus/outline chrome — design has none; :focus on mousedown
+ *    was painting a full-row rectangle.
+ */
+[data-mille-theme="minimal"] .mille-row {
+  gap: 0;
+  column-gap: 0;
+  border-radius: 0;
+  transition: none;
+  padding-inline-end: 8px; /* px-2 */
+  cursor: pointer;
+  letter-spacing: -0.025em;
+  background-color: transparent;
+  background-image: none;
+  background-clip: content-box;
+  outline: none;
+  box-shadow: none;
+}
+
+/* Kill every shared focus.css / host full-bleed paint on all rows */
+[data-mille-theme="minimal"] .mille-row[data-mille-selected="true"],
+[data-mille-theme="minimal"] .mille-row[data-mille-focused="true"],
+[data-mille-theme="minimal"]
+  .mille-row[data-mille-selected="true"][data-mille-focused="true"],
+[data-mille-theme="minimal"] .mille-row:focus,
+[data-mille-theme="minimal"] .mille-row:focus-visible,
+[data-mille-theme="minimal"] .mille-row:active {
+  background-color: transparent;
+  background-image: none;
+  background-clip: content-box;
+  color: inherit;
+  outline: none;
+  box-shadow: none;
+}
+
+/* Hover — left-capped at the rail (content-box) */
+[data-mille-theme="minimal"] .mille-row:hover {
+  background-color: var(--mille-row-bg-hover);
+  background-clip: content-box;
+}
+
+/*
+ * Folders never show selection (design only marks files `active`).
+ * Explicitly re-assert after the generic selected/focused clear.
+ */
+[data-mille-theme="minimal"]
+  .mille-row[data-mille-kind="directory"][data-mille-selected="true"],
+[data-mille-theme="minimal"]
+  .mille-row[data-mille-kind="directory"][data-mille-focused="true"],
+[data-mille-theme="minimal"]
+  .mille-row[data-mille-kind="directory"][data-mille-selected="true"][data-mille-focused="true"],
+[data-mille-theme="minimal"]
+  .mille-row[data-mille-symlink-dir="true"][data-mille-selected="true"],
+[data-mille-theme="minimal"]
+  .mille-row[data-mille-symlink-dir="true"][data-mille-focused="true"],
+[data-mille-theme="minimal"]
+  .mille-row[data-mille-symlink-dir="true"][data-mille-selected="true"][data-mille-focused="true"],
+[data-mille-theme="minimal"]
+  .mille-row[data-mille-kind="directory"]:hover,
+[data-mille-theme="minimal"]
+  .mille-row[data-mille-symlink-dir="true"]:hover {
+  color: inherit;
+  outline: none;
+}
+
+[data-mille-theme="minimal"]
+  .mille-row[data-mille-kind="directory"]:hover,
+[data-mille-theme="minimal"]
+  .mille-row[data-mille-symlink-dir="true"]:hover {
+  background-color: var(--mille-row-bg-hover);
+  background-clip: content-box;
+}
+
+/*
+ * File selection only — inverted ink bar, left-capped at the dash rail.
+ * Must beat the generic selected/focused clear above.
+ * Do not set `background` shorthand here.
+ */
+[data-mille-theme="minimal"]
+  .mille-row[data-mille-kind="file"][data-mille-selected="true"],
+[data-mille-theme="minimal"]
+  .mille-row[data-mille-kind="file"][data-mille-selected="true"][data-mille-focused="true"],
+[data-mille-theme="minimal"]
+  .mille-row[data-mille-kind="file"][data-mille-selected="true"]:hover,
+[data-mille-theme="minimal"]
+  .mille-row[data-mille-kind="file"][data-mille-selected="true"][data-mille-focused="true"]:hover,
+[data-mille-theme="minimal"]
+  .mille-row[data-mille-kind="symlink"]:not([data-mille-symlink-dir="true"])[data-mille-selected="true"],
+[data-mille-theme="minimal"]
+  .mille-row[data-mille-kind="symlink"]:not([data-mille-symlink-dir="true"])[data-mille-selected="true"][data-mille-focused="true"],
+[data-mille-theme="minimal"]
+  .mille-row[data-mille-kind="symlink"]:not([data-mille-symlink-dir="true"])[data-mille-selected="true"]:hover {
+  background-color: var(--mille-row-bg-selected);
+  background-image: none;
+  background-clip: content-box;
+  color: var(--mille-accent-fg);
+  outline: none;
+  box-shadow: none;
+}
+
+/* Sticky roots — no weight / border in the design */
+[data-mille-theme="minimal"] .mille-row[data-mille-sticky-root="true"] {
+  font-weight: inherit;
+  border-bottom: none;
+  background: transparent;
+}
+
+/* ── Labels ─────────────────────────────────────────────────────── */
+
+/* Folder: uppercase tracking-widest (0.1em) text-[9px] */
+[data-mille-theme="minimal"]
+  .mille-row[data-mille-kind="directory"]
+  .mille-row-name,
+[data-mille-theme="minimal"]
+  .mille-row[data-mille-kind="directory"]
+  [data-mille-row-name],
+[data-mille-theme="minimal"]
+  .mille-row[data-mille-symlink-dir="true"]
+  .mille-row-name,
+[data-mille-theme="minimal"]
+  .mille-row[data-mille-symlink-dir="true"]
+  [data-mille-row-name] {
+  text-transform: uppercase;
+  letter-spacing: 0.1em; /* tracking-widest */
+  font-size: 9px;
+  font-weight: 400;
+}
+
+/* File: text-[10px] tracking-tight */
+[data-mille-theme="minimal"]
+  .mille-row[data-mille-kind="file"]
+  .mille-row-name,
+[data-mille-theme="minimal"]
+  .mille-row[data-mille-kind="file"]
+  [data-mille-row-name],
+[data-mille-theme="minimal"]
+  .mille-row[data-mille-kind="symlink"]:not([data-mille-symlink-dir="true"])
+  .mille-row-name,
+[data-mille-theme="minimal"]
+  .mille-row[data-mille-kind="symlink"]:not([data-mille-symlink-dir="true"])
+  [data-mille-row-name] {
+  letter-spacing: -0.025em;
+  font-size: 10px;
+  text-transform: none;
+  font-weight: 400;
+}
+
+[data-mille-theme="minimal"]
+  .mille-row[data-mille-selected="true"]
+  .mille-row-name,
+[data-mille-theme="minimal"]
+  .mille-row[data-mille-selected="true"]
+  [data-mille-row-name] {
+  color: inherit;
+}
+
+/* ── Disclosure: w-4 · opacity-60 · mr-1 · "[+]"/"[-]" ──────────── */
+
+[data-mille-theme="minimal"] .mille-row [data-mille-chevron] {
+  width: 16px; /* w-4 */
+  min-width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-inline-end: 4px; /* mr-1 */
+  font-family: inherit;
+  font-size: 10px;
+  line-height: 1;
+  letter-spacing: 0;
+  opacity: 0.6;
+  color: inherit;
+}
+
+[data-mille-theme="minimal"] .mille-row [data-mille-chevron] svg {
+  display: none;
+}
+
+[data-mille-theme="minimal"]
+  .mille-row
+  [data-mille-chevron="collapsed"]::before {
+  content: "[+]";
+}
+
+[data-mille-theme="minimal"]
+  .mille-row
+  [data-mille-chevron="expanded"]::before {
+  content: "[-]";
+}
+
+[data-mille-theme="minimal"]
+  .mille-row
+  [data-mille-chevron="placeholder"] {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+/* ── Icons: text-first — no file-type glyphs ────────────────────── */
+
+[data-mille-theme="minimal"] .mille-row [role="img"],
+[data-mille-theme="minimal"] .mille-row img {
+  display: none !important;
+  width: 0 !important;
+  min-width: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+/* ── Indent guides = continuous dashed children rail ────────────── */
+
+[data-mille-theme="minimal"] [data-mille-indent-guide] {
+  border-inline-start-width: 1px;
+  border-inline-start-style: dashed;
+  border-inline-start-color: var(--mille-indent-guide);
+}
+
+/* ── Filter strip ───────────────────────────────────────────────── */
+
+[data-mille-theme="minimal"] [data-mille-filter] {
+  font-family: inherit;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding-inline: 0;
+}
+
+[data-mille-theme="minimal"] [data-mille-filter-input] {
+  border-radius: 0;
+  font-family: inherit;
+  font-size: 11px;
+  letter-spacing: -0.025em;
+  text-transform: none;
+}
+
+[data-mille-theme="minimal"] [data-mille-filter-mode-btn] {
+  border-radius: 0;
+  font-family: inherit;
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+/* ── Decorations: mono, no badge fill ───────────────────────────── */
+
+[data-mille-theme="minimal"] [data-mille-decoration-badge],
+[data-mille-theme="minimal"] [data-mille-decoration-letter],
+[data-mille-theme="minimal"] .mille-decoration-badge,
+[data-mille-theme="minimal"] .mille-decoration-letter {
+  font-family: inherit;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  background: transparent;
+  border-radius: 0;
+  padding: 0;
+  margin-inline-end: 4px;
+}
+
+/* ── Cut / drag ─────────────────────────────────────────────────── */
+
+[data-mille-theme="minimal"] .mille-row[data-mille-cut="true"],
+[data-mille-theme="minimal"] .mille-row[data-mille-dragging="true"] {
+  opacity: 0.45;
+}
+
+[data-mille-theme="minimal"] .mille-row[data-mille-drop-target-self="true"] {
+  background: color-mix(in srgb, var(--mille-ink) 8%, transparent);
+  outline: 1px dashed var(--mille-ink);
+  outline-offset: -1px;
+}
+
+/* Library / ignored — no JetBrains brown band; subtle mute only */
+[data-mille-theme="minimal"] .mille-row[data-mille-under-library-root="true"] {
+  background: transparent;
+  opacity: 0.72;
+}
+
+[data-mille-theme="minimal"]
+  .mille-row[data-mille-under-library-root="true"][data-mille-selected="true"] {
+  opacity: 1;
+  background: var(--mille-row-bg-selected);
+  color: var(--mille-accent-fg);
+}

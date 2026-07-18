@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Minimal archival theme** — paper/ink Structure-panel look from the
+  spaghetti-ui `FileTreeNode` design. CSS:
+  `@vibecook/mille-ui/theme/minimal.css` (activate with
+  `data-mille-theme="minimal"`). Icons: `minimalIconTheme` via
+  `@vibecook/mille-ui/icons/minimal`. Matches: mono 10px / folder
+  uppercase tracking-widest 9px, `[+]`/`[-]` w-4 disclosure, inverted
+  selection, dashed indent rails, `depth*12+8` padding, section
+  `px-2 py-2` gutter.
+- **`data-mille-kind`** on rows (`directory` | `file` | `symlink`) so
+  host themes can style folder labels without re-implementing the row.
+- **`--mille-indent-guide-style`** token (default `solid`; minimal uses
+  `dashed`).
+- **`--mille-row-padding-inline`** — base inset before `depth * indent`
+  (minimal uses `8px`); indent guides offset to match.
+
 ## 0.2.1 — 2026-07-12
 
 Soft-duotone icons + Project-view row polish. Additive; no public-API breaks.

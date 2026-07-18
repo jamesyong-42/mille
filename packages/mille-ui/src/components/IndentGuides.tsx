@@ -17,7 +17,10 @@ const WRAPPER_STYLE: CSSProperties = {
   position: 'absolute',
   top: 0,
   bottom: 0,
-  left: 0,
+  // Align with row content inset so the first guide sits past any
+  // base padding (`--mille-row-padding-inline`), matching designs that
+  // draw a continuous dashed rail inset from the panel edge.
+  left: 'var(--mille-row-padding-inline, 0px)',
   display: 'flex',
   pointerEvents: 'none',
 };
@@ -37,7 +40,7 @@ function IndentGuidesImpl(props: IndentGuidesProps): ReactElement | null {
       display: 'inline-block',
       width: widthExpr,
       borderInlineStart:
-        '1px solid var(--mille-indent-guide, color-mix(in oklch, currentColor 10%, transparent))',
+        '1px var(--mille-indent-guide-style, solid) var(--mille-indent-guide, color-mix(in oklch, currentColor 10%, transparent))',
       boxSizing: 'border-box',
     };
     guides.push(

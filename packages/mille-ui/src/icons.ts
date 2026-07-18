@@ -8,6 +8,7 @@ export {
   createIconResolver,
   defaultIconTheme,
   duotoneIconTheme,
+  minimalIconTheme,
   FileIcon,
   IconThemeValidationError,
   loadIconTheme,

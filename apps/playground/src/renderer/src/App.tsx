@@ -12,7 +12,11 @@ import {
 } from 'react';
 import { FileTreeProvider, FileTree, useFileTreeRef } from '@vibecook/mille-ui';
 import type { IconTheme } from '@vibecook/mille-ui/icons';
-import { defaultIconTheme, duotoneIconTheme } from '@vibecook/mille-ui/icons';
+import {
+  defaultIconTheme,
+  duotoneIconTheme,
+  minimalIconTheme,
+} from '@vibecook/mille-ui/icons';
 import { createCommandRegistry, defaultCommands } from '@vibecook/mille-ui/commands';
 import type { Entry, FileExplorer, VisibleRow } from '@vibecook/mille';
 import { connectFileExplorer, type PortFileExplorer } from '@vibecook/mille/port';
@@ -153,7 +157,7 @@ function Explorer({
 
   // Soft-duotone is the product default (see docs/icons-preview.html).
   const [iconThemeId, setIconThemeId] = useState<
-    'duotone' | 'default' | 'stage' | 'material'
+    'duotone' | 'default' | 'stage' | 'material' | 'minimal'
   >('duotone');
   const [iconTheme, setIconTheme] = useState<IconTheme>(duotoneIconTheme);
   const [iconThemeStatus, setIconThemeStatus] = useState<
@@ -168,6 +172,11 @@ function Explorer({
     }
     if (iconThemeId === 'stage') {
       setIconTheme(stageIconTheme);
+      setIconThemeStatus('idle');
+      return;
+    }
+    if (iconThemeId === 'minimal') {
+      setIconTheme(minimalIconTheme);
       setIconThemeStatus('idle');
       return;
     }
@@ -449,13 +458,18 @@ function Explorer({
             </div>
           </div>
 
-          <div className="tree-container">
+          <div
+            className="tree-container"
+            data-mille-theme={
+              iconThemeId === 'minimal' ? 'minimal' : undefined
+            }
+          >
             <FileTree
               key={treeEpoch}
               ref={treeRef}
               ariaLabel="Project"
               iconTheme={iconTheme}
-              rowHeight={17}
+              rowHeight={iconThemeId === 'minimal' ? 26 : 17}
               overscan={36}
               stickyRoots
               showFilter={filterOpen}

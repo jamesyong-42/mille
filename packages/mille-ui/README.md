@@ -67,6 +67,8 @@ export function Sidebar() {
 | `@vibecook/mille-ui/icons/default`  | Built-in monoline folder + file set.    |
 | `@vibecook/mille-ui/icons/duotone`  | Soft-duotone set (scannable, compact).  |
 | `@vibecook/mille-ui/icons/material` | Material Icon Theme bundle (publish-time). |
+| `@vibecook/mille-ui/icons/minimal`| Archival text-first set (no glyphs).    |
+| `@vibecook/mille-ui/theme/minimal.css` | Minimal paper/ink tree chrome.   |
 | `@vibecook/mille-ui/testing`        | `createFakeEngine` for unit tests.      |
 
 ## Icon themes
@@ -74,7 +76,7 @@ export function Sidebar() {
 ```tsx
 import { FileTree } from '@vibecook/mille-ui';
 import { duotoneIconTheme } from '@vibecook/mille-ui/icons/duotone';
-// or: defaultIconTheme, loadMaterialIconTheme()
+// or: defaultIconTheme, minimalIconTheme, loadMaterialIconTheme()
 
 <FileTree fx={fx} ariaLabel="Files" iconTheme={duotoneIconTheme} />
 ```
@@ -82,6 +84,16 @@ import { duotoneIconTheme } from '@vibecook/mille-ui/icons/duotone';
 - **default** — monoline outline set (library default when no theme is set).
 - **duotone** — filled folders + language accent chips (product / playground default).
 - **material** — full VS Code Material Icon Theme JSON via `loadMaterialIconTheme()`.
+- **minimal** — archival text-first tree (no glyphs). Pair with the CSS theme:
+
+```tsx
+import '@vibecook/mille-ui/theme/minimal.css';
+import { minimalIconTheme } from '@vibecook/mille-ui/icons/minimal';
+
+<div data-mille-theme="minimal">
+  <FileTree fx={fx} ariaLabel="Files" iconTheme={minimalIconTheme} />
+</div>
+```
 
 Any VS Code File Icon Theme–compatible object also works via `iconTheme`.
 

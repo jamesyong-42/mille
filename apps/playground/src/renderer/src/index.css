@@ -819,3 +819,348 @@ html[data-theme="light"] .tree-container .mille-row[data-mille-symlink-dir="true
     border-bottom: 1px solid var(--jb-border);
   }
 }
+
+/* ── Minimal archival theme (overrides JetBrains chrome) ────────
+ * Mirrors spaghetti-ui-design FileTreeNode. JB rules use !important,
+ * so we re-assert every layout detail here.
+ */
+
+.tree-container[data-mille-theme="minimal"] {
+  /* FileTreeNode geometry: depth*12+8, py-1, section px-2 py-2 */
+  --mille-row-height: 26px;
+  --mille-indent-size: 12px;
+  --mille-row-padding-inline: 8px;
+  --mille-tree-gutter-inline: 8px;
+  --mille-ink: #2b2623;
+  --mille-paper: #f1ede4;
+  --mille-paper-bright: #fcfaf6;
+  --mille-accent-bg: var(--mille-ink);
+  --mille-accent-fg: var(--mille-paper-bright);
+  --mille-row-bg: transparent;
+  --mille-row-bg-hover: color-mix(in srgb, var(--mille-ink) 5%, transparent);
+  --mille-row-bg-selected: var(--mille-ink);
+  --mille-row-bg-selected-focused: var(--mille-ink);
+  --mille-focus-ring: 1px solid color-mix(in srgb, var(--mille-ink) 40%, transparent);
+  --mille-indent-guide: color-mix(in srgb, var(--mille-ink) 20%, transparent);
+  --mille-indent-guide-style: dashed;
+  --mille-chevron-color: color-mix(in srgb, var(--mille-ink) 60%, transparent);
+  --mille-decoration-modified: #786037;
+  --mille-decoration-added: #4f6b4a;
+  --mille-decoration-deleted: #9a3b28;
+  --mille-sticky-root-bg: transparent;
+  --mille-filter-input-bg: transparent;
+  --mille-filter-input-border: color-mix(in srgb, var(--mille-ink) 25%, transparent);
+  color: var(--mille-ink);
+  /* Design paper gradient (light) */
+  background:
+    linear-gradient(
+      to bottom,
+      color-mix(in srgb, #f8f6f0 88%, transparent),
+      color-mix(in srgb, #e9e5da 88%, transparent)
+    );
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: -0.025em;
+}
+
+html[data-theme="dark"] .tree-container[data-mille-theme="minimal"] {
+  --mille-ink: #d4cbbd;
+  --mille-paper: #141312;
+  --mille-paper-bright: #141312;
+  --mille-accent-bg: var(--mille-ink);
+  --mille-accent-fg: #141312;
+  --mille-row-bg-hover: color-mix(in srgb, var(--mille-ink) 5%, transparent);
+  --mille-row-bg-selected: var(--mille-ink);
+  --mille-row-bg-selected-focused: var(--mille-ink);
+  --mille-focus-ring: 1px solid color-mix(in srgb, var(--mille-ink) 40%, transparent);
+  --mille-indent-guide: color-mix(in srgb, var(--mille-ink) 20%, transparent);
+  --mille-chevron-color: color-mix(in srgb, var(--mille-ink) 60%, transparent);
+  --mille-decoration-modified: #c4a96a;
+  --mille-decoration-added: #8ba888;
+  --mille-decoration-deleted: #c9755f;
+  --mille-sticky-root-bg: transparent;
+  --mille-filter-input-border: color-mix(in srgb, var(--mille-ink) 25%, transparent);
+  color: var(--mille-ink);
+  background:
+    linear-gradient(
+      to bottom,
+      color-mix(in srgb, #171615 90%, transparent),
+      color-mix(in srgb, #11100f 90%, transparent)
+    );
+}
+
+.tree-container[data-mille-theme="minimal"] .mille-tree,
+.tree-container[data-mille-theme="minimal"] [role="tree"] {
+  font-family: var(--font-mono) !important;
+  font-size: 10px !important;
+  letter-spacing: -0.025em !important;
+  color: var(--mille-ink) !important;
+  padding-inline: var(--mille-tree-gutter-inline, 8px) !important;
+  padding-block: 8px !important;
+  box-sizing: border-box !important;
+}
+
+/*
+ * Baseline — kill glitches from:
+ *  1) focus.css / JB full-bleed `background:` shorthand (resets clip)
+ *  2) :focus outline rectangle on mousedown
+ *  3) background-color transitions morphing clip width
+ */
+.tree-container[data-mille-theme="minimal"] .mille-row {
+  gap: 0 !important;
+  height: var(--mille-row-height) !important;
+  min-height: var(--mille-row-height) !important;
+  max-height: var(--mille-row-height) !important;
+  color: var(--mille-ink) !important;
+  border-radius: 0 !important;
+  padding-right: 8px !important;
+  cursor: pointer !important;
+  letter-spacing: -0.025em !important;
+  transition: none !important;
+  background-color: transparent !important;
+  background-image: none !important;
+  background-clip: content-box !important;
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+/* Override JB full-row selected/focused for every minimal row state */
+.tree-container[data-mille-theme="minimal"] .mille-row[data-mille-selected="true"],
+.tree-container[data-mille-theme="minimal"] .mille-row[data-mille-focused="true"],
+.tree-container[data-mille-theme="minimal"]
+  .mille-row[data-mille-selected="true"][data-mille-focused="true"],
+.tree-container[data-mille-theme="minimal"] .mille-row:focus,
+.tree-container[data-mille-theme="minimal"] .mille-row:focus-visible,
+.tree-container[data-mille-theme="minimal"] .mille-row:active {
+  background: none !important;
+  background-color: transparent !important;
+  background-image: none !important;
+  background-clip: content-box !important;
+  color: var(--mille-ink) !important;
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+/* Hover — left-capped at dash rail */
+.tree-container[data-mille-theme="minimal"] .mille-row:hover {
+  background: none !important;
+  background-color: var(--mille-row-bg-hover) !important;
+  background-clip: content-box !important;
+  color: var(--mille-ink) !important;
+  outline: none !important;
+}
+
+/* Folders: never show selection (re-assert after hover) */
+.tree-container[data-mille-theme="minimal"]
+  .mille-row[data-mille-kind="directory"][data-mille-selected="true"],
+.tree-container[data-mille-theme="minimal"]
+  .mille-row[data-mille-kind="directory"][data-mille-focused="true"],
+.tree-container[data-mille-theme="minimal"]
+  .mille-row[data-mille-kind="directory"][data-mille-selected="true"][data-mille-focused="true"],
+.tree-container[data-mille-theme="minimal"]
+  .mille-row[data-mille-symlink-dir="true"][data-mille-selected="true"],
+.tree-container[data-mille-theme="minimal"]
+  .mille-row[data-mille-symlink-dir="true"][data-mille-focused="true"],
+.tree-container[data-mille-theme="minimal"]
+  .mille-row[data-mille-symlink-dir="true"][data-mille-selected="true"][data-mille-focused="true"] {
+  background: none !important;
+  background-color: transparent !important;
+  background-clip: content-box !important;
+  color: var(--mille-ink) !important;
+  outline: none !important;
+}
+
+.tree-container[data-mille-theme="minimal"]
+  .mille-row[data-mille-kind="directory"]:hover,
+.tree-container[data-mille-theme="minimal"]
+  .mille-row[data-mille-symlink-dir="true"]:hover {
+  background-color: var(--mille-row-bg-hover) !important;
+  background-clip: content-box !important;
+  color: var(--mille-ink) !important;
+}
+
+/*
+ * File selection only — inverted bar left-capped at the dash line.
+ * Never use `background` shorthand (resets clip → full-width flash).
+ */
+.tree-container[data-mille-theme="minimal"]
+  .mille-row[data-mille-kind="file"][data-mille-selected="true"],
+.tree-container[data-mille-theme="minimal"]
+  .mille-row[data-mille-kind="file"][data-mille-selected="true"][data-mille-focused="true"],
+.tree-container[data-mille-theme="minimal"]
+  .mille-row[data-mille-kind="file"][data-mille-selected="true"]:hover,
+.tree-container[data-mille-theme="minimal"]
+  .mille-row[data-mille-kind="file"][data-mille-selected="true"][data-mille-focused="true"]:hover,
+.tree-container[data-mille-theme="minimal"]
+  .mille-row[data-mille-kind="file"][data-mille-selected="true"]:focus,
+.tree-container[data-mille-theme="minimal"]
+  .mille-row[data-mille-kind="file"][data-mille-selected="true"]:focus-visible,
+.tree-container[data-mille-theme="minimal"]
+  .mille-row[data-mille-kind="file"][data-mille-selected="true"]:active,
+.tree-container[data-mille-theme="minimal"]
+  .mille-row[data-mille-kind="symlink"]:not([data-mille-symlink-dir="true"])[data-mille-selected="true"],
+.tree-container[data-mille-theme="minimal"]
+  .mille-row[data-mille-kind="symlink"]:not([data-mille-symlink-dir="true"])[data-mille-selected="true"][data-mille-focused="true"],
+.tree-container[data-mille-theme="minimal"]
+  .mille-row[data-mille-kind="symlink"]:not([data-mille-symlink-dir="true"])[data-mille-selected="true"]:hover {
+  background: none !important;
+  background-color: var(--mille-row-bg-selected) !important;
+  background-image: none !important;
+  background-clip: content-box !important;
+  color: var(--mille-accent-fg) !important;
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+.tree-container[data-mille-theme="minimal"] .mille-row-name,
+.tree-container[data-mille-theme="minimal"] [data-mille-row-name] {
+  font-family: var(--font-mono) !important;
+  font-size: 10px !important;
+  font-weight: 400 !important;
+  color: inherit !important;
+  letter-spacing: -0.025em !important;
+  padding-left: 0 !important;
+}
+
+/* Folder: uppercase tracking-widest (0.1em) text-[9px] */
+.tree-container[data-mille-theme="minimal"]
+  .mille-row[data-mille-kind="directory"]
+  .mille-row-name,
+.tree-container[data-mille-theme="minimal"]
+  .mille-row[data-mille-kind="directory"]
+  [data-mille-row-name],
+.tree-container[data-mille-theme="minimal"]
+  .mille-row[data-mille-symlink-dir="true"]
+  .mille-row-name,
+.tree-container[data-mille-theme="minimal"]
+  .mille-row[data-mille-symlink-dir="true"]
+  [data-mille-row-name] {
+  text-transform: uppercase !important;
+  letter-spacing: 0.1em !important;
+  font-size: 9px !important;
+}
+
+/* Disclosure: w-4 · opacity-60 · mr-1 · [+]/[-] */
+.tree-container[data-mille-theme="minimal"] [data-mille-chevron] {
+  width: 16px !important;
+  min-width: 16px !important;
+  height: 16px !important;
+  flex: 0 0 16px !important;
+  margin: 0 4px 0 0 !important;
+  font-family: var(--font-mono) !important;
+  font-size: 10px !important;
+  line-height: 1 !important;
+  opacity: 0.6 !important;
+  color: inherit !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+}
+
+.tree-container[data-mille-theme="minimal"] [data-mille-chevron] svg {
+  display: none !important;
+}
+
+.tree-container[data-mille-theme="minimal"]
+  [data-mille-chevron="collapsed"]::before {
+  content: "[+]";
+}
+
+.tree-container[data-mille-theme="minimal"]
+  [data-mille-chevron="expanded"]::before {
+  content: "[-]";
+}
+
+.tree-container[data-mille-theme="minimal"] .mille-row [role="img"],
+.tree-container[data-mille-theme="minimal"] .mille-row img {
+  display: none !important;
+  width: 0 !important;
+  min-width: 0 !important;
+  flex: 0 0 0 !important;
+  margin: 0 !important;
+}
+
+/* Continuous dashed children rail */
+.tree-container[data-mille-theme="minimal"] [data-mille-indent-guide] {
+  border-inline-start-width: 1px !important;
+  border-inline-start-color: var(--mille-indent-guide) !important;
+  border-inline-start-style: dashed !important;
+}
+
+/* No sticky-root / library-band chrome from JetBrains skin */
+.tree-container[data-mille-theme="minimal"] .mille-row[data-mille-sticky-root="true"] {
+  font-weight: 400 !important;
+  color: inherit !important;
+  border-bottom: none !important;
+  background: transparent !important;
+}
+
+.tree-container[data-mille-theme="minimal"]
+  .mille-row[data-mille-under-library-root="true"] {
+  background: transparent !important;
+  opacity: 0.72;
+}
+
+.tree-container[data-mille-theme="minimal"]
+  .mille-row[data-mille-under-library-root="true"]:hover {
+  background: var(--mille-row-bg-hover) !important;
+}
+
+.tree-container[data-mille-theme="minimal"]
+  .mille-row[data-mille-kind="file"][data-mille-under-library-root="true"][data-mille-selected="true"] {
+  background-color: var(--mille-row-bg-selected) !important;
+  background-clip: content-box !important;
+  color: var(--mille-accent-fg) !important;
+  opacity: 1;
+}
+
+/* VCS name tints — archival inks; selected stays inverted */
+.tree-container[data-mille-theme="minimal"]
+  .mille-row:not([data-mille-selected="true"]):has([data-mille-decoration-badge="M"])
+  .mille-row-name {
+  color: var(--mille-decoration-modified) !important;
+}
+.tree-container[data-mille-theme="minimal"]
+  .mille-row:not([data-mille-selected="true"]):has([data-mille-decoration-badge="A"])
+  .mille-row-name,
+.tree-container[data-mille-theme="minimal"]
+  .mille-row:not([data-mille-selected="true"]):has([data-mille-decoration-badge="?"])
+  .mille-row-name {
+  color: var(--mille-decoration-added) !important;
+}
+.tree-container[data-mille-theme="minimal"]
+  .mille-row:not([data-mille-selected="true"]):has([data-mille-decoration-badge="D"])
+  .mille-row-name {
+  color: var(--mille-decoration-deleted) !important;
+}
+
+.tree-container[data-mille-theme="minimal"] .mille-decoration-badge,
+.tree-container[data-mille-theme="minimal"] .mille-decoration-letter,
+.tree-container[data-mille-theme="minimal"] [data-mille-decoration-badge],
+.tree-container[data-mille-theme="minimal"] [data-mille-decoration-letter] {
+  font-family: var(--font-mono) !important;
+  font-size: 9px !important;
+  font-weight: 700 !important;
+  background: transparent !important;
+  padding: 0 !important;
+  border-radius: 0 !important;
+}
+
+.tree-container[data-mille-theme="minimal"] .mille-filter-input,
+.tree-container[data-mille-theme="minimal"] input[type="search"],
+.tree-container[data-mille-theme="minimal"] input[role="searchbox"] {
+  font-family: var(--font-mono) !important;
+  font-size: 11px !important;
+  border-radius: 0 !important;
+  border: 1px solid color-mix(in srgb, var(--mille-ink) 25%, transparent) !important;
+  background: transparent !important;
+  color: var(--mille-ink) !important;
+  box-shadow: none !important;
+  letter-spacing: -0.025em !important;
+}
+
+.tree-container[data-mille-theme="minimal"] .mille-filter-input:focus,
+.tree-container[data-mille-theme="minimal"] input[type="search"]:focus {
+  border-color: var(--mille-ink) !important;
+  box-shadow: none !important;
+}

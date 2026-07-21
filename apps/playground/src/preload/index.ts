@@ -1,5 +1,11 @@
 import { contextBridge, ipcRenderer } from 'electron';
 
+import type {
+  WatchBenchConfig,
+  WatchBenchEvent,
+  WatchBenchObservation,
+} from '../shared/watch-bench';
+
 // MessagePort can't pass through contextBridge (prototype is stripped).
 // Forward via window.postMessage with the port in the transfer list; the
 // renderer listens on 'message' and reads event.ports[0]. Fires on every
@@ -66,5 +72,21 @@ contextBridge.exposeInMainWorld('millePlayground', {
    */
   async setGitDecorations(enabled: boolean): Promise<void> {
     await ipcRenderer.invoke('set-git-decorations', enabled);
+  },
+
+  async getWatchBenchConfig(): Promise<WatchBenchConfig | null> {
+    return (await ipcRenderer.invoke('watch-bench:get-config')) as WatchBenchConfig | null;
+  },
+
+  onWatchBenchEvent(listener: (event: WatchBenchEvent) => void): void {
+    ipcRenderer.on('watch-bench:event', (_event, message: WatchBenchEvent) => listener(message));
+  },
+
+  watchBenchReady(): void {
+    ipcRenderer.send('watch-bench:ready');
+  },
+
+  reportWatchBenchObservation(observation: WatchBenchObservation): void {
+    ipcRenderer.send('watch-bench:observed', observation);
   },
 });

@@ -7,6 +7,7 @@
 // Phase 1 keeps StoreSnapshot's entry map flat (BTreeMap); Phase 2 swaps in
 // a SumTree<EntryNode> behind the same API for O(log n) summary queries.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -69,8 +70,121 @@ impl EntryStore {
         self.get_by_id(id)
     }
 
+    /// Snapshot the path index below `root`. The returned paths include
+    /// `root` itself when it is known. Watch reconciliation uses this to
+    /// compare a bounded disk walk with the authoritative in-memory view.
+    pub fn paths_under(&self, root: &Path) -> Vec<(PathBuf, EntryId)> {
+        self.path_to_id
+            .iter()
+            .filter(|kv| kv.key().as_path() == root || kv.key().starts_with(root))
+            .map(|kv| (kv.key().clone(), *kv.value()))
+            .collect()
+    }
+
+    /// Replace one entry record while preserving its id and tree position.
+    /// Parent/name changes remain the responsibility of rename/reparent;
+    /// watcher reconciliation uses this for size, timestamp, permissions,
+    /// ignore, symlink-target, and kind changes at a stable path.
+    pub fn update(&self, id: EntryId, mut updated: Entry) -> Result<bool, FxError> {
+        let _guard = self.write_lock.lock();
+        let current = self.inner.load_full();
+        let existing = current
+            .entries
+            .get(&id)
+            .cloned()
+            .ok_or_else(|| FxError::InvalidInput(format!("entry {:?} not found", id)))?;
+
+        if updated.parent_id != existing.parent_id || updated.name != existing.name {
+            return Err(FxError::InvalidInput(
+                "EntryStore::update cannot rename or reparent an entry".into(),
+            ));
+        }
+        updated.id = id;
+        if updated == *existing {
+            return Ok(false);
+        }
+
+        let old_visible = entry_counts_visible(&existing) as i64;
+        let new_visible = entry_counts_visible(&updated) as i64;
+        let visible_delta = new_visible - old_visible;
+        let size_delta = updated.size as i128 - existing.size as i128;
+
+        let mut next = (*current).clone();
+        next.entries.insert(id, Arc::new(updated));
+
+        let mut summary_changed_ancestors = Vec::new();
+        let mut cur = Some(id);
+        let mut hops = 0usize;
+        while let Some(entry_id) = cur {
+            if hops >= MAX_ANCESTOR_WALK {
+                break;
+            }
+            if visible_delta != 0 {
+                let slot = next.descendant_visible_counts.entry(entry_id).or_insert(0);
+                if visible_delta > 0 {
+                    *slot = slot.saturating_add(visible_delta as u32);
+                } else {
+                    *slot = slot.saturating_sub((-visible_delta) as u32);
+                }
+            }
+            if size_delta != 0 {
+                let slot = next.descendant_total_sizes.entry(entry_id).or_insert(0);
+                if size_delta > 0 {
+                    *slot = slot.saturating_add(size_delta as u64);
+                } else {
+                    *slot = slot.saturating_sub((-size_delta) as u64);
+                }
+            }
+            if entry_id != id && (visible_delta != 0 || size_delta != 0) {
+                summary_changed_ancestors.push(entry_id);
+            }
+            cur = next.entries.get(&entry_id).and_then(|e| e.parent_id);
+            hops += 1;
+        }
+
+        // A file can be atomically replaced by a directory (or vice versa)
+        // at the same path. Re-sort the stable id inside its sibling list.
+        if existing.kind != next.entries[&id].kind
+            || existing.symlink_target_is_dir != next.entries[&id].symlink_target_is_dir
+        {
+            if let Some(parent_id) = existing.parent_id {
+                let mut siblings = next.children.remove(&parent_id).unwrap_or_default();
+                siblings.sort_by(|a, b| {
+                    let ae = next.entries.get(a);
+                    let be = next.entries.get(b);
+                    ae.map(|e| sibling_kind_rank(e))
+                        .unwrap_or(1)
+                        .cmp(&be.map(|e| sibling_kind_rank(e)).unwrap_or(1))
+                        .then_with(|| {
+                            ae.map(|e| e.name.as_str())
+                                .unwrap_or("")
+                                .cmp(be.map(|e| e.name.as_str()).unwrap_or(""))
+                        })
+                });
+                next.children.insert(parent_id, siblings);
+            }
+        }
+
+        let prev_tree_version = next.tree_version;
+        next.tree_version += 1;
+        let new_tree_version = next.tree_version;
+        self.inner.store(Arc::new(next));
+        self.record_mutation(prev_tree_version, new_tree_version, |cs| {
+            cs.changed_ids.insert(id);
+            cs.subtree_roots_changed
+                .extend(summary_changed_ancestors.iter().copied());
+        });
+        Ok(true)
+    }
+
     pub fn insert(&self, path: PathBuf, mut entry: Entry) -> Result<EntryId, FxError> {
         let _guard = self.write_lock.lock();
+        // Watch callbacks and an in-flight walker can discover the same path
+        // concurrently. Path identity wins: returning the existing id keeps
+        // insertion idempotent and prevents duplicate rows/self-echoes.
+        if let Some(existing) = self.path_to_id.get(&path) {
+            return Ok(*existing.value());
+        }
         let id = EntryId::alloc_from(&self.id_counter)?;
         entry.id = id;
         let parent = entry.parent_id;
@@ -258,6 +372,110 @@ impl EntryStore {
         });
 
         Some(existing)
+    }
+
+    /// Atomically remove an entry and every known descendant. Unlike the
+    /// original single-entry `remove`, this cannot leave dangling children or
+    /// stale path-index records and is therefore the deletion primitive used
+    /// by watcher reconciliation and recursive mutations.
+    pub fn remove_subtree(&self, id: EntryId) -> Vec<Arc<Entry>> {
+        let _guard = self.write_lock.lock();
+        let current = self.inner.load_full();
+        let Some(root_entry) = current.entries.get(&id).cloned() else {
+            return Vec::new();
+        };
+
+        let mut stack = vec![id];
+        let mut ids = Vec::new();
+        while let Some(next_id) = stack.pop() {
+            ids.push(next_id);
+            if let Some(children) = current.children.get(&next_id) {
+                stack.extend(children.iter().copied());
+            }
+        }
+        let id_set: HashSet<EntryId> = ids.iter().copied().collect();
+        let removed: Vec<Arc<Entry>> = ids
+            .iter()
+            .filter_map(|entry_id| current.entries.get(entry_id).cloned())
+            .collect();
+
+        let visible_contribution = current
+            .descendant_visible_counts
+            .get(&id)
+            .copied()
+            .unwrap_or(0);
+        let size_contribution = current
+            .descendant_total_sizes
+            .get(&id)
+            .copied()
+            .unwrap_or(0);
+        let parent_for_walk = root_entry.parent_id;
+
+        let mut next = (*current).clone();
+        for entry_id in &ids {
+            next.entries.remove(entry_id);
+            next.children.remove(entry_id);
+            next.direct_child_counts.remove(entry_id);
+            next.descendant_visible_counts.remove(entry_id);
+            next.descendant_total_sizes.remove(entry_id);
+            if let Some(pos) = next.roots.iter().position(|root| root == entry_id) {
+                next.roots.remove(pos);
+            }
+        }
+        if let Some(parent_id) = parent_for_walk {
+            if let Some(siblings) = next.children.get_mut(&parent_id) {
+                siblings.retain(|child| *child != id);
+            }
+            if let Some(count) = next.direct_child_counts.get_mut(&parent_id) {
+                *count = count.saturating_sub(1);
+            }
+        }
+
+        let mut summary_changed_ancestors = Vec::new();
+        let mut cur = parent_for_walk;
+        let mut hops = 0usize;
+        while let Some(ancestor) = cur {
+            if hops >= MAX_ANCESTOR_WALK {
+                break;
+            }
+            if let Some(count) = next.descendant_visible_counts.get_mut(&ancestor) {
+                *count = count.saturating_sub(visible_contribution);
+            }
+            if let Some(size) = next.descendant_total_sizes.get_mut(&ancestor) {
+                *size = size.saturating_sub(size_contribution);
+            }
+            if visible_contribution != 0 || size_contribution != 0 {
+                summary_changed_ancestors.push(ancestor);
+            }
+            cur = next.entries.get(&ancestor).and_then(|e| e.parent_id);
+            hops += 1;
+        }
+
+        let prev_tree_version = next.tree_version;
+        next.tree_version += 1;
+        let new_tree_version = next.tree_version;
+        self.inner.store(Arc::new(next));
+
+        let paths_to_remove: Vec<PathBuf> = self
+            .path_to_id
+            .iter()
+            .filter(|kv| id_set.contains(kv.value()))
+            .map(|kv| kv.key().clone())
+            .collect();
+        for path in paths_to_remove {
+            self.path_to_id.remove(&path);
+        }
+
+        self.record_mutation(prev_tree_version, new_tree_version, |cs| {
+            cs.changed_ids.extend(ids.iter().copied());
+            cs.subtree_roots_changed
+                .extend(summary_changed_ancestors.iter().copied());
+            if let Some(parent_id) = parent_for_walk {
+                cs.child_set_changed.insert(parent_id);
+            }
+        });
+
+        removed
     }
 
     pub fn rename(&self, id: EntryId, new_path: PathBuf) -> Result<(), FxError> {
@@ -842,5 +1060,52 @@ mod tests {
             cs.child_set_changed.is_empty(),
             "root insert has no parent — nothing to flag"
         );
+    }
+
+    #[test]
+    fn insert_is_idempotent_by_path() {
+        let s = EntryStore::new();
+        let first = s.insert("/same".into(), leaf("same", None)).unwrap();
+        let version = s.tree_version();
+        let second = s.insert("/same".into(), leaf("same", None)).unwrap();
+        assert_eq!(first, second);
+        assert_eq!(s.tree_version(), version);
+        assert_eq!(s.snapshot().entry_count(), 1);
+    }
+
+    #[test]
+    fn update_preserves_id_and_adjusts_ancestor_size() {
+        let s = EntryStore::new();
+        let root = s.insert("/r".into(), dir("r", None)).unwrap();
+        let file = s.insert("/r/a".into(), leaf("a", Some(root))).unwrap();
+        let _ = s.take_pending_changes();
+
+        let mut changed = (*s.get_by_id(file).unwrap()).clone();
+        changed.size = 42;
+        changed.mtime_ms = 1234;
+        assert!(s.update(file, changed).unwrap());
+        assert_eq!(s.get_by_path(Path::new("/r/a")).unwrap().id, file);
+        assert_eq!(s.snapshot().subtree_total_size(root), 42);
+        assert!(s.take_pending_changes().changed_ids.contains(&file));
+    }
+
+    #[test]
+    fn remove_subtree_removes_descendants_and_paths_atomically() {
+        let s = EntryStore::new();
+        let root = s.insert("/r".into(), dir("r", None)).unwrap();
+        let dir_id = s.insert("/r/d".into(), dir("d", Some(root))).unwrap();
+        let leaf_id = s.insert("/r/d/a".into(), leaf("a", Some(dir_id))).unwrap();
+        let _ = s.take_pending_changes();
+
+        let removed = s.remove_subtree(dir_id);
+        assert_eq!(removed.len(), 2);
+        assert!(s.get_by_id(dir_id).is_none());
+        assert!(s.get_by_id(leaf_id).is_none());
+        assert!(s.get_by_path(Path::new("/r/d/a")).is_none());
+        assert!(s.snapshot().children_of(root).is_empty());
+        let cs = s.take_pending_changes();
+        assert!(cs.changed_ids.contains(&dir_id));
+        assert!(cs.changed_ids.contains(&leaf_id));
+        assert!(cs.child_set_changed.contains(&root));
     }
 }

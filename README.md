@@ -15,10 +15,10 @@ Rust walks, watches, and searches the tree. TypeScript freezes viewport snapshot
 
 ## Packages
 
-| Package | What it is |
-| --- | --- |
-| [`@vibecook/mille`](https://www.npmjs.com/package/@vibecook/mille) | File-explorer **engine** — Rust core via NAPI, host/renderer split, snapshots, search, decorations |
-| [`@vibecook/mille-ui`](https://www.npmjs.com/package/@vibecook/mille-ui) | React **FileTree** — virtualized ARIA tree, icons, Git badges, commands, DnD |
+| Package                                                                  | What it is                                                                                         |
+| ------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------- |
+| [`@vibecook/mille`](https://www.npmjs.com/package/@vibecook/mille)       | File-explorer **engine** — Rust core via NAPI, host/renderer split, snapshots, search, decorations |
+| [`@vibecook/mille-ui`](https://www.npmjs.com/package/@vibecook/mille-ui) | React **FileTree** — virtualized ARIA tree, icons, Git badges, commands, DnD                       |
 
 Platform binaries ship as optional deps (`@vibecook/mille-darwin-arm64`, …) and resolve automatically on install.
 
@@ -70,14 +70,14 @@ For Electron UtilityProcess host/client wiring, packaging, and performance notes
 
 ## Documentation
 
-| | |
-| --- | --- |
-| **Site** | https://jamesyong-42.github.io/mille/ |
-| **API** | https://jamesyong-42.github.io/mille/api.html |
-| **Icons** | https://jamesyong-42.github.io/mille/icons-preview.html |
+|           |                                                                |
+| --------- | -------------------------------------------------------------- |
+| **Site**  | https://jamesyong-42.github.io/mille/                          |
+| **API**   | https://jamesyong-42.github.io/mille/api.html                  |
+| **Icons** | https://jamesyong-42.github.io/mille/icons-preview.html        |
 | Embedding | [`packages/mille/EMBEDDING.md`](./packages/mille/EMBEDDING.md) |
-| Types | [`packages/mille/api.d.ts`](./packages/mille/api.d.ts) |
-| Changelog | [`CHANGELOG.md`](./CHANGELOG.md) |
+| Types     | [`packages/mille/api.d.ts`](./packages/mille/api.d.ts)         |
+| Changelog | [`CHANGELOG.md`](./CHANGELOG.md)                               |
 
 ## Status
 
@@ -85,16 +85,16 @@ For Electron UtilityProcess host/client wiring, packaging, and performance notes
 
 ## Supported platforms
 
-| Platform | Package |
-| --- | --- |
-| macOS arm64 | `@vibecook/mille-darwin-arm64` |
-| macOS x64 | `@vibecook/mille-darwin-x64` |
-| Windows x64 | `@vibecook/mille-win32-x64-msvc` |
-| Windows arm64 | `@vibecook/mille-win32-arm64-msvc` |
-| Linux x64 glibc | `@vibecook/mille-linux-x64-gnu` |
-| Linux arm64 glibc | `@vibecook/mille-linux-arm64-gnu` |
-| Linux x64 musl | `@vibecook/mille-linux-x64-musl` |
-| Linux arm64 musl | `@vibecook/mille-linux-arm64-musl` |
+| Platform          | Package                            |
+| ----------------- | ---------------------------------- |
+| macOS arm64       | `@vibecook/mille-darwin-arm64`     |
+| macOS x64         | `@vibecook/mille-darwin-x64`       |
+| Windows x64       | `@vibecook/mille-win32-x64-msvc`   |
+| Windows arm64     | `@vibecook/mille-win32-arm64-msvc` |
+| Linux x64 glibc   | `@vibecook/mille-linux-x64-gnu`    |
+| Linux arm64 glibc | `@vibecook/mille-linux-arm64-gnu`  |
+| Linux x64 musl    | `@vibecook/mille-linux-x64-musl`   |
+| Linux arm64 musl  | `@vibecook/mille-linux-arm64-musl` |
 
 ## Repo layout
 
@@ -118,6 +118,18 @@ pnpm --filter @vibecook/mille run build:napi:debug
 pnpm --filter @vibecook/mille run build:ts
 pnpm -r --if-present test
 ```
+
+### Watcher benchmark
+
+Run the observable Electron/UtilityProcess/MessagePort benchmark against an isolated temporary workspace:
+
+```bash
+pnpm bench:watch
+# larger run with a tighter debounce
+pnpm bench:watch -- --operations 1200 --debounce 25
+```
+
+The playground displays live mirror and paint-ready latency while an external worker performs create, modify, append, rename, copy, and recursive subtree operations. See [the watcher benchmark guide](./apps/playground/WATCH_BENCH.md) for methodology, options, and JSON reports. Native Criterion benchmarks remain available through `pnpm bench:core`.
 
 ### Release
 

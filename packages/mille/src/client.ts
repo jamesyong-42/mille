@@ -321,6 +321,8 @@ export class FileExplorer {
   private readonly decorationListeners = new Set<(ids: readonly number[]) => void>();
   /** JS-side listeners for 'change' (fires on either dimension). */
   private readonly changeAnyListeners = new Set<(ids: readonly number[]) => void>();
+  /** Every public event subscription, drained during explorer disposal. */
+  private readonly eventSubscriptions = new Set<Disposable>();
   /** @internal — unsubscribe from the store's onChange when disposed. */
   private readonly decorationStoreSub: { dispose(): void };
   /**
@@ -341,8 +343,7 @@ export class FileExplorer {
     if (follow !== undefined) nativeOpts.followSymlinks = follow;
     if (options.walkerConcurrency !== undefined)
       nativeOpts.walkerConcurrency = options.walkerConcurrency;
-    if (options.watchDebounceMs !== undefined)
-      nativeOpts.watchDebounceMs = options.watchDebounceMs;
+    if (options.watchDebounceMs !== undefined) nativeOpts.watchDebounceMs = options.watchDebounceMs;
     if (options.compactFolders !== undefined) nativeOpts.compactFolders = options.compactFolders;
     if (options.excludeGlobs !== undefined) nativeOpts.excludeGlobs = [...options.excludeGlobs];
     if (options.snapshotPath !== undefined) nativeOpts.snapshotPath = options.snapshotPath;
@@ -419,7 +420,7 @@ export class FileExplorer {
     let cursor = snap.roots().find((e) => e.name === rootName) ?? null;
     if (cursor === null) return null;
     if (match.relative.length === 0) {
-      return (cursor as unknown as Entry);
+      return cursor as unknown as Entry;
     }
 
     // Walk each path segment, looking for a child whose name matches.
@@ -523,10 +524,7 @@ export class FileExplorer {
    * `populateFromPath`, throws with a clear marker. Callers (the host)
    * try/catch and fall back to `populateFromRoots`.
    */
-  async prefetch(
-    id: EntryId,
-    options?: { depth?: number; signal?: AbortSignal },
-  ): Promise<void> {
+  async prefetch(id: EntryId, options?: { depth?: number; signal?: AbortSignal }): Promise<void> {
     const depth = options?.depth ?? 1;
     const populateFromPath = this.nativeFx.populateFromPath;
     if (typeof populateFromPath !== 'function') {
@@ -557,10 +555,7 @@ export class FileExplorer {
       // Don't hard-fail the consumer — a missing native method should
       // surface as "no children known yet", matching how a slow walker
       // appears from the outside.
-      if (
-        !(e instanceof Error) ||
-        !e.message.includes('populateFromPath')
-      ) {
+      if (!(e instanceof Error) || !e.message.includes('populateFromPath')) {
         throw e;
       }
     }
@@ -673,10 +668,7 @@ export class FileExplorer {
     return wrap(this.nativeFx.move(id, newParentId, newName));
   }
 
-  delete(
-    id: EntryId,
-    options?: { trash?: boolean; recursive?: boolean },
-  ): Promise<void> {
+  delete(id: EntryId, options?: { trash?: boolean; recursive?: boolean }): Promise<void> {
     return wrap(this.nativeFx.delete(id, options));
   }
 
@@ -698,11 +690,7 @@ export class FileExplorer {
     return wrap(this.nativeFx.readText(id, encoding));
   }
 
-  writeFile(
-    id: EntryId,
-    data: Uint8Array,
-    options?: { atomic?: boolean },
-  ): Promise<void> {
+  writeFile(id: EntryId, data: Uint8Array, options?: { atomic?: boolean }): Promise<void> {
     return wrap(this.nativeFx.writeFile(id, Buffer.from(data), options));
   }
 
@@ -778,13 +766,13 @@ export class FileExplorer {
       };
       this.decorationListeners.add(wrapped);
       let active = true;
-      return {
+      return this.trackEventSubscription({
         dispose: () => {
           if (!active) return;
           active = false;
           this.decorationListeners.delete(wrapped);
         },
-      };
+      });
     }
 
     if (event === 'change') {
@@ -796,14 +784,14 @@ export class FileExplorer {
       this.changeAnyListeners.add(wrapped);
       const nativeSubId = this.nativeFx.onChange(listener);
       let active = true;
-      return {
+      return this.trackEventSubscription({
         dispose: () => {
           if (!active) return;
           active = false;
           this.changeAnyListeners.delete(wrapped);
           this.nativeFx.off(Number(nativeSubId));
         },
-      };
+      });
     }
 
     const method = ON_METHOD[event];
@@ -816,16 +804,31 @@ export class FileExplorer {
     const register = this.nativeFx[method] as (fn: (...args: unknown[]) => void) => bigint;
     const subId = register.call(this.nativeFx, listener);
     let active = true;
-    return {
+    return this.trackEventSubscription({
       dispose: () => {
         if (!active) return;
         active = false;
         this.nativeFx.off(Number(subId));
       },
+    });
+  }
+
+  private trackEventSubscription(inner: Disposable): Disposable {
+    let active = true;
+    const tracked: Disposable = {
+      dispose: () => {
+        if (!active) return;
+        active = false;
+        inner.dispose();
+        this.eventSubscriptions.delete(tracked);
+      },
     };
+    this.eventSubscriptions.add(tracked);
+    return tracked;
   }
 
   dispose(): Promise<void> {
+    for (const subscription of [...this.eventSubscriptions]) subscription.dispose();
     this.decorationStoreSub.dispose();
     this.decorationListeners.clear();
     this.changeAnyListeners.clear();
@@ -929,10 +932,7 @@ export class MirrorSnapshot {
     return decodeBulkRows(buf);
   }
 
-  visibleRowCount(
-    expanded: ReadonlySet<EntryId>,
-    includeIgnored?: boolean,
-  ): VisibleRowCount {
+  visibleRowCount(expanded: ReadonlySet<EntryId>, includeIgnored?: boolean): VisibleRowCount {
     const result = this.inner.visibleRowCount([...expanded], includeIgnored);
     return {
       known: result.known,

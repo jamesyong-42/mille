@@ -17,6 +17,7 @@ pub mod mutations;
 pub mod snapshot;
 pub mod stream;
 pub mod types;
+mod watch_runtime;
 
 /// Module version string. Present so the native module has at least one
 /// exported symbol and can be `require()`d end-to-end during Phase 0.

@@ -2,6 +2,12 @@
 // by the renderer's tsconfig.web.json `include` so `window.millePlayground`
 // is typed inside `src/renderer/`.
 
+import type {
+  WatchBenchConfig,
+  WatchBenchEvent,
+  WatchBenchObservation,
+} from '../shared/watch-bench';
+
 export interface MillePlaygroundApi {
   pickAndOpenWorkspace(): Promise<string | null>;
   /** v0.2 B7 — open a known path (from recents) without re-prompting. */
@@ -10,6 +16,10 @@ export interface MillePlaygroundApi {
   getRecentFolders(): Promise<string[]>;
   /** v0.2 — toggle git decorations (runs in fx utility process). */
   setGitDecorations(enabled: boolean): Promise<void>;
+  getWatchBenchConfig(): Promise<WatchBenchConfig | null>;
+  onWatchBenchEvent(listener: (event: WatchBenchEvent) => void): void;
+  watchBenchReady(): void;
+  reportWatchBenchObservation(observation: WatchBenchObservation): void;
 }
 
 declare global {

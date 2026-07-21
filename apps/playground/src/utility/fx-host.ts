@@ -1,10 +1,7 @@
 import { createFileExplorerHost } from '@vibecook/mille/host';
 import type { FileExplorerHost, MessagePortLike } from '@vibecook/mille/host';
 import type { MessagePortMain } from 'electron';
-import {
-  registerGitDecorations,
-  type GitDecorationsHandle,
-} from '@vibecook/mille-ui/git';
+import { registerGitDecorations, type GitDecorationsHandle } from '@vibecook/mille-ui/git';
 import { createShellGitClient } from '@vibecook/mille-ui/git/node';
 
 // Electron's MessagePortMain emits `message` events with a MessageEvent-
@@ -59,7 +56,7 @@ function setGitDecorations(enabled: boolean, rootPath: string): void {
     const client = createShellGitClient({ rootPath });
     const currentHost = host;
     gitDecorations = registerGitDecorations({
-      fx: host.local,          // read path (getSnapshot, getByUri)
+      fx: host.local, // read path (getSnapshot, getByUri)
       client,
       rootPath,
       // Critical: register against the *host's* DecorationStore, not
@@ -79,11 +76,13 @@ async function bootstrap(): Promise<void> {
   const root = process.env.WORKSPACE_ROOT;
   if (!root) throw new Error('WORKSPACE_ROOT env var not set');
 
+  const benchmarkDebounce = Number(process.env.MILLE_WATCH_BENCH_DEBOUNCE_MS);
   host = await createFileExplorerHost({
     roots: [root],
     respectIgnore: true,
     followSymlinks: 'smart',
-    watchDebounceMs: 75,
+    watchDebounceMs:
+      Number.isSafeInteger(benchmarkDebounce) && benchmarkDebounce >= 0 ? benchmarkDebounce : 75,
     // v0.2 B2 — `roots-only` seeds just the workspace root(s) at
     // attach time; the host's `handleSetExpanded` fires a depth-1
     // prefetch per newly-expanded folder. Huge monorepos (pnpm
@@ -98,11 +97,11 @@ async function bootstrap(): Promise<void> {
   // If populate ran first, a slow root would block the handler from
   // being installed and the renderer's handshake would look stuck.
   process.parentPort.on('message', (evt) => {
-    const msg = evt.data as
-      | { type?: string; enabled?: boolean }
-      | undefined;
+    const msg = evt.data as { type?: string; enabled?: boolean } | undefined;
     const port = evt.ports[0];
-    console.log(`[fx-host] main → fx-host: ${msg?.type ?? '<unknown>'} (ports: ${evt.ports.length})`);
+    console.log(
+      `[fx-host] main → fx-host: ${msg?.type ?? '<unknown>'} (ports: ${evt.ports.length})`,
+    );
     if (msg?.type === 'attach' && port) {
       host!.attachPort(wrapMessagePortMain(port));
       console.log('[fx-host] attachPort done');

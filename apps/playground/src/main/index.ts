@@ -12,6 +12,9 @@ import { fileURLToPath } from 'node:url';
 import { cwd } from 'node:process';
 import { readFileSync, statSync, writeFileSync } from 'node:fs';
 
+import { WatchBenchController, watchBenchConfigFromEnvironment } from './watch-bench-controller';
+import type { WatchBenchObservation } from '../shared/watch-bench';
+
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 // v0.2 B7 — recent folders persistence.
@@ -74,6 +77,7 @@ const DEFAULT_WORKSPACE_ROOT = process.env.WORKSPACE_ROOT ?? cwd();
 // The currently-running utility process. Replaced on every workspace
 // swap so the old root's watchers/walkers tear down cleanly.
 let fxProcess: UtilityProcess | null = null;
+let watchBenchController: WatchBenchController | null = null;
 
 function forkFxProcess(root: string): UtilityProcess {
   const proc = utilityProcess.fork(join(__dirname, '../main/fx-host.mjs'), [], {
@@ -142,6 +146,7 @@ function openWorkspace(win: BrowserWindow, root: string): void {
 }
 
 async function createWindow(): Promise<void> {
+  const watchBenchConfig = watchBenchConfigFromEnvironment();
   const win = new BrowserWindow({
     width: 1100,
     height: 720,
@@ -154,12 +159,35 @@ async function createWindow(): Promise<void> {
 
   if (process.env.ELECTRON_RENDERER_URL) {
     await win.loadURL(process.env.ELECTRON_RENDERER_URL);
-    win.webContents.openDevTools({ mode: 'detach' });
+    if (watchBenchConfig === null) win.webContents.openDevTools({ mode: 'detach' });
   } else {
     await win.loadFile(join(__dirname, '../renderer/index.html'));
   }
 
   openWorkspace(win, DEFAULT_WORKSPACE_ROOT);
+
+  if (watchBenchConfig !== null) {
+    watchBenchController = new WatchBenchController(win, watchBenchConfig);
+  }
+
+  ipcMain.handle('watch-bench:get-config', () => watchBenchConfig);
+  ipcMain.on('watch-bench:ready', (event) => {
+    if (event.sender !== win.webContents) return;
+    watchBenchController?.start();
+  });
+  ipcMain.on('watch-bench:observed', (event, raw: unknown) => {
+    if (event.sender !== win.webContents || watchBenchController === null) return;
+    const observation = raw as Partial<WatchBenchObservation>;
+    if (
+      typeof observation.id !== 'number' ||
+      typeof observation.mirrorLatencyMs !== 'number' ||
+      typeof observation.paintLatencyMs !== 'number' ||
+      typeof observation.observedAt !== 'number'
+    ) {
+      return;
+    }
+    watchBenchController.observe(observation as WatchBenchObservation);
+  });
 
   // Pick-and-open flow: renderer button → `pick-workspace` returns a
   // path (or null if cancelled) → renderer calls `open-workspace`
@@ -226,6 +254,8 @@ app.on('activate', () => {
 });
 
 app.on('before-quit', () => {
+  watchBenchController?.dispose();
+  watchBenchController = null;
   if (fxProcess !== null) {
     try {
       fxProcess.kill();

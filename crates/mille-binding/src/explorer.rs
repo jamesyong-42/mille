@@ -1,17 +1,19 @@
-//! FileExplorer `#[napi]` class — Phase 5 commit 5.1 skeleton.
+//! FileExplorer `#[napi]` class.
 //!
-//! Construction, capabilities bitmask, tree-version read, and an async
-//! dispose stub. Later waves fill in snapshot/mutation/event methods.
+//! Owns the entry store, live filesystem watcher, mutations, snapshots,
+//! typed event fan-out, and deterministic shutdown for local mode.
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 
 use napi::bindgen_prelude::{Buffer, Result, Status, Unknown};
 use napi::threadsafe_function::ThreadsafeFunction;
 use napi::Error;
 use napi_derive::napi;
 
-use mille_core::{EntryId, EntryKind, EntryStore, FxError, Watcher};
+use mille_core::{EntryId, EntryKind, EntryStore, FxError, IntentCache, IntentKind, Watcher};
 
 use crate::error::{fx_error_to_napi, io_to_fx};
 use crate::events::{Channel, EventBus};
@@ -46,9 +48,6 @@ pub struct ExplorerOptionsJs {
 }
 
 /// Resolved form of ExplorerOptionsJs with defaults applied.
-/// Several fields are stored for future phases (watch debounce, compact
-/// folders, exclude globs, crash-resume path, cache cap) and are not yet
-/// read by the live methods.
 #[derive(Clone)]
 #[allow(dead_code)]
 pub(crate) struct ResolvedOptions {
@@ -66,13 +65,14 @@ pub(crate) struct ResolvedOptions {
 #[napi]
 pub struct FileExplorer {
     pub(crate) store: Arc<EntryStore>,
-    #[allow(dead_code)] // held for drop/unwatch paths; not read yet
     pub(crate) watcher: Arc<std::sync::Mutex<Option<Watcher>>>,
+    pub(crate) intents: Arc<parking_lot::Mutex<IntentCache>>,
+    disposed: AtomicBool,
     pub(crate) roots: Vec<PathBuf>,
     pub(crate) options: ResolvedOptions,
     /// Event fan-out for on('change' | 'event' | 'batch' | ...). Shared
-    /// via Arc so background-thread emitters (watcher callback, walker,
-    /// coalescer in Phase 7) can clone one reference per producer.
+    /// via Arc so background-thread emitters can clone one reference per
+    /// producer.
     pub(crate) events: Arc<EventBus>,
 }
 
@@ -119,6 +119,8 @@ impl FileExplorer {
         Ok(Self {
             store: Arc::new(EntryStore::new()),
             watcher: Arc::new(std::sync::Mutex::new(None)),
+            intents: Arc::new(parking_lot::Mutex::new(IntentCache::new())),
+            disposed: AtomicBool::new(false),
             roots,
             options: resolved,
             events: Arc::new(EventBus::new()),
@@ -156,8 +158,8 @@ impl FileExplorer {
     /// client mutation-ordering integration test, for example) call
     /// this explicitly after construction.
     ///
-    /// Live re-walk on watcher-reported directory mutations is Phase 5's
-    /// unfinished business — tracked for the next integration pass.
+    /// The watcher starts before the walk, and path-idempotent insertion
+    /// closes the race between initial scan results and live events.
     #[napi(js_name = "populateFromRoots")]
     pub async fn populate_from_roots(&self) -> Result<u32> {
         use mille_core::{
@@ -165,6 +167,7 @@ impl FileExplorer {
             WalkOptions,
         };
 
+        self.ensure_watcher()?;
         let mut total: u32 = 0;
         for root in &self.roots {
             let options = WalkOptions {
@@ -200,18 +203,21 @@ impl FileExplorer {
                 let w = walk(root, options).map_err(fx_error_to_napi)?;
                 (w, None)
             };
-            let ids = populate_store(&self.store, root, &walked, matcher.as_ref())
+            let new_entries: Vec<_> = walked
+                .into_iter()
+                .filter(|entry| self.store.get_by_path(&entry.path).is_none())
+                .collect();
+            let ids = populate_store(&self.store, root, &new_entries, matcher.as_ref())
                 .map_err(fx_error_to_napi)?;
             total = total.saturating_add(ids.len() as u32);
         }
         Ok(total)
     }
 
-    /// Phase B2 — bounded-depth walk starting at `path`. The store `insert`
-    /// path does not dedupe on `path_to_id`, so we filter the walk output
-    /// against the current snapshot before calling `populate_store`: any
-    /// entry whose absolute path is already known is dropped on the floor.
-    /// That keeps this method idempotent, which is what the host-side
+    /// Bounded-depth walk starting at `path`. We filter the walk output
+    /// against the current snapshot before calling `populate_store` to avoid
+    /// unnecessary updates; the store also enforces path idempotence. This
+    /// keeps the method idempotent, which is what the host-side
     /// `setExpanded` handler needs when a client re-expands a folder the
     /// mirror already covers.
     ///
@@ -231,11 +237,9 @@ impl FileExplorer {
         max_depth: Option<u32>,
         include_root: Option<bool>,
     ) -> Result<u32> {
-        use mille_core::{
-            build_ignore_matcher_from_walk, populate_store, walk, walk_with_ignore, IgnoreMatcher,
-            WalkOptions,
-        };
+        use mille_core::{populate_store, walk, walk_with_ignore, IgnoreMatcher, WalkOptions};
 
+        self.ensure_watcher()?;
         let p = PathBuf::from(&path);
         if !p.is_absolute() {
             return Err(Error::from_reason(format!(
@@ -294,16 +298,21 @@ impl FileExplorer {
                 }
             }
             let w = walk_with_ignore(&p, options, &seeded).map_err(fx_error_to_napi)?;
-            let full = build_ignore_matcher_from_walk(&w).map_err(fx_error_to_napi)?;
-            (w, Some(full))
+            for entry in &w {
+                if entry.path.file_name().is_some_and(|name| {
+                    mille_core::IGNORE_FILE_NAMES.contains(&name.to_string_lossy().as_ref())
+                }) {
+                    let _ = seeded.add_from_file(&entry.path);
+                }
+            }
+            (w, Some(seeded))
         } else {
             let w = walk(&p, options).map_err(fx_error_to_napi)?;
             (w, None)
         };
 
-        // Filter out entries the store already knows about. Without this,
-        // a second call with overlapping paths would double-insert (the
-        // store's `insert` doesn't dedupe on path — it trusts the caller).
+        // Avoid rebuilding entries the store already knows about. `insert`
+        // independently enforces path idempotence for watcher/walker races.
         let filtered: Vec<_> = walked
             .into_iter()
             .filter(|w| self.store.get_by_path(&w.path).is_none())
@@ -364,6 +373,7 @@ impl FileExplorer {
                 .map_err(|e| fx_error_to_napi(io_to_fx(e, new_path.clone())))?,
             _ => unreachable!("kind_from_u8 already rejected non-File/Directory"),
         }
+        self.record_intent(new_path.clone(), IntentKind::Create);
 
         // Stat and insert into the store.
         let entry = stat_to_entry(&new_path, Some(parent_eid), name)
@@ -405,6 +415,8 @@ impl FileExplorer {
         tokio::fs::rename(&old_path, &new_path)
             .await
             .map_err(|e| fx_error_to_napi(io_to_fx(e, old_path.clone())))?;
+        self.record_intent(old_path.clone(), IntentKind::Rename);
+        self.record_intent(new_path.clone(), IntentKind::Rename);
 
         self.store.rename(eid, new_path).map_err(fx_error_to_napi)?;
 
@@ -454,6 +466,8 @@ impl FileExplorer {
         tokio::fs::rename(&old_path, &new_path)
             .await
             .map_err(|e| fx_error_to_napi(io_to_fx(e, old_path.clone())))?;
+        self.record_intent(old_path.clone(), IntentKind::Rename);
+        self.record_intent(new_path.clone(), IntentKind::Rename);
 
         // Store still only supports leaf rename today; reparenting to a
         // different parent lands with the Phase 2 walker refactor.
@@ -511,10 +525,15 @@ impl FileExplorer {
                     .map_err(|e| fx_error_to_napi(io_to_fx(e, path.clone())))?;
             }
         }
+        self.record_intent(path.clone(), IntentKind::Delete);
 
         // Store removal only covers this id; Phase 2 walker reconciles
         // descendants via the watcher stream.
-        self.store.remove(eid);
+        if recursive {
+            self.store.remove_subtree(eid);
+        } else {
+            self.store.remove(eid);
+        }
         Ok(())
     }
 
@@ -564,6 +583,7 @@ impl FileExplorer {
         tokio::fs::copy(&src_path, &dst_path)
             .await
             .map_err(|e| fx_error_to_napi(io_to_fx(e, dst_path.clone())))?;
+        self.record_intent(dst_path.clone(), IntentKind::Create);
 
         let entry = stat_to_entry(&dst_path, Some(new_parent_eid), effective_name)
             .await
@@ -630,8 +650,22 @@ impl FileExplorer {
     ) -> Result<()> {
         let token = crate::cancel::signal_to_token(None);
         let path = self.resolve_path_for_id(id)?;
+        let existing = self
+            .store
+            .get_by_id(EntryId(id as u64))
+            .ok_or_else(|| Error::from_reason(format!("id {id} vanished mid-write")))?;
         let atomic = options.and_then(|o| o.atomic).unwrap_or(false);
-        crate::io::write_file(path, data.to_vec(), atomic, token).await
+        crate::io::write_file(path.clone(), data.to_vec(), atomic, token).await?;
+        let mut updated = stat_to_entry(&path, existing.parent_id, existing.name.clone())
+            .await
+            .map_err(fx_error_to_napi)?;
+        updated.is_ignored = existing.is_ignored;
+        updated.path_segments = existing.path_segments.clone();
+        self.store
+            .update(existing.id, updated)
+            .map_err(fx_error_to_napi)?;
+        self.record_intent(path, IntentKind::Modify);
+        Ok(())
     }
 
     /// Open a streaming reader. Consumers call `.next()` repeatedly until
@@ -710,9 +744,7 @@ impl FileExplorer {
             .subscribe_change(Channel::ChangeDecorations, listener)
     }
 
-    /// Subscribe to the raw single-event stream. Phase 7 wires the
-    /// watcher to feed these; today the bus is quiescent until test
-    /// helpers kick it.
+    /// Subscribe to the raw single-event stream fed by the live watcher.
     #[napi(js_name = "onEvent")]
     pub fn on_event(
         &self,
@@ -839,15 +871,55 @@ impl FileExplorer {
             .collect()
     }
 
-    /// Teardown. Phase 5 wave 7 wires to a real shutdown sequence.
+    /// Idempotently stop the watcher and release its forwarding thread.
     #[napi]
     pub async fn dispose(&self) -> Result<()> {
-        // TODO: Phase 5.4+ — stop watcher, flush pending changes, write snapshot.
+        if self.disposed.swap(true, Ordering::AcqRel) {
+            return Ok(());
+        }
+        let watcher = match self.watcher.lock() {
+            Ok(mut guard) => guard.take(),
+            Err(poisoned) => poisoned.into_inner().take(),
+        };
+        // Drop outside the mutex: Watcher::drop joins its forwarding thread.
+        drop(watcher);
         Ok(())
     }
 }
 
 impl FileExplorer {
+    fn ensure_watcher(&self) -> Result<()> {
+        if self.disposed.load(Ordering::Acquire) {
+            return Err(Error::from_reason("FileExplorer is disposed"));
+        }
+        let mut guard = match self.watcher.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if guard.is_some() {
+            return Ok(());
+        }
+        let watcher = crate::watch_runtime::create_watcher(
+            Arc::clone(&self.store),
+            Arc::clone(&self.events),
+            Arc::clone(&self.intents),
+            crate::watch_runtime::WatchConfig {
+                roots: self.roots.clone(),
+                respect_ignore: self.options.respect_ignore,
+                follow_symlinks: self.options.follow_symlinks,
+                walker_concurrency: self.options.walker_concurrency,
+                debounce_ms: self.options.watch_debounce_ms,
+            },
+        )
+        .map_err(fx_error_to_napi)?;
+        *guard = Some(watcher);
+        Ok(())
+    }
+
+    fn record_intent(&self, path: PathBuf, kind: IntentKind) {
+        self.intents.lock().record(path, kind, Instant::now());
+    }
+
     /// Shared path-resolution helper for read/write and mutation methods.
     /// Returns a ready-to-fx_error EINVAL when the id isn't in the current
     /// snapshot — same shape mutations use, so the TS wrapper can key off

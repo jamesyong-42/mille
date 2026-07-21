@@ -134,6 +134,26 @@ impl Watcher {
     where
         F: Fn(RawEvent) + Send + Sync + 'static,
     {
+        Self::new_batch_with_options(
+            move |batch| {
+                for event in batch {
+                    callback(event);
+                }
+            },
+            options,
+        )
+    }
+
+    /// Construct a watcher whose callback receives one complete backend
+    /// batch. With the debounced backend this preserves the exact batch
+    /// boundary produced by `notify-debouncer-full`; with the raw backend
+    /// one notify event maps to one batch (possibly containing multiple
+    /// paths). The binding uses this to coalesce, pair renames, and emit a
+    /// truthful public `batch` event without adding a second timer.
+    pub fn new_batch_with_options<F>(callback: F, options: WatcherOptions) -> Result<Self, FxError>
+    where
+        F: Fn(Vec<RawEvent>) + Send + Sync + 'static,
+    {
         let callback = Arc::new(callback);
         let (shutdown_tx, shutdown_rx) = mpsc::channel::<()>();
 
@@ -264,7 +284,7 @@ fn build_raw_backend<F>(
     shutdown_rx: mpsc::Receiver<()>,
 ) -> Result<(NotifyBackend, JoinHandle<()>), FxError>
 where
-    F: Fn(RawEvent) + Send + Sync + 'static,
+    F: Fn(Vec<RawEvent>) + Send + Sync + 'static,
 {
     let (tx, rx) = mpsc::channel::<notify::Result<Event>>();
     // 2s poll fallback is notify's default for platforms without native
@@ -292,7 +312,7 @@ fn build_debounced_backend<F>(
     shutdown_rx: mpsc::Receiver<()>,
 ) -> Result<(NotifyBackend, JoinHandle<()>), FxError>
 where
-    F: Fn(RawEvent) + Send + Sync + 'static,
+    F: Fn(Vec<RawEvent>) + Send + Sync + 'static,
 {
     use notify_debouncer_full::{new_debouncer, DebounceEventResult};
 
@@ -324,7 +344,7 @@ fn forward_raw_loop<F>(
     shutdown_rx: mpsc::Receiver<()>,
     callback: Arc<F>,
 ) where
-    F: Fn(RawEvent) + Send + Sync + 'static,
+    F: Fn(Vec<RawEvent>) + Send + Sync + 'static,
 {
     // Short timeout keeps shutdown latency bounded without tight looping.
     loop {
@@ -332,10 +352,15 @@ fn forward_raw_loop<F>(
             return;
         }
         match rx.recv_timeout(Duration::from_millis(100)) {
-            Ok(Ok(event)) => dispatch_event(&event, &*callback),
+            Ok(Ok(event)) => {
+                let batch = raw_events_for(&event);
+                if !batch.is_empty() {
+                    callback(batch);
+                }
+            }
             Ok(Err(err)) => {
                 // Platform-level transient error; not fatal.
-                callback(RawEvent::Error(err.to_string()));
+                callback(vec![RawEvent::Error(err.to_string())]);
             }
             Err(mpsc::RecvTimeoutError::Timeout) => continue,
             Err(mpsc::RecvTimeoutError::Disconnected) => return,
@@ -348,7 +373,7 @@ fn forward_debounced_loop<F>(
     shutdown_rx: mpsc::Receiver<()>,
     callback: Arc<F>,
 ) where
-    F: Fn(RawEvent) + Send + Sync + 'static,
+    F: Fn(Vec<RawEvent>) + Send + Sync + 'static,
 {
     loop {
         if shutdown_rx.try_recv().is_ok() {
@@ -356,13 +381,21 @@ fn forward_debounced_loop<F>(
         }
         match rx.recv_timeout(Duration::from_millis(100)) {
             Ok(Ok(events)) => {
+                let mut batch = Vec::new();
                 for ev in events {
-                    dispatch_event(&ev.event, &*callback);
+                    batch.extend(raw_events_for(&ev.event));
+                }
+                if !batch.is_empty() {
+                    callback(batch);
                 }
             }
             Ok(Err(errors)) => {
-                for err in errors {
-                    callback(RawEvent::Error(err.to_string()));
+                let batch: Vec<_> = errors
+                    .into_iter()
+                    .map(|err| RawEvent::Error(err.to_string()))
+                    .collect();
+                if !batch.is_empty() {
+                    callback(batch);
                 }
             }
             Err(mpsc::RecvTimeoutError::Timeout) => continue,
@@ -371,42 +404,41 @@ fn forward_debounced_loop<F>(
     }
 }
 
-/// Map a single notify `Event` to zero or more `RawEvent`s and dispatch.
-/// A notify event can carry multiple paths (e.g. a rename with `[from, to]`);
-/// we emit one RawEvent per path.
-fn dispatch_event<F>(event: &Event, callback: &F)
-where
-    F: Fn(RawEvent) + ?Sized,
-{
+/// Convert one notify event into the raw events exposed by this module.
+/// Kept separate from dispatch so batch-aware consumers can retain the
+/// backend's debounce boundary.
+fn raw_events_for(event: &Event) -> Vec<RawEvent> {
+    let mut out = Vec::with_capacity(event.paths.len().max(1));
     // `EventKind::Other` on notify 6.x signals a rescan/backlog-overflow
     // on FSEvents; treat as Overflow so Phase 3.7+ can re-walk.
     if matches!(event.kind, EventKind::Other) {
         for path in &event.paths {
-            callback(RawEvent::Overflow { root: path.clone() });
+            out.push(RawEvent::Overflow { root: path.clone() });
         }
-        return;
+        return out;
     }
 
     for path in &event.paths {
         match &event.kind {
-            EventKind::Create(_) => callback(RawEvent::Created(path.clone())),
-            EventKind::Remove(_) => callback(RawEvent::Deleted(path.clone())),
-            EventKind::Modify(ModifyKind::Data(_)) => callback(RawEvent::Modified(path.clone())),
+            EventKind::Create(_) => out.push(RawEvent::Created(path.clone())),
+            EventKind::Remove(_) => out.push(RawEvent::Deleted(path.clone())),
+            EventKind::Modify(ModifyKind::Data(_)) => out.push(RawEvent::Modified(path.clone())),
             EventKind::Modify(ModifyKind::Name(RenameMode::From))
             | EventKind::Modify(ModifyKind::Name(RenameMode::To))
             | EventKind::Modify(ModifyKind::Name(RenameMode::Both))
             | EventKind::Modify(ModifyKind::Name(RenameMode::Any))
             | EventKind::Modify(ModifyKind::Name(RenameMode::Other)) => {
                 // Phase 3.3-3.5 will pair From+To into a Renamed event.
-                callback(RawEvent::Any(path.clone()));
+                out.push(RawEvent::Any(path.clone()));
             }
-            EventKind::Modify(ModifyKind::Other) => callback(RawEvent::Modified(path.clone())),
-            EventKind::Modify(_) => callback(RawEvent::Any(path.clone())),
+            EventKind::Modify(ModifyKind::Other) => out.push(RawEvent::Modified(path.clone())),
+            EventKind::Modify(_) => out.push(RawEvent::Any(path.clone())),
             EventKind::Access(_) => { /* uninteresting */ }
-            EventKind::Any => callback(RawEvent::Any(path.clone())),
+            EventKind::Any => out.push(RawEvent::Any(path.clone())),
             EventKind::Other => { /* handled above */ }
         }
     }
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -447,7 +479,7 @@ fn map_notify_err(err: notify::Error) -> FxError {
 //
 // Sits between the platform stream and the api-visible event union. Operates
 // over a single debounce window's worth of raw events; no async / threading.
-// Phase 5 wires this between the Debouncer's output and the NAPI binding.
+// The binding runtime wires this between the debouncer and typed JS events.
 
 /// High-level event surfaced by the coalescer. Mirrors the api.d.ts
 /// `FileSystemEvent` union. Phase 3.3-3.5 add Renamed + RenameDegraded
@@ -665,7 +697,7 @@ fn transition(prev: Option<PathState>, ev: &RawEvent) -> PathState {
 //     PLAN 13.x follow-ups; notify 6's event surface doesn't expose
 //     cookies cleanly through `notify-debouncer-full` yet.
 //
-// Not wired into the live Watcher yet — Phase 5/8 integration.
+// The binding runtime applies this after debounce-batch coalescing.
 
 use std::time::Instant;
 

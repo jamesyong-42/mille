@@ -50,7 +50,7 @@
     "build:napi:debug": "napi build --platform --manifest-path ../../crates/mille-binding/Cargo.toml --output-dir . --no-js",
     "build:ts": "tsc --build",
     "typecheck": "tsc --noEmit",
-    "test": "node --test test/*.test.mjs",
+    "test": "node --test --test-concurrency=4 test/*.test.mjs",
     "artifacts": "napi artifacts",
     "prepublishOnly": "napi prepublish -t npm"
   },

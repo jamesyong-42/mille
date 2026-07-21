@@ -239,6 +239,14 @@ export function applyDelta(
   const next = cloneMirror(state);
   next.treeVersion = msg.version;
 
+  // Coarse subtrees invalidate the cached child list first. Entries and
+  // childSetChanged later in the same frame are the post-reconciliation
+  // replacement and therefore rebuild it immediately.
+  for (const rootId of msg.coarseSubtrees) {
+    next.children.delete(rootId);
+    next.pendingExpansions.add(rootId);
+  }
+
   // Track parents whose child list needs rebuilding. Starts with
   // whatever the host told us mutated (`childSetChanged`) plus any
   // parent we discover as we merge entries — an entry whose parentId
@@ -305,13 +313,6 @@ export function applyDelta(
   // Merge direct-child-counts (fresh values win).
   for (const [k, v] of Object.entries(msg.directChildCounts)) {
     next.directChildCounts.set(Number(k), v);
-  }
-
-  // Coarse subtrees: drop the known child list + mark pending so
-  // the client will re-query this subtree on its next viewport pass.
-  for (const rootId of msg.coarseSubtrees) {
-    next.children.delete(rootId);
-    next.pendingExpansions.add(rootId);
   }
 
   // Volatile flags.

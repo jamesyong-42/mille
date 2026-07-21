@@ -16,16 +16,8 @@
 
 import { FileExplorer, type Entry, type MirrorSnapshot } from './client.js';
 import type { EntryId, ExplorerOptions } from './client.js';
-import {
-  DecorationStore,
-  type Decoration,
-  type DecorationProvider,
-} from './decorations.js';
-import {
-  applyDeltaToSession,
-  computeSessionDelta,
-  type SessionView,
-} from './delta.js';
+import { DecorationStore, type Decoration, type DecorationProvider } from './decorations.js';
+import { computeSessionDelta, type SessionView } from './delta.js';
 import { isFileSystemError } from './errors.js';
 import type { ClientEntry } from './mirror.js';
 import {
@@ -220,12 +212,23 @@ class FileExplorerHostImpl implements FileExplorerHost {
    * decoration payload onto every session's delta frame.
    */
   private readonly decorationStore = new DecorationStore();
+  /** Native watcher event bridge (overflow/coarse invalidation). */
+  private readonly watcherEventSub: Disposable;
   /** Ids whose merged decorations changed since the last tick. */
   private pendingDecorationChangedIds: Set<number> = new Set();
 
   constructor(options: ExplorerOptions) {
     this.explorer = new FileExplorer(options);
     this.initialWalk = options.initialWalk ?? 'full';
+    this.watcherEventSub = this.explorer.on('event', (raw) => {
+      const event = raw as { kind?: string; id?: number } | undefined;
+      if (event?.kind !== 'overflow' || typeof event.id !== 'number') return;
+      // The native watcher has already reconciled this subtree before it
+      // emits overflow. Force the next delta to replace the mirror's child
+      // list and allow a later expansion to prefetch again if needed.
+      this.prefetched.delete(event.id);
+      this.markSubtreeCoarse(event.id);
+    });
   }
 
   get local(): FileExplorer {
@@ -278,9 +281,7 @@ class FileExplorerHostImpl implements FileExplorerHost {
             maybe !== null && typeof maybe === 'object' && 'then' in maybe
               ? await maybe
               : (maybe as Decoration | null);
-          if (
-            this.decorationStore.setForProvider(provider.id, id, d ?? null)
-          ) {
+          if (this.decorationStore.setForProvider(provider.id, id, d ?? null)) {
             changed.push(id);
           }
         } catch {
@@ -376,17 +377,12 @@ class FileExplorerHostImpl implements FileExplorerHost {
     // `this.rootPaths` (B2 addition). The public surface is
     // `populateFromRoots` at full depth, but for roots-only we call
     // the native `populateFromPath` per root at depth 0.
-    const rootsInternal = (this.explorer as unknown as { rootPaths?: readonly string[] })
-      .rootPaths;
+    const rootsInternal = (this.explorer as unknown as { rootPaths?: readonly string[] }).rootPaths;
     if (!rootsInternal || rootsInternal.length === 0) return;
     const nativeFx = (
       this.explorer as unknown as {
         nativeFx?: {
-          populateFromPath?: (
-            p: string,
-            d?: number | null,
-            r?: boolean | null,
-          ) => Promise<number>;
+          populateFromPath?: (p: string, d?: number | null, r?: boolean | null) => Promise<number>;
         };
       }
     ).nativeFx;
@@ -448,8 +444,7 @@ class FileExplorerHostImpl implements FileExplorerHost {
     // per session) guarantees all attached sessions see the same marker
     // set in the delta they receive this frame.
     const coarse = this.pendingCoarseSubtrees.size > 0 ? [...this.pendingCoarseSubtrees] : [];
-    const subtreeDirty =
-      this.pendingSubtreeDirty.size > 0 ? [...this.pendingSubtreeDirty] : [];
+    const subtreeDirty = this.pendingSubtreeDirty.size > 0 ? [...this.pendingSubtreeDirty] : [];
     const subtreeResynced =
       this.pendingSubtreeResynced.size > 0 ? [...this.pendingSubtreeResynced] : [];
     if (coarse.length > 0) this.pendingCoarseSubtrees.clear();
@@ -460,9 +455,7 @@ class FileExplorerHostImpl implements FileExplorerHost {
     // session sees the same fan-out; absence of a decoration change
     // leaves these fields empty on the outgoing delta.
     const decorationChangedIds =
-      this.pendingDecorationChangedIds.size > 0
-        ? [...this.pendingDecorationChangedIds]
-        : [];
+      this.pendingDecorationChangedIds.size > 0 ? [...this.pendingDecorationChangedIds] : [];
     if (decorationChangedIds.length > 0) this.pendingDecorationChangedIds.clear();
 
     // Phase B1 — check whether any session's root view is out of date.
@@ -478,7 +471,10 @@ class FileExplorerHostImpl implements FileExplorerHost {
       subtreeResynced.length === 0 &&
       decorationChangedIds.length === 0
     ) {
-      const currentRootIds = this.explorer.getSnapshot().roots().map((e) => e.id);
+      const currentRootIds = this.explorer
+        .getSnapshot()
+        .roots()
+        .map((e) => e.id);
       const currentRootSet = new Set(currentRootIds);
       for (const session of this.sessions.values()) {
         if (!session.handshook) continue;
@@ -522,14 +518,6 @@ class FileExplorerHostImpl implements FileExplorerHost {
         knownIds: session.knownIds,
       };
       const delta = computeSessionDelta(cs, view);
-      applyDeltaToSession(delta, view);
-      // Prune coarse roots from this session's knownIds. Minimum viable
-      // behaviour: drop the root itself so the client's subsequent
-      // setExpanded re-query repopulates. Full subtree pruning requires
-      // host-side parent-chain tracking (Phase 8).
-      for (const rootId of coarse) {
-        session.knownIds.delete(rootId);
-      }
 
       // Phase B1 — has the root set changed for this session since last
       // tick? Compare by id content (not reference). If so, we'll ship
@@ -552,16 +540,25 @@ class FileExplorerHostImpl implements FileExplorerHost {
       const outEntries: ClientEntry[] = [];
       const outDirectChildCounts: Record<string, number> = {};
       const emitted = new Set<number>();
+      const removedIds: number[] = [];
+      const liveChangedIds: number[] = [];
       for (const id of delta.changedIds) {
         if (emitted.has(id)) continue;
         const entry = snap.getById(id);
-        if (!entry) continue;
+        if (!entry) {
+          removedIds.push(id);
+          session.knownIds.delete(id);
+          continue;
+        }
+        liveChangedIds.push(id);
         outEntries.push(entryToClient(entry));
         emitted.add(id);
         const c = snap.directChildCount(id);
         if (c !== null) outDirectChildCounts[String(id)] = c;
       }
-      for (const parentId of delta.childSetChanged) {
+      const childSetChanged = new Set(delta.childSetChanged);
+      for (const rootId of coarse) childSetChanged.add(rootId);
+      for (const parentId of childSetChanged) {
         const pc = snap.directChildCount(parentId);
         if (pc !== null) outDirectChildCounts[String(parentId)] = pc;
         if (!session.expanded.has(parentId)) continue;
@@ -600,10 +597,10 @@ class FileExplorerHostImpl implements FileExplorerHost {
         session,
         frame('delta', {
           version: delta.version,
-          changedIds: delta.changedIds,
+          changedIds: liveChangedIds,
           entriesJson: outEntries.length > 0 ? JSON.stringify(outEntries) : undefined,
-          childSetChanged: delta.childSetChanged,
-          removedIds: delta.removedIds,
+          childSetChanged: [...childSetChanged],
+          removedIds,
           directChildCounts: outDirectChildCounts,
           newVisibleCount: 0,
           coarseSubtrees: coarse,
@@ -655,10 +652,7 @@ class FileExplorerHostImpl implements FileExplorerHost {
         );
         return;
       case 'call':
-        void this.handleCall(
-          session,
-          f.body as { reqId: number; method: string; args: unknown[] },
-        );
+        void this.handleCall(session, f.body as { reqId: number; method: string; args: unknown[] });
         return;
       case 'dispose':
         this.detachSession(session.id);
@@ -763,10 +757,7 @@ class FileExplorerHostImpl implements FileExplorerHost {
     );
   }
 
-  private handleSetExpanded(
-    session: Session,
-    body: { add?: number[]; remove?: number[] },
-  ): void {
+  private handleSetExpanded(session: Session, body: { add?: number[]; remove?: number[] }): void {
     for (const id of body.add ?? []) session.expanded.add(id);
     for (const id of body.remove ?? []) session.expanded.delete(id);
 
@@ -802,21 +793,16 @@ class FileExplorerHostImpl implements FileExplorerHost {
       // walks of empty / leaf folders are cheap.
       this.prefetched.add(id);
       try {
-        void this.explorer
-          .prefetch(id, { depth: 1 })
-          .catch((e) => {
-            // eslint-disable-next-line no-console
-            console.warn(`[mille] setExpanded prefetch failed for id ${id}:`, e);
-          });
+        void this.explorer.prefetch(id, { depth: 1 }).catch((e) => {
+          // eslint-disable-next-line no-console
+          console.warn(`[mille] setExpanded prefetch failed for id ${id}:`, e);
+        });
       } catch (e) {
         // Synchronous throw (older native missing populateFromPath).
         // Fall back to the v0.1 behaviour — ship whatever's already in
         // the snapshot — and log once.
         // eslint-disable-next-line no-console
-        console.warn(
-          `[mille] setExpanded: prefetch not available for id ${id}; carrying on:`,
-          e,
-        );
+        console.warn(`[mille] setExpanded: prefetch not available for id ${id}; carrying on:`, e);
       }
     }
 
@@ -884,29 +870,31 @@ class FileExplorerHostImpl implements FileExplorerHost {
     // the entry would poison the chain and block every subsequent
     // mutation forever. We swallow (log) chain-level rejections but
     // keep the next mutation unblocked.
-    this.mutationQueue = this.mutationQueue.then(async () => {
-      try {
-        const result = await this.dispatchMutation(body.op, body.args);
-        // Fan out first, reply second.
-        await this.flushTickNow();
-        this.send(session, frame('mutateResult', { reqId: body.reqId, result }));
-      } catch (e: unknown) {
-        const err = toErrorPayload(e);
-        // Still flush a delta: partial state (e.g. a rename that
-        // created the target before failing on the source) may have
-        // landed and other sessions need to see it.
-        await this.flushTickNow();
-        this.send(
-          session,
-          frame('mutateResult', { reqId: body.reqId, result: null, error: err }),
-        );
-      }
-    }).catch((e: unknown) => {
-      // Queue-level failure (e.g. flushTickNow threw). Don't let it
-      // poison the chain for subsequent mutations from any session.
-      // eslint-disable-next-line no-console
-      console.error('[mille] mutation queue error:', e);
-    });
+    this.mutationQueue = this.mutationQueue
+      .then(async () => {
+        try {
+          const result = await this.dispatchMutation(body.op, body.args);
+          // Fan out first, reply second.
+          await this.flushTickNow();
+          this.send(session, frame('mutateResult', { reqId: body.reqId, result }));
+        } catch (e: unknown) {
+          const err = toErrorPayload(e);
+          // Still flush a delta: partial state (e.g. a rename that
+          // created the target before failing on the source) may have
+          // landed and other sessions need to see it.
+          await this.flushTickNow();
+          this.send(
+            session,
+            frame('mutateResult', { reqId: body.reqId, result: null, error: err }),
+          );
+        }
+      })
+      .catch((e: unknown) => {
+        // Queue-level failure (e.g. flushTickNow threw). Don't let it
+        // poison the chain for subsequent mutations from any session.
+        // eslint-disable-next-line no-console
+        console.error('[mille] mutation queue error:', e);
+      });
   }
 
   /**
@@ -959,10 +947,7 @@ class FileExplorerHostImpl implements FileExplorerHost {
         return Array.from(buf);
       }
       case 'readText':
-        return this.explorer.readText(
-          args.id as EntryId,
-          args.encoding as string | undefined,
-        );
+        return this.explorer.readText(args.id as EntryId, args.encoding as string | undefined);
       case 'writeFile':
         return this.explorer.writeFile(
           args.id as EntryId,
@@ -983,10 +968,7 @@ class FileExplorerHostImpl implements FileExplorerHost {
       this.send(session, frame('callResult', { reqId: body.reqId, result }));
     } catch (e: unknown) {
       const err = toErrorPayload(e);
-      this.send(
-        session,
-        frame('callResult', { reqId: body.reqId, result: null, error: err }),
-      );
+      this.send(session, frame('callResult', { reqId: body.reqId, result: null, error: err }));
     }
   }
 
@@ -1026,6 +1008,7 @@ class FileExplorerHostImpl implements FileExplorerHost {
   async dispose(): Promise<void> {
     if (this.disposed) return;
     this.disposed = true;
+    this.watcherEventSub.dispose();
     this.stopTick();
     for (const id of [...this.sessions.keys()]) {
       this.detachSession(id);
@@ -1083,9 +1066,7 @@ function toErrorPayload(e: unknown): { code: string; message: string; path?: str
  * exposes the explorer for same-process consumers (SCM providers,
  * background indexers) that don't need port indirection.
  */
-export async function createFileExplorerHost(
-  options: ExplorerOptions,
-): Promise<FileExplorerHost> {
+export async function createFileExplorerHost(options: ExplorerOptions): Promise<FileExplorerHost> {
   return new FileExplorerHostImpl(options);
 }
 

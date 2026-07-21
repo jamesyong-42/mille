@@ -2,27 +2,17 @@
 // Structural: pure tree surface first; settings tucked behind a gear.
 // Engine transport (UtilityProcess + MessagePort) is unchanged.
 
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ReactElement,
-} from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
 import { FileTreeProvider, FileTree, useFileTreeRef } from '@vibecook/mille-ui';
 import type { IconTheme } from '@vibecook/mille-ui/icons';
-import {
-  defaultIconTheme,
-  duotoneIconTheme,
-  minimalIconTheme,
-} from '@vibecook/mille-ui/icons';
+import { defaultIconTheme, duotoneIconTheme, minimalIconTheme } from '@vibecook/mille-ui/icons';
 import { createCommandRegistry, defaultCommands } from '@vibecook/mille-ui/commands';
 import type { Entry, FileExplorer, VisibleRow } from '@vibecook/mille';
 import { connectFileExplorer, type PortFileExplorer } from '@vibecook/mille/port';
 import { fxPortReady, onFxPort } from './fx-port';
 import { Toolbar, type ThemeMode } from './Toolbar';
 import { stageIconTheme } from './stageIconTheme';
+import { WatchBenchPanel } from './WatchBenchPanel';
 
 interface ConnectionState {
   fx: PortFileExplorer;
@@ -52,10 +42,7 @@ function basename(path: string): string {
 }
 
 function highlightSource(src: string): string {
-  const esc = src
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
+  const esc = src.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   return esc
     .replace(/(\/\/[^\n]*)/g, '<span class="cm">$1</span>')
     .replace(/('(?:\\.|[^'])*'|`(?:\\.|[^`])*`)/g, '<span class="str">$1</span>')
@@ -139,13 +126,7 @@ export function App(): ReactElement {
   return <Explorer fx={conn.fx} root={conn.workspaceRoot} />;
 }
 
-function Explorer({
-  fx,
-  root,
-}: {
-  fx: PortFileExplorer;
-  root: string;
-}): ReactElement {
+function Explorer({ fx, root }: { fx: PortFileExplorer; root: string }): ReactElement {
   const commands = useMemo(() => createCommandRegistry(defaultCommands), []);
   const treeRef = useFileTreeRef();
   const settingsRef = useRef<HTMLDivElement | null>(null);
@@ -160,9 +141,9 @@ function Explorer({
     'duotone' | 'default' | 'stage' | 'material' | 'minimal'
   >('duotone');
   const [iconTheme, setIconTheme] = useState<IconTheme>(duotoneIconTheme);
-  const [iconThemeStatus, setIconThemeStatus] = useState<
-    'idle' | 'loading' | 'loaded' | 'error'
-  >('idle');
+  const [iconThemeStatus, setIconThemeStatus] = useState<'idle' | 'loading' | 'loaded' | 'error'>(
+    'idle',
+  );
 
   useEffect(() => {
     if (iconThemeId === 'duotone') {
@@ -234,10 +215,7 @@ function Explorer({
   useEffect(() => {
     if (!settingsOpen) return;
     const onDown = (evt: MouseEvent): void => {
-      if (
-        settingsRef.current !== null &&
-        !settingsRef.current.contains(evt.target as Node)
-      ) {
+      if (settingsRef.current !== null && !settingsRef.current.contains(evt.target as Node)) {
         setSettingsOpen(false);
       }
     };
@@ -250,10 +228,7 @@ function Explorer({
       const mod = e.metaKey || e.ctrlKey;
       if (mod && (e.key === 'f' || e.key === 'F')) {
         const t = e.target;
-        if (
-          t instanceof HTMLElement &&
-          (t.closest('.code-panel') || t.closest('.code-scroll'))
-        ) {
+        if (t instanceof HTMLElement && (t.closest('.code-panel') || t.closest('.code-scroll'))) {
           return;
         }
         e.preventDefault();
@@ -320,20 +295,12 @@ function Explorer({
       try {
         const text = await fx.readText(entry.id);
         const body = typeof text === 'string' ? text : String(text ?? '');
-        const capped =
-          body.length > 120_000
-            ? `${body.slice(0, 120_000)}\n\n// … truncated`
-            : body;
-        const highlight =
-          /\.(ts|tsx|js|jsx|mjs|cjs|json|rs|md|css|toml|yml|yaml)$/i.test(
-            entry.name,
-          );
+        const capped = body.length > 120_000 ? `${body.slice(0, 120_000)}\n\n// … truncated` : body;
+        const highlight = /\.(ts|tsx|js|jsx|mjs|cjs|json|rs|md|css|toml|yml|yaml)$/i.test(
+          entry.name,
+        );
         setTabs((prev) =>
-          prev.map((t) =>
-            t.id === tabId
-              ? { ...t, body: capped, highlighted: highlight }
-              : t,
-          ),
+          prev.map((t) => (t.id === tabId ? { ...t, body: capped, highlighted: highlight } : t)),
         );
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -371,9 +338,7 @@ function Explorer({
         ];
       }
       openTabIdsRef.current = new Set(next.map((t) => t.id));
-      setActiveTabId((current) =>
-        current === id ? next[next.length - 1]!.id : current,
-      );
+      setActiveTabId((current) => (current === id ? next[next.length - 1]!.id : current));
       return next;
     });
   }, []);
@@ -389,6 +354,7 @@ function Explorer({
   return (
     <FileTreeProvider fx={fx as unknown as FileExplorer} commands={commands}>
       <div className={`app${editorOpen ? ' app--split' : ' app--project'}`}>
+        <WatchBenchPanel fx={fx} />
         {/* ── Project tool window ─────────────────────────────── */}
         <aside className="sidebar">
           <div className="tool-header">
@@ -460,9 +426,7 @@ function Explorer({
 
           <div
             className="tree-container"
-            data-mille-theme={
-              iconThemeId === 'minimal' ? 'minimal' : undefined
-            }
+            data-mille-theme={iconThemeId === 'minimal' ? 'minimal' : undefined}
           >
             <FileTree
               key={treeEpoch}

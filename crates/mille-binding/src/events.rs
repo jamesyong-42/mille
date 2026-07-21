@@ -12,11 +12,9 @@
 //! typed vecs keeps each `emit_xxx` call zero-cost: no runtime type tag,
 //! no serde detour, no `Box<dyn Any>`.
 //!
-//! Wiring state: the bus is fully functional (subscribe/unsubscribe/emit)
-//! but no engine-side call site feeds it yet. Phase 7 hooks the watcher
-//! and ChangeSet coalescer in. The `#[cfg(test)]`-gated smoke helper
-//! `emit_ready_for_tests` lets Wave 7 verify end-to-end delivery without
-//! spinning up a real watcher.
+//! The live watcher and store reconciliation pipeline feed this bus. The
+//! smoke helper `emit_ready_for_tests` remains available for an isolated
+//! end-to-end binding check.
 //!
 //! Concurrency: each channel is an independent `RwLock<Vec<...>>`, so an
 //! emit on one channel never blocks subscription changes on another. A
@@ -290,7 +288,7 @@ fn clone_change(c: &ChangeNoticeJs) -> ChangeNoticeJs {
     }
 }
 
-fn clone_event(e: &FileSystemEventJs) -> FileSystemEventJs {
+pub(crate) fn clone_event(e: &FileSystemEventJs) -> FileSystemEventJs {
     FileSystemEventJs {
         kind: e.kind.clone(),
         id: e.id,

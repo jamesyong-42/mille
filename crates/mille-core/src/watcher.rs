@@ -1143,14 +1143,24 @@ mod tests {
         let w = make_watcher_with(Arc::clone(&events), opts.clone());
         w.watch(td.path(), opts).unwrap();
 
-        std::thread::sleep(Duration::from_millis(50));
         let f = td.path().join("raw.txt");
-        fs::write(&f, b"a").unwrap();
-        fs::write(&f, b"bb").unwrap();
-
-        let got = poll_for(&events, Duration::from_secs(2), |evs| {
-            evs.iter().any(|e| path_matches(e, "raw.txt"))
-        });
+        // A heavily parallel test process can delay FSEvents stream startup.
+        // Probe with repeated mutations so this test measures raw-backend
+        // liveness rather than assuming a fixed 50 ms readiness delay.
+        let started = Instant::now();
+        let mut revision = 0_u64;
+        while started.elapsed() < Duration::from_secs(2)
+            && !events
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|event| path_matches(event, "raw.txt"))
+        {
+            revision += 1;
+            fs::write(&f, revision.to_string()).unwrap();
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let got = events.lock().unwrap().clone();
         assert!(
             got.iter().any(|e| path_matches(e, "raw.txt")),
             "raw backend should still deliver events: {got:?}"

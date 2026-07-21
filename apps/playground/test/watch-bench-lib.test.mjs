@@ -7,6 +7,7 @@ import test from 'node:test';
 import {
   buildOperationPlan,
   executeOperation,
+  parseBuildIdentity,
   summarizeLatencies,
 } from '../scripts/watch-bench-lib.mjs';
 
@@ -75,4 +76,17 @@ test('latency summary reports stable nearest-rank percentiles', () => {
     p99: 5,
     max: 5,
   });
+});
+
+test('build identity parser accepts diagnostic payloads and rejects malformed input', () => {
+  const identity = {
+    packageVersion: '0.1.0',
+    nativeVersion: '0.1.0',
+    resolvedPath: '/tmp/mille.node',
+    nativeProfile: 'debug',
+  };
+  assert.deepEqual(parseBuildIdentity(JSON.stringify(identity)), identity);
+  assert.equal(parseBuildIdentity('not-json'), null);
+  assert.equal(parseBuildIdentity(JSON.stringify({ packageVersion: '0.1.0' })), null);
+  assert.equal(parseBuildIdentity(undefined), null);
 });

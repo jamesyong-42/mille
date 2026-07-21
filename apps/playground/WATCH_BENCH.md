@@ -54,7 +54,7 @@ pnpm bench:watch -- --operations 1200 --debounce 25 --timeout 8000 --pause 10
 - `--keep`: retain the temporary workspace and JSON report after the playground exits.
 - `--exit`: close the playground automatically after completion; useful for automated smoke runs.
 
-Without `--keep`, the temporary directory is removed when the benchmark launcher exits. The terminal prints both the sandbox and report paths at startup. The JSON report contains every observation plus min/mean/p50/p95/p99/max latency summaries.
+Without `--keep`, the temporary directory is removed when the benchmark launcher exits. The terminal prints both the sandbox and report paths at startup. The JSON report contains the loaded package/native build identity, every observation, and min/mean/p50/p95/p99/max latency summaries.
 
 Close the playground or press Ctrl+C in the launching terminal to stop. The benchmark mode does not open detached DevTools because that materially distorts render timing.
 
@@ -70,3 +70,18 @@ For native primitive throughput without Electron, run:
 ```bash
 pnpm bench:core
 ```
+
+For a deterministic correctness-and-latency gate through the native watcher,
+store, and JavaScript snapshot—but without renderer timing—run:
+
+```bash
+pnpm bench:watch:soak
+```
+
+This rebuilds the current native binding and package, then performs 1,000 real
+filesystem operations in an isolated temporary directory. It fails on any
+state-convergence miss or when observed p95 latency exceeds 150 ms. Use
+`--operations`, `--debounce`, `--timeout`, `--poll`, `--max-p95`, `--report`,
+and `--keep` to tune or retain a complete JSON report. A watcher preflight
+distinguishes an unavailable host watcher (exit 2) from a Mille correctness or
+performance failure (exit 1).

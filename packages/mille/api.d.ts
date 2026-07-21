@@ -57,6 +57,22 @@ export declare class FileSystemError extends Error {
 
 export declare function isFileSystemError(e: unknown): e is FileSystemError;
 
+/** Exact package/native implementation loaded by the current process. */
+export interface BuildIdentity {
+  readonly packageVersion: string;
+  readonly nativeVersion: string;
+  readonly nativeProfile: string;
+  readonly nativeTarget: string;
+  readonly protocolVersion: number;
+  readonly platform: NodeJS.Platform;
+  readonly arch: string;
+  readonly source: 'local' | 'platform-package';
+  readonly resolvedPath: string;
+}
+
+/** Record this in benchmark reports and native bug reports. */
+export declare function buildIdentity(): BuildIdentity;
+
 // ─── Capability flags ──────────────────────────────────────────────────────
 
 /** Bitmask. Providers advertise which methods they implement. */

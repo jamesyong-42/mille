@@ -16,7 +16,7 @@
 // module — `FileExplorer`, `FileReadStream`, `version`. Phase 6's
 // higher-level wrappers (commits 6.4+) layer typed surfaces on top.
 
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -40,7 +40,15 @@ function isMusl(): boolean {
   }
 }
 
-function loadLocal(): unknown | null {
+export type NativeLoadSource = 'local' | 'platform-package';
+
+interface LoadedNative {
+  readonly module: unknown;
+  readonly source: NativeLoadSource;
+  readonly resolvedPath: string;
+}
+
+function loadLocal(): LoadedNative | null {
   // Dev build path: the `.node` is emitted next to api.d.ts (one dir up
   // from dist/). napi-rs names Linux/Windows binaries with an ABI suffix
   // (`-gnu` / `-musl` / `-msvc`); Darwin is just `platform-arch`.
@@ -55,13 +63,15 @@ function loadLocal(): unknown | null {
   for (const root of roots) {
     for (const name of names) {
       const c = join(root, name);
-      if (existsSync(c)) return require(c);
+      if (existsSync(c)) {
+        return { module: require(c), source: 'local', resolvedPath: c };
+      }
     }
   }
   return null;
 }
 
-function loadFromPlatformPackage(): unknown | null {
+function loadFromPlatformPackage(): LoadedNative | null {
   // Order matters only for linux: musl must be probed before gnu
   // because musl binaries can't dlopen into glibc Node and vice versa.
   const triples: Record<string, Record<string, string[]>> = {
@@ -75,7 +85,13 @@ function loadFromPlatformPackage(): unknown | null {
   const attempts = triples[process.platform]?.[process.arch] ?? [];
   for (const triple of attempts) {
     try {
-      return require(`@vibecook/mille-${triple}`);
+      const request = `@vibecook/mille-${triple}`;
+      const resolvedPath = require.resolve(request);
+      return {
+        module: require(resolvedPath),
+        source: 'platform-package',
+        resolvedPath,
+      };
     } catch {
       // Each per-triple package is an optionalDependency, so missing
       // modules are expected on mismatched hosts. Fall through.
@@ -84,8 +100,8 @@ function loadFromPlatformPackage(): unknown | null {
   return null;
 }
 
-const nativeModule = loadLocal() ?? loadFromPlatformPackage();
-if (!nativeModule) {
+const loadedNative = loadLocal() ?? loadFromPlatformPackage();
+if (!loadedNative) {
   throw new Error(
     `@vibecook/mille: failed to load native binary for ` +
       `${process.platform}-${process.arch}. Install the matching ` +
@@ -100,10 +116,33 @@ if (!nativeModule) {
 // type that drifts from the generated d.ts.
 export interface NativeBinding {
   version(): string;
+  buildInfo?(): {
+    readonly crateVersion: string;
+    readonly profile: string;
+    readonly target: string;
+  };
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   FileExplorer: any;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   FileReadStream: any;
 }
 
-export const native = nativeModule as NativeBinding;
+function readPackageVersion(): string {
+  try {
+    const packageJson = JSON.parse(
+      readFileSync(join(__dirname, '..', 'package.json'), 'utf8'),
+    ) as { version?: unknown };
+    return typeof packageJson.version === 'string' ? packageJson.version : 'unknown';
+  } catch {
+    return 'unknown';
+  }
+}
+
+export const native = loadedNative.module as NativeBinding;
+
+/** Loader-side identity, combined with the native payload by `buildIdentity()`. */
+export const nativeLoadInfo = Object.freeze({
+  source: loadedNative.source,
+  resolvedPath: loadedNative.resolvedPath,
+  packageVersion: readPackageVersion(),
+});

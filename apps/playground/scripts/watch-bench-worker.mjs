@@ -1,7 +1,12 @@
 import { writeFile } from 'node:fs/promises';
 import { performance } from 'node:perf_hooks';
 
-import { buildOperationPlan, executeOperation, summarizeLatencies } from './watch-bench-lib.mjs';
+import {
+  buildOperationPlan,
+  executeOperation,
+  parseBuildIdentity,
+  summarizeLatencies,
+} from './watch-bench-lib.mjs';
 
 const root = process.env.MILLE_WATCH_BENCH_ROOT;
 const reportPath = process.env.MILLE_WATCH_BENCH_REPORT;
@@ -117,6 +122,7 @@ async function run() {
   };
   const report = {
     generatedAt: new Date().toISOString(),
+    buildIdentity: parseBuildIdentity(process.env.MILLE_BUILD_IDENTITY_JSON),
     root,
     requestedOperations: operations,
     pauseMs,

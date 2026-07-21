@@ -239,9 +239,30 @@ fn reconcile_event(
     event: &FsChangeEvent,
 ) -> Result<ReconcileOutcome, FxError> {
     match event {
-        FsChangeEvent::Created { path } | FsChangeEvent::Modified { path } => {
-            reconcile_nearest_parent(store, config, path, Some(1))
+        FsChangeEvent::Created { path } => {
+            if path.is_dir() && store.get_by_path(path).is_none() {
+                // FSEvents may represent a directory rename/move as an
+                // independent delete + create rather than a paired rename. A
+                // depth-1 parent reconciliation would add only the directory
+                // row and silently drop its already-present descendants. Walk
+                // the created directory itself so the final snapshot matches
+                // disk without rescanning the entire workspace root.
+                let mut out = reconcile_directory(store, config, path, None)?;
+                // A create-only rename shape has no explicit old path. The
+                // authoritative direct-child comparison at the destination's
+                // parent removes any sibling directory that disappeared in
+                // the same filesystem transaction, including its known
+                // descendants. Without this pass the new subtree is correct
+                // but the old alias remains visible indefinitely.
+                if let Some(parent) = path.parent() {
+                    out.merge(reconcile_directory(store, config, parent, Some(1))?);
+                }
+                Ok(out)
+            } else {
+                reconcile_nearest_parent(store, config, path, Some(1))
+            }
         }
+        FsChangeEvent::Modified { path } => reconcile_nearest_parent(store, config, path, Some(1)),
         FsChangeEvent::Deleted { path } => {
             let mut out = ReconcileOutcome::default();
             if let Some(entry) = store.get_by_path(path) {
@@ -258,15 +279,47 @@ fn reconcile_event(
         }
         FsChangeEvent::Renamed { from, to } => {
             let mut out = ReconcileOutcome::default();
+            let mut preserved_known_subtree = false;
             if let Some(entry) = store.get_by_path(from) {
                 let parent = entry.parent_id;
-                let removed = store.remove_subtree(entry.id);
-                out.changed_ids.extend(removed.iter().map(|entry| entry.id));
-                if let Some(parent) = parent {
-                    out.child_set_changed.insert(parent);
+                match store.rename(entry.id, to.clone()) {
+                    Ok(()) => {
+                        // Same-parent file and directory renames preserve EntryId
+                        // and every known descendant. The store rewrites the
+                        // reverse path index for the known subtree, avoiding an
+                        // eager disk walk and preventing expanded children from
+                        // disappearing until the next manual expansion.
+                        preserved_known_subtree = true;
+                        out.changed_ids.insert(entry.id);
+                        if let Some(parent) = parent {
+                            out.child_set_changed.insert(parent);
+                        }
+                    }
+                    Err(_) => {
+                        // Cross-parent moves are not yet an atomic store
+                        // primitive. Fall back to authoritative removal + disk
+                        // reconciliation below.
+                        let removed = store.remove_subtree(entry.id);
+                        out.changed_ids.extend(removed.iter().map(|entry| entry.id));
+                        if let Some(parent) = parent {
+                            out.child_set_changed.insert(parent);
+                        }
+                    }
                 }
             }
-            out.merge(reconcile_nearest_parent(store, config, to, Some(1))?);
+            let depth = if preserved_known_subtree || !to.is_dir() {
+                Some(1)
+            } else {
+                // A cross-parent directory move lost the old in-memory
+                // structure. Rebuild the destination subtree now so known
+                // descendants do not silently disappear.
+                None
+            };
+            if depth.is_none() && to.is_dir() {
+                out.merge(reconcile_directory(store, config, to, None)?);
+            } else {
+                out.merge(reconcile_nearest_parent(store, config, to, depth)?);
+            }
             Ok(out)
         }
         FsChangeEvent::Unknown { path }
@@ -387,6 +440,18 @@ fn reconcile_directory(
                 walked_entry
                     .parent_path
                     .as_ref()
+                    .and_then(|parent| store.get_by_path(parent))
+                    .map(|entry| entry.id)
+            })
+            .or_else(|| {
+                // A walk rooted at a newly-created/moved directory reports no
+                // parent_path for the walk root itself. Recover its real tree
+                // parent from the absolute path; otherwise every create-only
+                // directory rename is inserted as an extra workspace root and
+                // survives deletion as a dangling subtree.
+                (walked_entry.path == directory)
+                    .then(|| walked_entry.path.parent())
+                    .flatten()
                     .and_then(|parent| store.get_by_path(parent))
                     .map(|entry| entry.id)
             });

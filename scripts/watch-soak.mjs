@@ -2,37 +2,26 @@
 
 import { spawn } from 'node:child_process';
 import { dirname, join } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 
 const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const packageRoot = join(repoRoot, 'packages', 'mille');
 const executable = (name) =>
   join(repoRoot, 'node_modules', '.bin', process.platform === 'win32' ? `${name}.cmd` : name);
 
-let activeChild = null;
-
 function run(command, args, cwd) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, { cwd, stdio: 'inherit', env: process.env });
-    activeChild = child;
     child.on('error', reject);
     child.on('exit', (code, signal) => {
-      if (activeChild === child) activeChild = null;
       if (code === 0) resolve();
       else reject(new Error(`${command} exited with ${signal ?? code ?? 'unknown status'}`));
     });
   });
 }
 
-function forwardSignal(signal) {
-  activeChild?.kill(signal);
-}
-
-process.on('SIGINT', () => forwardSignal('SIGINT'));
-process.on('SIGTERM', () => forwardSignal('SIGTERM'));
-
 try {
-  console.log('[mille watch bench] building current native binding…');
+  console.log('[mille watch soak] building current native binding…');
   await run(
     executable('napi'),
     [
@@ -46,20 +35,14 @@ try {
     ],
     packageRoot,
   );
-  console.log('[mille watch bench] building current TypeScript package…');
+  console.log('[mille watch soak] building current TypeScript package…');
   await run(executable('tsc'), ['--build'], packageRoot);
-  const packageEntry = pathToFileURL(join(packageRoot, 'dist', 'index.js'));
-  packageEntry.searchParams.set('bench-build', String(Date.now()));
-  const { buildIdentity } = await import(packageEntry.href);
-  const identity = buildIdentity();
-  process.env.MILLE_BUILD_IDENTITY_JSON = JSON.stringify(identity);
-  console.log('[mille watch bench] build', JSON.stringify(identity));
   await run(
     process.execPath,
-    [join(repoRoot, 'apps', 'playground', 'scripts', 'watch-bench.mjs'), ...process.argv.slice(2)],
-    join(repoRoot, 'apps', 'playground'),
+    [join(packageRoot, 'bench', 'watch-soak.mjs'), ...process.argv.slice(2)],
+    repoRoot,
   );
 } catch (error) {
-  console.error('[mille watch bench]', error instanceof Error ? error.message : String(error));
+  console.error('[mille watch soak]', error instanceof Error ? error.message : String(error));
   process.exitCode = 1;
 }

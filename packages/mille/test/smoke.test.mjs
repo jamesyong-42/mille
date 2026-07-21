@@ -35,7 +35,7 @@ for (const rel of candidates) {
 }
 assert.ok(native, `no built .node found — ran pnpm run build:napi? (tried ${candidates.join(', ')})`);
 
-const { FileExplorer, version } = native;
+const { FileExplorer, buildInfo, version } = native;
 
 function mkTmp() {
   return mkdtempSync(join(tmpdir(), 'mille-smoke-'));
@@ -45,6 +45,15 @@ test('version() returns a non-empty string', () => {
   const v = version();
   assert.equal(typeof v, 'string');
   assert.ok(v.length > 0, `version should be non-empty, got ${JSON.stringify(v)}`);
+});
+
+test('buildInfo() identifies the native artifact profile and target', () => {
+  const info = buildInfo();
+  const rustArch = process.arch === 'arm64' ? 'aarch64' : process.arch;
+  assert.equal(info.crateVersion, version());
+  assert.match(info.profile, /^(debug|release)$/);
+  assert.equal(typeof info.target, 'string');
+  assert.ok(info.target.includes(rustArch));
 });
 
 test('FileExplorer constructor rejects empty roots', () => {

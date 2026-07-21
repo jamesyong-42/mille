@@ -88,6 +88,26 @@ jobs:
       - name: Test
         run: pnpm -r --if-present test
 
+      - name: Repeat live watcher regressions
+        shell: bash
+        run: |
+          for run in $(seq 1 20); do
+            echo "watcher repetition ${run}/20"
+            node --test packages/mille/test/watcher-host.test.mjs packages/mille/test/watcher-live.test.mjs
+          done
+
+      - name: Watcher correctness and latency soak
+        run: node packages/mille/bench/watch-soak.mjs --report watch-soak-report.json
+
+      - name: Upload watcher soak report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: watcher-soak-${{ github.sha }}
+          path: watch-soak-report.json
+          if-no-files-found: warn
+          retention-days: 14
+
       # v0.2 B8 — mille-ui bundle size assertion. Fails CI on regression.
       # Budgets live in `packages/mille-ui/package.json` under
       # `size-limit`; see SPEC §12 for targets.

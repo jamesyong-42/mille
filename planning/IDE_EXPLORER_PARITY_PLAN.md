@@ -1,0 +1,526 @@
+# IDE Explorer Parity Implementation Plan
+
+**Status:** proposed  
+**Created:** 2026-07-21  
+**Baseline assessment:**
+[IDE_EXPLORER_PARITY_ASSESSMENT.md](./IDE_EXPLORER_PARITY_ASSESSMENT.md)
+
+## Objective
+
+Bring Mille's reference file explorer to mature-IDE quality in correctness,
+responsiveness, core file-management behavior, workspace configuration,
+accessibility, and host integration while preserving the library's headless and
+embeddable architecture.
+
+The plan deliberately separates three products that must all succeed:
+
+1. **Engine:** disk state, watches, mutations, snapshots, and reconciliation.
+2. **Tree component:** rendering, navigation, selection, motion, and accessible
+   interaction.
+3. **Reference explorer integration:** workspace settings, editor following,
+   source control, diagnostics, terminal/OS actions, persistence, and recovery.
+
+A primitive in the engine or component does not count as a finished explorer
+feature until the reference playground demonstrates the end-to-end behavior.
+
+## Delivery principles
+
+- Correctness before animation or feature breadth.
+- Preserve identity, focus, selection, expansion, and scroll position across
+  unrelated filesystem changes.
+- Prefer deltas and scoped invalidation; reserve full rebuilds for explicit
+  recovery.
+- Measure event-to-visible-paint, not merely event receipt or React commit.
+- Every benchmark intended as a guard must fail on regression.
+- Every mutation needs a clear success, failure, partial-success, and recovery
+  story.
+- Keep host-only capabilities explicit in types and documentation.
+- Respect `prefers-reduced-motion` and never require motion to understand state.
+- Treat macOS, Windows, Linux, case sensitivity, symlinks, and Unicode as design
+  inputs rather than cleanup work.
+
+## Provisional quality budgets
+
+Phase 1 will establish reference hardware and ratify these numbers. Until then,
+they are targets rather than release claims.
+
+| Signal                            | Target                                                                        |
+| --------------------------------- | ----------------------------------------------------------------------------- |
+| Mixed external-operation soak     | 10,000 operations, zero missed final states                                   |
+| Watcher test repeatability        | 20 consecutive clean runs per supported CI OS                                 |
+| Event-to-mirror latency           | p95 at or below 100 ms with 40 ms debounce                                    |
+| Event-to-visible-paint latency    | p95 at or below 150 ms; p99 at or below 250 ms                                |
+| Keyboard interaction latency      | p95 input-to-commit at or below 50 ms                                         |
+| Expand a known 1,000-child folder | p95 visible commit at or below 100 ms                                         |
+| Continuous scroll                 | At least 55 fps over a 30-second large-tree trace                             |
+| Long tasks during normal churn    | No task above 100 ms; fewer than 1 per 10 seconds above 50 ms                 |
+| Structural update invariants      | Zero unintended focus, selection, expansion, or scroll-anchor changes         |
+| Accessibility                     | No critical axe findings; keyboard + VoiceOver/NVDA acceptance scenarios pass |
+
+Latency reports must include the debounce configuration, operation mix, tree
+size, expansion set, machine class, OS, Electron version, and build identity.
+
+## Phase overview
+
+| Phase                                | Outcome                                                                          | Depends on |
+| ------------------------------------ | -------------------------------------------------------------------------------- | ---------- |
+| 0. Reproducible correctness baseline | Clean build, green watcher tests, runtime build identity                         | None       |
+| 1. Real end-to-end quality harness   | Browser/Electron latency, frame, state, and soak regression gates                | Phase 0    |
+| 2. Stable high-churn UI              | No flicker, focus loss, scroll jumps, or avoidable row work                      | Phase 1    |
+| 3. Explorer settings and navigation  | Workspace roots, sorting, exclusions, nesting, persistence, active-editor reveal | Phase 2    |
+| 4. Production file operations        | Import, collision handling, progress, cancellation, undo/recovery                | Phases 0-3 |
+| 5. IDE workflow integration          | SCM, diagnostics, views/scopes, history, terminal/OS, content-search hooks       | Phases 3-4 |
+| 6. Provider and platform depth       | Remote/virtual filesystems and full accessibility/platform matrix                | Phases 1-5 |
+
+Accessibility, documentation, telemetry, and cross-platform testing are
+cross-cutting requirements in every phase rather than a final cleanup pass.
+
+## Phase 0 — Reproducible correctness baseline
+
+### Goal
+
+Make a clean checkout produce a known native binding, deterministic test result,
+and trustworthy watcher lifecycle before optimizing any higher layer.
+
+### Work
+
+#### 0.1 Identify the implementation under test
+
+- Add a diagnostic API returning the native core version, binding build profile,
+  target triple, protocol version, and TypeScript package version.
+- Log that identity once in playground development and benchmark modes.
+- Make tests fail clearly when source, generated declarations, `dist`, and native
+  bindings are incompatible.
+- Document which local `.node` artifact wins resolution and how to perform a
+  clean native rebuild.
+
+#### 0.2 Reproduce and fix watcher failures
+
+- Start with the three currently failing external-change tests.
+- Verify watcher initialization ordering relative to `populateFromRoots`, host
+  attachment, and roots-only hydration.
+- Trace native event receipt, debounce/coalescing, store reconciliation,
+  ChangeSet generation, host delta creation, mirror reduction, and UI emission.
+- Distinguish a missing native event from an event lost at a later stage.
+- Add actionable diagnostics on timeout: last native events, batches, tree
+  version, pending reconciliation roots, and snapshot children.
+
+#### 0.3 Expand correctness coverage
+
+- File create, modify, append, truncate, metadata change, rename, delete.
+- Directory create, deep population, rename, move, and recursive delete.
+- Burst and concurrent operations with deterministic seeds.
+- Changes under collapsed, expanded, ignored, evicted, and volatile subtrees.
+- Case-only rename where supported, Unicode normalization, symlinks, and broken
+  symlinks.
+- Watch overflow and explicit subtree resync.
+- Dispose, restart, suspend/resume simulation, and host/client reconnect.
+
+#### 0.4 Put the baseline in CI
+
+- Run watcher integration tests on macOS, Windows, and Linux.
+- Separate true platform limitations with explicit skip reasons and issue links.
+- Run a short repeated watcher job on pull requests and a longer scheduled soak.
+- Preserve diagnostic reports and operation seeds when a run fails.
+
+### Exit criteria
+
+- All existing engine and UI tests pass from a clean checkout.
+- The watcher integration suite passes 20 consecutive times locally and in each
+  supported CI OS class.
+- A 1,000-operation headless mixed workload has zero final-state misses.
+- Test output records the exact native and TypeScript build identity.
+- No watcher callback or filesystem event is delivered after disposal.
+
+## Phase 1 — Real end-to-end quality harness
+
+### Goal
+
+Turn the existing playground benchmark into a repeatable quality gate that
+measures what a user sees and catches both correctness and responsiveness
+regressions.
+
+### Work
+
+#### 1.1 Make workloads reproducible
+
+- Give each operation plan a seed and serialize the complete plan in its report.
+- Verify file contents, metadata, path identity, and absence—not only row names.
+- Add configurable workloads for steady changes, bursts, rename storms, deep
+  subtrees, large directories, ignored files, and mixed internal/external
+  mutations.
+- Add warm-up, cool-down, reference tree size, and expansion-state controls.
+
+#### 1.2 Instrument every stage
+
+- Timestamp operation completion in the worker.
+- Timestamp native event receipt, reconciled ChangeSet, host delta, mirror
+  application, React commit, and the next animation frame containing the state.
+- Use a stable correlation identifier from operation through paint.
+- Report p50, p95, p99, maximum, throughput, coalescing ratio, and misses.
+- Record render counts and changed row ids for each committed delta.
+
+#### 1.3 Add browser behavior scenarios
+
+- Scroll continuously while mutations arrive.
+- Expand/collapse folders during create and rename storms.
+- Maintain range selection and focus while siblings are inserted and removed.
+- Rename a row while unrelated updates arrive.
+- Keep the active row anchored when items above it change.
+- Run with default, Material, and minimal icon themes.
+- Run with decorations changing independently of tree structure.
+- Verify reduced-motion mode.
+
+#### 1.4 Make it a gate
+
+- Drive the packaged Electron playground through Playwright.
+- Save JSON, trace, screenshots, frame data, and console errors as artifacts.
+- Compare against versioned thresholds and fail on correctness or performance
+  regression.
+- Keep a manual observable mode for product inspection.
+- Add a small pull-request scenario and a larger scheduled scenario.
+
+### Exit criteria
+
+- The harness measures operation-to-visible-paint in a real Electron renderer.
+- A failed expectation or exceeded ratified budget exits non-zero.
+- Reports contain enough data to locate delay in native, host, mirror, React, or
+  paint stages.
+- The 10,000-operation scheduled soak has zero missed final states.
+- State-invariant scenarios report zero unintended focus, selection, expansion,
+  or scroll-anchor changes.
+
+## Phase 2 — Stable high-churn UI
+
+### Goal
+
+Make filesystem changes visually quiet and interaction-safe. Updates should feel
+immediate without making the entire tree appear to move.
+
+### Work
+
+#### 2.1 Preserve structural identity
+
+- Audit entry identity across rename, move, delete/recreate, and reconciliation.
+- Apply scoped child-list diffs instead of rebuilding unrelated visible rows.
+- Preserve arrays and snapshot views when their visible content is unchanged.
+- Ensure decoration-only updates never alter tree structure or expansion state.
+
+#### 2.2 Anchor the viewport
+
+- Capture a stable row id and offset before structural changes.
+- Restore its visual offset after insertions or removals above the viewport.
+- Define behavior when the anchor is deleted or moved into a collapsed subtree.
+- Test sticky roots and multiple workspace roots.
+
+#### 2.3 Budget animation
+
+- Animate only entered, removed, and materially repositioned visible rows.
+- Avoid animating event storms as hundreds of independent transitions.
+- Batch compatible mutations into one visual transaction.
+- Use compositor-friendly properties and cancel stale transitions.
+- Disable nonessential motion under `prefers-reduced-motion`.
+
+#### 2.4 Reduce render and allocation work
+
+- Profile the 500,000-row and high-churn fixtures with browser tooling.
+- Stabilize event handler identities where it materially affects row memoization.
+- Avoid repeated sorting and O(n) parent-child reconstruction on hot paths.
+- Pin viewport entries in the mirror and measure eviction/re-fetch behavior.
+- Make icon and decoration resolution cache behavior visible in profiles.
+
+#### 2.5 Define state under deletion and errors
+
+- Move focus to the nearest logical sibling or parent when the focused row is
+  deleted.
+- Remove deleted rows from selection without clearing unrelated selection.
+- Keep an inline rename open when an unrelated delta arrives.
+- Give stale rename/move failures a recoverable state rather than closing input.
+
+### Exit criteria
+
+- Real-browser churn scenarios stay within the ratified frame and latency
+  budgets.
+- Inserting/removing siblings does not reset unrelated row animations or state.
+- Scroll anchoring passes deterministic insert-above and delete-above scenarios.
+- Reduced-motion mode has no structural animation.
+- Profiling shows work proportional to changed and visible rows for normal
+  deltas.
+
+## Phase 3 — Explorer settings and navigation
+
+### Goal
+
+Deliver the baseline configuration and stateful navigation users expect from an
+IDE explorer.
+
+### Work
+
+#### 3.1 Introduce an explorer settings model
+
+- Sorting: natural name, type, and modified time.
+- Case sensitivity and locale-aware comparison.
+- Folders-on-top toggle.
+- Hidden files, configurable exclude globs, and Git-ignore visibility.
+- Compact folders and configurable file nesting rules.
+- Global defaults with per-workspace and per-root overrides.
+- Stable serialized schema with migration/version support.
+
+Push sorting/filtering semantics into the engine/snapshot boundary where needed;
+do not implement a second incompatible tree model only in React.
+
+#### 3.2 Complete multi-root workspace behavior
+
+- Add, remove, rename-display, and reorder workspace roots.
+- Support drag/drop between roots with explicit policy and collision handling.
+- Keep roots visually distinct and preserve state per root.
+- Handle missing, disconnected, and permission-denied roots.
+
+#### 3.3 Persist navigation state
+
+- Expansion ids/paths per workspace.
+- Focus, selection, active filter mode, and scroll anchor where appropriate.
+- Restore lazily without forcing an eager full-tree walk.
+- Version and bound persisted state so stale workspaces do not grow indefinitely.
+
+#### 3.4 Follow the editor
+
+- Optional always-reveal-active-file behavior.
+- Manual Reveal in Explorer command.
+- Configurable single-click preview and double-click permanent open.
+- Avoid fighting the user when they deliberately navigate elsewhere.
+- Define behavior for excluded, hidden, generated, and external files.
+
+#### 3.5 Complete baseline actions
+
+- Copy absolute path and workspace-relative path.
+- Reveal in Finder/Explorer and open containing folder.
+- Open terminal at file parent or directory.
+- Refresh/resync a subtree and the whole workspace.
+- Collapse all and collapse descendants.
+- Find in folder and search-with-include/exclude host hooks.
+
+### Exit criteria
+
+- Settings persist and migrate across restarts.
+- All sort/exclude/nesting combinations have engine and UI tests.
+- Root add/remove/reorder works without restarting the explorer.
+- Active-editor reveal works through lazy, collapsed paths without losing user
+  scroll unexpectedly.
+- The reference playground exposes every baseline action with platform-correct
+  behavior or an explicit unsupported state.
+
+## Phase 4 — Production file operations
+
+### Goal
+
+Make every destructive or long-running operation explicit, observable,
+recoverable, and safe.
+
+### Work
+
+#### 4.1 Implement real external import
+
+- Add an engine/host `copyFromPath` contract for files and directories.
+- Preserve contents and relevant metadata.
+- Support multiple paths, recursive directories, and cross-device copies.
+- Remove the placeholder-file fallback.
+- Surface per-item failure instead of swallowing errors.
+
+#### 4.2 Add collision policy
+
+- Prompt for overwrite, rename, merge, skip, and apply-to-all where relevant.
+- Detect self-copy, descendant cycles, case-only conflicts, and cross-root rules.
+- Revalidate immediately before mutation to handle external races.
+
+#### 4.3 Add progress and cancellation
+
+- Model long operations with ids, progress, cancellation, and completion status.
+- Keep the tree responsive while operations run.
+- Define cleanup for partial copies and interrupted moves.
+- Coalesce watcher echoes with library-owned mutations without hiding external
+  changes.
+
+#### 4.4 Add recovery and undo
+
+- Make trash the safe default where the platform supports it.
+- Add an operation journal sufficient to undo rename, move, create, and safe
+  delete operations.
+- Report when an operation is not undoable.
+- Reconcile or rescan affected subtrees after partial or ambiguous failure.
+
+### Exit criteria
+
+- OS drag-in copies actual file and directory contents.
+- Errors are visible, attributable to individual items, and never silently
+  converted into empty files.
+- Large operations expose progress and can be cancelled safely.
+- Collision scenarios have deterministic tests on case-sensitive and
+  case-insensitive filesystems.
+- Supported operations have documented undo semantics.
+
+## Phase 5 — IDE workflow integration
+
+### Goal
+
+Move from a capable filesystem tree to a central IDE navigation surface.
+
+### Work
+
+#### 5.1 First-class decorations and statuses
+
+- Source-control states, including staged/conflicted/renamed combinations.
+- Diagnostic severity and aggregate descendant badges.
+- Test status and failure decorations.
+- Dirty/open/active editor state.
+- Excluded, generated, library, and read-only state.
+
+Define merge precedence, accessible text, and update cost for every provider.
+
+#### 5.2 Views and scopes
+
+- Files/Project view.
+- Open Files.
+- Changed Files.
+- Problems.
+- Tests or failed tests.
+- Host-defined saved scopes.
+
+Reuse the same identity and virtualization primitives rather than forking the
+tree component per view.
+
+#### 5.3 History and source-control actions
+
+- File timeline/history provider surface.
+- Compare with previous or selected revision.
+- Revert/restore hooks with confirmation and progress.
+- Context-aware SCM commands.
+
+#### 5.4 Command contribution contract
+
+- Host-contributed commands, submenus, grouping, enablement, and keybindings.
+- Commands receive stable selection, workspace, editor, SCM, and diagnostic
+  context.
+- Async progress, cancellation, failure notification, and telemetry hooks.
+
+### Exit criteria
+
+- The reference playground demonstrates SCM, diagnostics, Open Files, Changed
+  Files, and Problems against live data.
+- Decoration-only churn remains within the browser performance budget.
+- Command contribution is documented and tested without requiring the styled
+  entry point.
+- Every visual status has equivalent accessible text.
+
+## Phase 6 — Provider and platform depth
+
+### Goal
+
+Remove assumptions that limit Mille to a local desktop filesystem and complete
+the accessibility/platform quality matrix.
+
+### Work
+
+#### 6.1 Filesystem provider boundary
+
+- Define URI-first stat, list, read, write, watch, and mutation capabilities.
+- Advertise provider capabilities rather than assuming every operation exists.
+- Model latency, pagination, reconnect, offline state, and eventual consistency.
+- Keep local Rust/native behavior as the optimized default provider.
+
+#### 6.2 Platform matrix
+
+- Windows drive and UNC behavior.
+- macOS Unicode normalization and case-insensitive defaults.
+- Linux case-sensitive and inotify limit behavior.
+- Symlink/junction policies and permission boundaries.
+- Network and remote-like latency/failure simulation.
+
+#### 6.3 Accessibility validation
+
+- Automated axe checks in the Electron/browser suite.
+- VoiceOver on macOS and NVDA on Windows scripted acceptance scenarios.
+- High contrast, zoom, reduced motion, and keyboard-only operation.
+- Announce create, rename, delete, move, errors, loading, and result counts
+  without flooding live regions during event storms.
+
+### Exit criteria
+
+- A non-local test provider renders and supports its advertised mutation set.
+- Unsupported provider operations are disabled with an explanation.
+- Platform-specific filesystem scenarios pass in CI or a documented hardware
+  lane.
+- The accessibility acceptance matrix has no critical open failures.
+
+## Cross-cutting test matrix
+
+Each phase must cover the relevant intersections below.
+
+| Dimension     | Required cases                                                                                              |
+| ------------- | ----------------------------------------------------------------------------------------------------------- |
+| Platform      | macOS arm64/x64 where available, Windows x64, Linux x64; architecture packaging smoke for remaining targets |
+| Filesystem    | Case-sensitive, case-insensitive, symlinks/junctions, read-only, permission denied, disk-full simulation    |
+| Tree scale    | Empty, small, 10k, 100k, 500k synthetic, large single directory, deep hierarchy                             |
+| Update shape  | Single event, coalesced burst, rename storm, recursive subtree, decoration-only, overflow/resync            |
+| View state    | Expanded, collapsed, filtered, searched, selected, renaming, dragging, scrolled                             |
+| Renderer      | Development and packaged Electron; default and reduced motion; representative icon themes                   |
+| Accessibility | Keyboard-only, screen reader, high contrast, zoom, reduced motion                                           |
+
+## Documentation requirements
+
+Every completed phase must update:
+
+- package and embedding documentation;
+- public API declarations and examples;
+- benchmark methodology and reference thresholds;
+- behavior differences by platform/provider;
+- migration notes for settings or API changes;
+- the assessment scores and remaining-gap inventory.
+
+## Recommended first implementation slice
+
+Start with **Watcher Reliability and Build Identity**, not another UI feature.
+
+Implementation is in progress with a measured first result. The new headless
+soak found that nested and whole-directory renames lost descendants: the
+baseline converged on 100/120 operations with 20 misses and p95 67.2 ms across
+successful operations. Preserving directory descendants during rename and
+reconciling create-only rename events moved the identical deterministic plan to
+120/120, zero misses, p50 57.8 ms, p95 65.8 ms, p99 71.7 ms, and max 75.3 ms.
+The completion run passed 1,000/1,000 with zero misses, p50 60.5 ms, p95
+67.2 ms, p99 68.9 ms, max 75.0 ms, and 16.7 sequential operations/s. Full
+engine/UI/type validation is green; CI now repeats the live watcher cases 20
+times and retains the soak report.
+
+### Scope
+
+1. Add runtime diagnostic identity for native core, target, protocol, binding, and
+   TypeScript versions.
+2. Establish a clean local rebuild path and prove which `.node` file loads.
+3. Distinguish unavailable host watching from engine failures and include
+   stage/build diagnostics in reports.
+4. Fix the first point where external events disappear.
+5. Add a deterministic 1,000-operation headless soak using the playground
+   operation-plan library where practical.
+6. Add repeated watcher runs to CI and retain reports.
+
+### Explicitly out of scope for the first slice
+
+- new sort, nesting, or workspace settings;
+- additional animation tuning;
+- source-control or diagnostics views;
+- undo or large-operation progress;
+- remote filesystem providers.
+
+### First-slice completion gate
+
+- All current engine tests pass or have a documented, justified platform skip.
+- The three failing watcher cases pass 20 consecutive local runs.
+- The 1,000-operation headless soak has zero final-state misses.
+- Test and playground output identify the exact native and TypeScript builds.
+- The implementation includes targeted regression tests and updated watcher
+  benchmark documentation.
+
+Completing this slice makes later UI optimization trustworthy: if disk, host,
+mirror, and renderer state are not known to agree, visual smoothness numbers can
+hide correctness failures.

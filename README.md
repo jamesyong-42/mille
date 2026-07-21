@@ -70,14 +70,16 @@ For Electron UtilityProcess host/client wiring, packaging, and performance notes
 
 ## Documentation
 
-|           |                                                                |
-| --------- | -------------------------------------------------------------- |
-| **Site**  | https://jamesyong-42.github.io/mille/                          |
-| **API**   | https://jamesyong-42.github.io/mille/api.html                  |
-| **Icons** | https://jamesyong-42.github.io/mille/icons-preview.html        |
-| Embedding | [`packages/mille/EMBEDDING.md`](./packages/mille/EMBEDDING.md) |
-| Types     | [`packages/mille/api.d.ts`](./packages/mille/api.d.ts)         |
-| Changelog | [`CHANGELOG.md`](./CHANGELOG.md)                               |
+|                       |                                                                                              |
+| --------------------- | -------------------------------------------------------------------------------------------- |
+| **Site**              | https://jamesyong-42.github.io/mille/                                                        |
+| **API**               | https://jamesyong-42.github.io/mille/api.html                                                |
+| **Icons**             | https://jamesyong-42.github.io/mille/icons-preview.html                                      |
+| Embedding             | [`packages/mille/EMBEDDING.md`](./packages/mille/EMBEDDING.md)                               |
+| Types                 | [`packages/mille/api.d.ts`](./packages/mille/api.d.ts)                                       |
+| Changelog             | [`CHANGELOG.md`](./CHANGELOG.md)                                                             |
+| IDE parity assessment | [`planning/IDE_EXPLORER_PARITY_ASSESSMENT.md`](./planning/IDE_EXPLORER_PARITY_ASSESSMENT.md) |
+| IDE parity plan       | [`planning/IDE_EXPLORER_PARITY_PLAN.md`](./planning/IDE_EXPLORER_PARITY_PLAN.md)             |
 
 ## Status
 

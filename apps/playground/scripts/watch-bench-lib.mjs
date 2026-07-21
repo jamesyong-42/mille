@@ -217,3 +217,22 @@ export function summarizeLatencies(values) {
     max: sorted[sorted.length - 1],
   };
 }
+
+export function parseBuildIdentity(value) {
+  if (!value) return null;
+  try {
+    const identity = JSON.parse(value);
+    if (
+      !identity ||
+      typeof identity !== 'object' ||
+      typeof identity.packageVersion !== 'string' ||
+      typeof identity.nativeVersion !== 'string' ||
+      typeof identity.resolvedPath !== 'string'
+    ) {
+      return null;
+    }
+    return identity;
+  } catch {
+    return null;
+  }
+}

@@ -14,6 +14,7 @@
     "bench": "pnpm bench:watch",
     "bench:core": "cargo bench -p mille-bench",
     "bench:watch": "node scripts/watch-bench.mjs",
+    "bench:watch:soak": "node scripts/watch-soak.mjs",
     "lint": "pnpm -r --if-present lint",
     "format": "prettier --write .",
     "format:check": "prettier --check .",

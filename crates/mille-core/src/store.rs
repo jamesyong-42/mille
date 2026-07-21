@@ -488,11 +488,38 @@ impl EntryStore {
             .cloned()
             .ok_or_else(|| FxError::InvalidInput(format!("entry {:?} not found", id)))?;
 
-        if entry.kind == EntryKind::Directory {
+        let old_path = self
+            .path_to_id
+            .iter()
+            .find(|kv| *kv.value() == id)
+            .map(|kv| kv.key().clone())
+            .ok_or_else(|| FxError::InternalBug(format!("entry {:?} has no indexed path", id)))?;
+        if old_path.parent() != new_path.parent() {
             return Err(FxError::Unsupported(
-                "recursive directory rename deferred to Phase 2 walker".into(),
+                "EntryStore::rename only supports moves within the same parent".into(),
             ));
         }
+
+        // Capture every known descendant mapping before publishing the renamed
+        // entry. Entries store parent ids + basenames rather than full paths,
+        // so only the renamed root record changes; descendant ids and records
+        // remain stable while their reverse-index prefixes move atomically as a
+        // group. This is O(known subtree), not O(on-disk subtree).
+        let path_updates: Vec<(PathBuf, EntryId, PathBuf)> = if entry.kind == EntryKind::Directory {
+            self.path_to_id
+                .iter()
+                .filter_map(|kv| {
+                    let path = kv.key();
+                    if path.as_path() != old_path && !path.starts_with(&old_path) {
+                        return None;
+                    }
+                    let relative = path.strip_prefix(&old_path).ok()?;
+                    Some((path.clone(), *kv.value(), new_path.join(relative)))
+                })
+                .collect()
+        } else {
+            vec![(old_path.clone(), id, new_path.clone())]
+        };
 
         let new_name = new_path
             .file_name()
@@ -540,18 +567,17 @@ impl EntryStore {
         let new_tree_version = next.tree_version;
         self.inner.store(Arc::new(next));
 
-        // path_to_id update trails snapshot publish, matching insert()'s ordering.
-        let old_path = self
-            .path_to_id
-            .iter()
-            .find(|kv| *kv.value() == id)
-            .map(|kv| kv.key().clone());
-        if let Some(p) = old_path {
-            self.path_to_id.remove(&p);
+        // path_to_id update trails snapshot publish, matching insert()'s
+        // ordering. Remove the complete old prefix before installing the new
+        // one so no stale descendant aliases survive a directory rename.
+        for (old, _, _) in &path_updates {
+            self.path_to_id.remove(old);
         }
-        self.path_to_id.insert(new_path, id);
+        for (_, entry_id, new) in path_updates {
+            self.path_to_id.insert(new, entry_id);
+        }
 
-        // Leaf rename: parent unchanged, so reparented_ids stays empty.
+        // Same-parent rename: parent unchanged, so reparented_ids stays empty.
         self.record_mutation(prev_tree_version, new_tree_version, |cs| {
             cs.changed_ids.insert(id);
         });
@@ -677,11 +703,28 @@ mod tests {
     }
 
     #[test]
-    fn rename_directory_is_unsupported_in_phase1() {
+    fn rename_directory_preserves_descendant_ids_and_path_mappings() {
         let s = EntryStore::new();
-        let id = s.insert("/d".into(), dir("d", None)).unwrap();
-        let err = s.rename(id, "/e".into()).unwrap_err();
-        assert_eq!(err.code(), crate::error::ErrorCode::EUNSUPPORTED);
+        let root = s.insert("/r".into(), dir("r", None)).unwrap();
+        let directory = s.insert("/r/d".into(), dir("d", Some(root))).unwrap();
+        let child = s
+            .insert("/r/d/child.txt".into(), leaf("child.txt", Some(directory)))
+            .unwrap();
+
+        s.rename(directory, "/r/e".into()).unwrap();
+
+        assert!(s.get_by_path(Path::new("/r/d")).is_none());
+        assert!(s.get_by_path(Path::new("/r/d/child.txt")).is_none());
+        assert_eq!(
+            s.get_by_path(Path::new("/r/e")).map(|e| e.id),
+            Some(directory)
+        );
+        assert_eq!(
+            s.get_by_path(Path::new("/r/e/child.txt")).map(|e| e.id),
+            Some(child)
+        );
+        assert_eq!(s.get_by_id(directory).unwrap().name, "e");
+        assert_eq!(s.get_by_id(child).unwrap().parent_id, Some(directory));
     }
 
     #[test]

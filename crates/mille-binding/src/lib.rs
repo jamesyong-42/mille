@@ -25,3 +25,30 @@ mod watch_runtime;
 pub fn version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
 }
+
+/// Runtime identity for the native artifact that Node actually loaded.
+///
+/// The npm package and Rust crate are versioned independently today, so a
+/// version string alone cannot tell a benchmark whether it is exercising a
+/// fresh local debug build or a published release binary. Keep this payload
+/// deliberately small and stable so test/benchmark reports can always record
+/// the implementation under test.
+#[napi(object)]
+pub struct NativeBuildInfo {
+    pub crate_version: String,
+    pub profile: String,
+    pub target: String,
+}
+
+#[napi(js_name = "buildInfo")]
+pub fn build_info() -> NativeBuildInfo {
+    NativeBuildInfo {
+        crate_version: env!("CARGO_PKG_VERSION").to_string(),
+        profile: if cfg!(debug_assertions) {
+            "debug".to_string()
+        } else {
+            "release".to_string()
+        },
+        target: format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH),
+    }
+}

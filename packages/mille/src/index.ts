@@ -5,7 +5,8 @@
 // add FileSystemError, the FileExplorer wrapper, MirrorSnapshot, and
 // the React adapter.
 
-import { native } from './native.js';
+import { native, nativeLoadInfo, type NativeLoadSource } from './native.js';
+import { PROTOCOL_VERSION } from './protocol.js';
 
 export { native };
 export { FileSystemError, isFileSystemError } from './errors.js';
@@ -40,4 +41,44 @@ export { connectFileExplorer, PortFileExplorer, PortMirrorSnapshot } from './cli
  */
 export function version(): string {
   return native.version();
+}
+
+export interface BuildIdentity {
+  readonly packageVersion: string;
+  readonly nativeVersion: string;
+  readonly nativeProfile: string;
+  readonly nativeTarget: string;
+  readonly protocolVersion: number;
+  readonly platform: NodeJS.Platform;
+  readonly arch: string;
+  readonly source: NativeLoadSource;
+  readonly resolvedPath: string;
+}
+
+let cachedBuildIdentity: BuildIdentity | null = null;
+
+/**
+ * Describe the exact TypeScript package and native artifact loaded by this
+ * process. Benchmarks and bug reports should record this payload so a stale
+ * local `.node` file cannot masquerade as the current source implementation.
+ */
+export function buildIdentity(): BuildIdentity {
+  if (cachedBuildIdentity !== null) return cachedBuildIdentity;
+  const nativeInfo = native.buildInfo?.() ?? {
+    crateVersion: native.version(),
+    profile: 'unknown',
+    target: `${process.platform}-${process.arch}`,
+  };
+  cachedBuildIdentity = Object.freeze({
+    packageVersion: nativeLoadInfo.packageVersion,
+    nativeVersion: nativeInfo.crateVersion,
+    nativeProfile: nativeInfo.profile,
+    nativeTarget: nativeInfo.target,
+    protocolVersion: PROTOCOL_VERSION,
+    platform: process.platform,
+    arch: process.arch,
+    source: nativeLoadInfo.source,
+    resolvedPath: nativeLoadInfo.resolvedPath,
+  });
+  return cachedBuildIdentity;
 }

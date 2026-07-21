@@ -139,8 +139,17 @@ test('external directory rename/delete never leaves dangling descendants', async
       Boolean,
       'external directory rename did not reconcile',
     );
-    assert.equal(fx.getSnapshot().getById(oldEntry.id), null);
-    assert.equal(fx.getSnapshot().getById(oldChildId), null);
+    const renamedChild = childByName(fx, renamed.id, 'child.txt');
+    assert.ok(renamedChild, 'known descendants must remain visible after directory rename');
+    if (renamed.id === oldEntry.id) {
+      assert.equal(renamedChild.id, oldChildId, 'paired rename must preserve descendant EntryId');
+    } else {
+      // Some platforms report directory rename as delete + create. In that
+      // event shape ids are reallocated, but the removed subtree must not
+      // leave aliases or dangling descendants.
+      assert.equal(fx.getSnapshot().getById(oldEntry.id), null);
+      assert.equal(fx.getSnapshot().getById(oldChildId), null);
+    }
 
     await rm(newDir, { recursive: true });
     await waitFor(

@@ -185,6 +185,28 @@ test('root expands by default and renders children when the engine publishes the
   });
 
   assert.equal(container.querySelectorAll('[role="treeitem"]').length, 3);
+  assert.equal(
+    container.querySelector('[role="tree"]')?.getAttribute('data-mille-layout-animating'),
+    'true',
+  );
+  assert.equal(
+    container.querySelector('[data-mille-row-id="2"]')?.getAttribute('data-mille-entering'),
+    'true',
+    'new filesystem rows should receive the enter-animation marker',
+  );
+
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 190));
+  });
+  assert.equal(
+    container.querySelector('[role="tree"]')?.getAttribute('data-mille-layout-animating'),
+    null,
+    'layout transitions must switch off before ordinary scrolling resumes',
+  );
+  assert.equal(
+    container.querySelector('[data-mille-row-id="2"]')?.getAttribute('data-mille-entering'),
+    null,
+  );
 
   await act(async () => { root.unmount(); });
   container.remove();

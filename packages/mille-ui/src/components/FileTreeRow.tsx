@@ -19,7 +19,8 @@
 // Wrapped in `React.memo` keyed on identifying props; re-renders only
 // when ids / versions / flags change.
 
-import { memo, type ReactElement, type ReactNode } from 'react';
+import { memo, type CSSProperties, type ReactElement, type ReactNode } from 'react';
+import type { VisibleRow } from '@vibecook/mille';
 import * as ContextMenu from '@radix-ui/react-context-menu';
 import { FileIcon, defaultIconTheme } from '../icons/index.js';
 import { useFileTreeRow } from '../hooks/useFileTreeRow.js';
@@ -96,20 +97,69 @@ function FileTreeRowImpl(props: FileTreeRowProps): ReactElement {
  * the memo on every tree re-render and turn a decoration-only snapshot
  * bump into a 500-row re-render storm (SPEC §12 target: < 4 ms).
  *
- * `style` is also deliberately NOT in the equality check — the
- * virtualizer supplies a fresh style object per render, but its top /
- * transform reflects position, which is unrelated to the row's
- * identity. The outer FileTree always structures the list so rows that
- * actually moved get a changed `row` identity.
+ * Snapshot adapters may materialize fresh `VisibleRow` objects on each
+ * tree version. Comparing their render-relevant fields keeps an unrelated
+ * filesystem change from repainting the entire viewport. Position and
+ * ARIA metadata are compared separately so inserts/reorders still move and
+ * re-announce every affected row correctly.
  *
  * The `decorations` identity check is the load-bearing Phase 10 piece:
  * `mergeDecorations` returns a stable reference when the underlying
  * `readonly Decoration[]` is unchanged, so decoration-only snapshot
  * bumps only disturb rows whose decorations actually changed.
  */
-export const FileTreeRow = memo(FileTreeRowImpl, (prev, next) => {
+function arraysEqual(
+  a: readonly string[] | undefined,
+  b: readonly string[] | undefined,
+): boolean {
+  if (a === b) return true;
+  if (a === undefined || b === undefined || a.length !== b.length) return false;
+  for (let index = 0; index < a.length; index += 1) {
+    if (a[index] !== b[index]) return false;
+  }
+  return true;
+}
+
+function visibleRowsEqual(a: VisibleRow, b: VisibleRow): boolean {
   return (
-    prev.row === next.row &&
+    a === b ||
+    (a.id === b.id &&
+      a.parentId === b.parentId &&
+      a.name === b.name &&
+      a.kind === b.kind &&
+      a.size === b.size &&
+      a.mtimeMs === b.mtimeMs &&
+      a.ctimeMs === b.ctimeMs &&
+      a.symlinkTargetIsDir === b.symlinkTargetIsDir &&
+      arraysEqual(a.pathSegments, b.pathSegments) &&
+      a.isIgnored === b.isIgnored &&
+      a.isReadonly === b.isReadonly &&
+      a.isHidden === b.isHidden &&
+      a.depth === b.depth &&
+      a.hasChildren === b.hasChildren &&
+      a.isExpanded === b.isExpanded &&
+      a.pending === b.pending)
+  );
+}
+
+function stylesEqual(a: CSSProperties, b: CSSProperties): boolean {
+  if (a === b) return true;
+  const aKeys = Object.keys(a) as Array<keyof CSSProperties>;
+  const bKeys = Object.keys(b) as Array<keyof CSSProperties>;
+  if (aKeys.length !== bKeys.length) return false;
+  for (const key of aKeys) {
+    if (a[key] !== b[key]) return false;
+  }
+  return true;
+}
+
+/** @internal Exported for comparator regression tests. */
+export function areFileTreeRowPropsEqual(
+  prev: FileTreeRowProps,
+  next: FileTreeRowProps,
+): boolean {
+  return (
+    visibleRowsEqual(prev.row, next.row) &&
     prev.depth === next.depth &&
     prev.selected === next.selected &&
     prev.focused === next.focused &&
@@ -118,7 +168,14 @@ export const FileTreeRow = memo(FileTreeRowImpl, (prev, next) => {
     prev.pending === next.pending &&
     prev.iconTheme === next.iconTheme &&
     prev.className === next.className &&
+    stylesEqual(prev.style, next.style) &&
+    prev.ariaProps['aria-level'] === next.ariaProps['aria-level'] &&
+    prev.ariaProps['aria-setsize'] === next.ariaProps['aria-setsize'] &&
+    prev.ariaProps['aria-posinset'] === next.ariaProps['aria-posinset'] &&
+    prev.ariaProps['aria-selected'] === next.ariaProps['aria-selected'] &&
+    prev.ariaProps['aria-expanded'] === next.ariaProps['aria-expanded'] &&
     prev.isStickyRoot === next.isStickyRoot &&
+    prev.entering === next.entering &&
     prev.cut === next.cut &&
     prev.hidden === next.hidden &&
     prev.decorations === next.decorations &&
@@ -133,5 +190,7 @@ export const FileTreeRow = memo(FileTreeRowImpl, (prev, next) => {
     prev.dropTargetPosition === next.dropTargetPosition &&
     prev.disableDragDrop === next.disableDragDrop
   );
-});
+}
+
+export const FileTreeRow = memo(FileTreeRowImpl, areFileTreeRowPropsEqual);
 FileTreeRow.displayName = 'FileTreeRow';

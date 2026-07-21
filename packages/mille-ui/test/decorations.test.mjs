@@ -8,7 +8,7 @@
 //   5. Decoration-only snapshot bump on row A → row A re-renders.
 //   6. Decoration-only snapshot bump on row A → row B does NOT
 //      re-render (render-count spy inside rowRenderer).
-//   7. Tree-version bump re-renders all visible rows (sanity).
+//   7. Tree-version bump re-renders only rows whose render data changed.
 //   8. `fontWeight: 0` → row carries data-mille-decoration-ignored.
 //
 // Test 6 is the critical correctness test. If the row memo doesn't
@@ -52,8 +52,20 @@ if (typeof globalThis.ResizeObserver === 'undefined') {
 const { createElement, act, memo } = await import('react');
 const { createRoot } = await import('react-dom/client');
 
-const { FileTree, FileDecorations, mergeDecorations, EMPTY_DECORATION } =
+const {
+  FileTree,
+  FileTreeProvider,
+  FileDecorations,
+  mergeDecorations,
+  EMPTY_DECORATION,
+} =
   await import('../dist/index.js');
+const { createCommandRegistry, defaultCommands } = await import(
+  '../dist/commands/index.js'
+);
+const { areFileTreeRowPropsEqual } = await import(
+  '../dist/components/FileTreeRow.js'
+);
 const { createFakeEngine, createFakeSnapshot } = await import(
   '../dist/testing.js'
 );
@@ -123,9 +135,6 @@ function mount() {
 // so we count *actual* row renders (not tree-level re-renders that
 // propagated before memoization).
 //
-// Comparator mirrors FileTreeRow's Phase-10 comparator: compares
-// data-identifying props (row, depth, flags, decorations) and ignores
-// callback identity + style (which the parent tree recreates freely).
 function makeCountingRowRenderer(FileTreeRowImport) {
   const counts = new Map(); // id → number
   const inner = (props) => {
@@ -133,25 +142,7 @@ function makeCountingRowRenderer(FileTreeRowImport) {
     return createElement(FileTreeRowImport, props);
   };
   inner.displayName = 'CountingRowRendererInner';
-  const wrapper = memo(inner, (prev, next) => {
-    return (
-      prev.row === next.row &&
-      prev.depth === next.depth &&
-      prev.selected === next.selected &&
-      prev.focused === next.focused &&
-      prev.expanded === next.expanded &&
-      prev.hasChildren === next.hasChildren &&
-      prev.pending === next.pending &&
-      prev.iconTheme === next.iconTheme &&
-      prev.className === next.className &&
-      prev.isStickyRoot === next.isStickyRoot &&
-      prev.decorations === next.decorations &&
-      prev.renameTargetId === next.renameTargetId &&
-      prev.renameError === next.renameError &&
-      prev.disableContextMenu === next.disableContextMenu &&
-      prev.contextMenuContent === next.contextMenuContent
-    );
-  });
+  const wrapper = memo(inner, areFileTreeRowPropsEqual);
   wrapper.displayName = 'CountingRowRenderer';
   return { wrapper, counts };
 }
@@ -412,12 +403,13 @@ test('decoration-only bump on row A does NOT re-render row B', async () => {
   container.remove();
 });
 
-// ─── Test 7: tree-version bump re-renders every visible row ───────────
+// ─── Test 7: tree-version bump isolates changed rows ──────────────────
 
-test('tree-version bump re-renders every visible row', async () => {
+test('tree-version bump re-renders only the changed visible row', async () => {
   const fx = createFakeEngine();
   const rows = sampleRows();
   fx.emitDelta(createFakeSnapshot({ rows, treeVersion: 1 }));
+  const commands = createCommandRegistry(defaultCommands);
 
   const { FileTreeRow } = await import('../dist/index.js');
   const { wrapper: rowRenderer, counts } = makeCountingRowRenderer(FileTreeRow);
@@ -427,15 +419,18 @@ test('tree-version bump re-renders every visible row', async () => {
 
   await act(async () => {
     root.render(
-      createElement(FileTree, {
-        fx,
-        ariaLabel: 'Tree bump',
-        rowHeight: 22,
-        overscan: 10,
-        rowRenderer,
-        __testObserveElementRect: obs.observeElementRect,
-        __testObserveElementOffset: obs.observeElementOffset,
-      }),
+      createElement(
+        FileTreeProvider,
+        { fx, commands },
+        createElement(FileTree, {
+          ariaLabel: 'Tree bump',
+          rowHeight: 22,
+          overscan: 10,
+          rowRenderer,
+          __testObserveElementRect: obs.observeElementRect,
+          __testObserveElementOffset: obs.observeElementOffset,
+        }),
+      ),
     );
   });
 
@@ -446,21 +441,29 @@ test('tree-version bump re-renders every visible row', async () => {
   ]);
   for (const id of [1, 2, 3]) assert.ok(base.get(id) >= 1);
 
-  // Emit a brand-new snapshot with a higher treeVersion. Row identities
-  // change (fresh rows array), so every row's memo must trigger a new
-  // render.
+  // Emit a brand-new snapshot with fresh row objects, changing only row 2.
+  // Snapshot materialization alone must not repaint rows 1 and 3.
   await act(async () => {
     const rows2 = sampleRows();
+    rows2[1] = { ...rows2[1], name: 'b-renamed.ts', mtimeMs: 1 };
     fx.emitDelta(createFakeSnapshot({ rows: rows2, treeVersion: 2 }));
   });
 
   for (const id of [1, 2, 3]) {
     const before = base.get(id);
     const after = counts.get(id) ?? 0;
-    assert.ok(
-      after > before,
-      `row ${id} must re-render on tree-version bump; before=${before}, after=${after}`,
-    );
+    if (id === 2) {
+      assert.ok(
+        after > before,
+        `changed row ${id} must re-render; before=${before}, after=${after}`,
+      );
+    } else {
+      assert.equal(
+        after,
+        before,
+        `unchanged row ${id} must not re-render; before=${before}, after=${after}`,
+      );
+    }
   }
 
   await act(async () => { root.unmount(); });

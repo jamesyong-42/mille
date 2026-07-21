@@ -135,6 +135,8 @@ export interface FileTreeRowProps {
   readonly style: CSSProperties;
   readonly ariaProps: AriaRowProps;
   readonly isStickyRoot?: boolean;
+  /** Internal file-change enter animation marker. */
+  readonly entering?: boolean;
   /**
    * Phase 7 — whether this row's id is in the clipboard `cutIds` set.
    * Rendered as `data-mille-cut="true"`; the default CSS dims the row

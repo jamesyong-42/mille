@@ -214,6 +214,7 @@ export function useFileTreeRow(props: FileTreeRowProps): UseFileTreeRowResult {
     style,
     ariaProps,
     isStickyRoot,
+    entering,
     cut,
     hidden,
     onChevronClick,
@@ -353,6 +354,7 @@ export function useFileTreeRow(props: FileTreeRowProps): UseFileTreeRowResult {
     if (focused) out['data-mille-focused'] = t;
     if (pending) out['data-mille-pending'] = t;
     if (isStickyRoot) out['data-mille-sticky-root'] = t;
+    if (entering) out['data-mille-entering'] = t;
     if (cut) out['data-mille-cut'] = t;
     if (hidden) out['data-mille-hidden'] = t;
     if (dragging) out['data-mille-dragging'] = t;
@@ -401,6 +403,7 @@ export function useFileTreeRow(props: FileTreeRowProps): UseFileTreeRowResult {
     expanded,
     pending,
     isStickyRoot,
+    entering,
     cut,
     hidden,
     dragging,

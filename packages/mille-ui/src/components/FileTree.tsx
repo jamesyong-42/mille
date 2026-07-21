@@ -17,10 +17,12 @@
 import {
   forwardRef,
   useCallback,
+  useDeferredValue,
   useEffect,
   useImperativeHandle,
   useMemo,
   useRef,
+  useState,
   type CSSProperties,
   type FocusEvent as ReactFocusEvent,
   type ForwardedRef,
@@ -153,7 +155,13 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
   // Cast through unknown: FileTreeFx from context is a narrower shape
   // but structurally compatible with the subset we need here.
   const fx = ctx.fx as unknown as FileTreeEngine;
-  const snapshot = ctx.snapshot as unknown as FileTreeSnapshotLike;
+  const latestSnapshot = ctx.snapshot as unknown as FileTreeSnapshotLike;
+  // External-store notifications are urgent by React design. Defer the
+  // expensive virtual tree projection so bursts of watcher deltas can be
+  // coalesced in the background while the last committed tree stays put.
+  // This avoids painting transient intermediate filesystem states without
+  // delaying the store itself or any non-React consumers.
+  const snapshot = useDeferredValue(latestSnapshot);
   const commandsHandle = ctx.commands;
 
   // Rename + create state. Drives the inline FileRenameInput on the
@@ -266,6 +274,47 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
     if (count === 0) return [];
     return snapshot.visibleRows({ expanded, offset: 0, limit: count });
   }, [snapshot, expanded, count]);
+
+  const previousTreeVersionRef = useRef(snapshot.treeVersion);
+  const previousVisibleIdsRef = useRef<ReadonlySet<EntryId>>(
+    new Set(visibleRows.map((row) => row.id)),
+  );
+  const [layoutAnimation, setLayoutAnimation] = useState<{
+    readonly active: boolean;
+    readonly enteringIds: ReadonlySet<EntryId>;
+  }>(() => ({ active: false, enteringIds: new Set<EntryId>() }));
+  const treeVersionChanged = previousTreeVersionRef.current !== snapshot.treeVersion;
+  const newlyEnteringIds = useMemo<ReadonlySet<EntryId>>(() => {
+    if (!treeVersionChanged || previousVisibleIdsRef.current.size === 0) {
+      return new Set<EntryId>();
+    }
+    const ids = new Set<EntryId>();
+    for (const row of visibleRows) {
+      if (!previousVisibleIdsRef.current.has(row.id)) ids.add(row.id);
+    }
+    return ids;
+  }, [treeVersionChanged, visibleRows]);
+  const layoutAnimationActive = treeVersionChanged || layoutAnimation.active;
+  const enteringIds = treeVersionChanged
+    ? newlyEnteringIds
+    : layoutAnimation.enteringIds;
+
+  useEffect(() => {
+    previousVisibleIdsRef.current = new Set(visibleRows.map((row) => row.id));
+  }, [visibleRows]);
+
+  useEffect(() => {
+    if (previousTreeVersionRef.current === snapshot.treeVersion) return;
+    previousTreeVersionRef.current = snapshot.treeVersion;
+    setLayoutAnimation({ active: true, enteringIds: newlyEnteringIds });
+    const timeout = setTimeout(() => {
+      setLayoutAnimation({ active: false, enteringIds: new Set<EntryId>() });
+    }, 170);
+    return () => clearTimeout(timeout);
+    // `newlyEnteringIds` belongs to this exact treeVersion render. A state
+    // render must not restart the timer for the same version.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [snapshot.treeVersion]);
 
   // ─── Keyboard helpers ──────────────────────────────────────────────
 
@@ -536,36 +585,55 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
     fullRegistry !== null &&
     typeof (fullRegistry as unknown as { all?: unknown }).all === 'function';
 
+  const menuSnapshotRef = useRef(snapshot);
+  useEffect(() => {
+    menuSnapshotRef.current = snapshot;
+  }, [snapshot]);
   const menuCommandContext = useMemo<CommandContext | null>(() => {
     if (!hasFullRegistry) return null;
     const focusedId = selection.focusedId;
-    const focusedEntry: Entry | null =
-      focusedId !== null ? snapshot.getById(focusedId) : null;
-    const selectedEntries: Entry[] = [];
-    for (const id of selection.selectedIds) {
-      const e = snapshot.getById(id);
-      if (e !== null) selectedEntries.push(e);
-    }
-    return {
+    const selectedIds = selection.selectedIds;
+    // Snapshot-only watcher updates should not recreate the same menu
+    // subtree once per visible row. Getters keep the command data live at
+    // menu-open/dispatch time while the context object remains stable until
+    // actual UI command state (focus, selection, clipboard, rename) changes.
+    return Object.defineProperties({
       // `fx` is structurally richer than the Engine surface we use;
       // for menu population we only need the snapshot + state, but
       // hosts' custom commands may rely on the full engine.
       fx: fx as unknown as CommandContext['fx'],
-      snapshot: snapshot as unknown as CommandContext['snapshot'],
       focusedId,
-      focusedEntry,
-      selectedIds: selection.selectedIds,
-      selectedEntries,
-      isMultiSelect: multiSelect && selection.selectedIds.size > 1,
+      selectedIds,
+      isMultiSelect: multiSelect && selectedIds.size > 1,
       isRenaming: renameState.renameTargetId !== null,
       host: {},
       cutIds: clipboard.cutIds,
       copyIds: clipboard.copyIds,
-    };
+    }, {
+      snapshot: {
+        enumerable: true,
+        get: () => menuSnapshotRef.current as unknown as CommandContext['snapshot'],
+      },
+      focusedEntry: {
+        enumerable: true,
+        get: (): Entry | null =>
+          focusedId !== null ? menuSnapshotRef.current.getById(focusedId) : null,
+      },
+      selectedEntries: {
+        enumerable: true,
+        get: (): Entry[] => {
+          const entries: Entry[] = [];
+          for (const id of selectedIds) {
+            const entry = menuSnapshotRef.current.getById(id);
+            if (entry !== null) entries.push(entry);
+          }
+          return entries;
+        },
+      },
+    }) as CommandContext;
   }, [
     hasFullRegistry,
     fx,
-    snapshot,
     selection.focusedId,
     selection.selectedIds,
     multiSelect,
@@ -1086,6 +1154,7 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
             : 'mille-tree'
       }
       data-mille-tree-state="ready"
+      data-mille-layout-animating={layoutAnimationActive ? 'true' : undefined}
       data-mille-filter-active={filterActive && searchMode === 'filter' ? 'true' : undefined}
       style={scrollerStyle}
       onKeyDown={onKeyDown}
@@ -1153,6 +1222,7 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
             style: rowStyle,
             ariaProps: aria,
             isStickyRoot,
+            entering: enteringIds.has(row.id),
             cut: isCut,
             hidden: isHidden,
             renameTargetId: renameState.renameTargetId,

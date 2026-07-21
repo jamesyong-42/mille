@@ -99,7 +99,8 @@ function dispatchClick(el) {
 test('clicking a chevron calls fx.setExpanded with the row id', async () => {
   const fx = createFakeEngine();
   const rows = [
-    makeRow({ id: 1, parentId: null, name: 'root', depth: 0, hasChildren: true, isExpanded: false }),
+    makeRow({ id: 1, parentId: null, name: 'root', depth: 0, hasChildren: true, isExpanded: true }),
+    makeRow({ id: 2, parentId: 1, name: 'folder', depth: 1, hasChildren: true, isExpanded: false }),
   ];
   fx.emitDelta(createFakeSnapshot({ rows, treeVersion: 1 }));
 
@@ -119,7 +120,9 @@ test('clicking a chevron calls fx.setExpanded with the row id', async () => {
     );
   });
 
-  const row = container.querySelector('[role="treeitem"]');
+  fx.calls.setExpanded.length = 0;
+
+  const row = container.querySelectorAll('[role="treeitem"]')[1];
   assert.ok(row);
   const chevron = row.querySelector('button[data-mille-chevron]');
   assert.ok(chevron, 'chevron button missing');
@@ -133,7 +136,7 @@ test('clicking a chevron calls fx.setExpanded with the row id', async () => {
     `expected setExpanded recorded; got ${fx.calls.setExpanded.length}`,
   );
   const firstCall = fx.calls.setExpanded[0];
-  assert.deepEqual(Array.from(firstCall.add), [1]);
+  assert.deepEqual(Array.from(firstCall.add), [2]);
 
   await act(async () => { root.unmount(); });
   container.remove();
@@ -141,7 +144,7 @@ test('clicking a chevron calls fx.setExpanded with the row id', async () => {
 
 // ─── Test B: emitDelta adding children → DOM grows ────────────────────
 
-test('after fx publishes children, the tree renders them', async () => {
+test('root expands by default and renders children when the engine publishes them', async () => {
   const fx = createFakeEngine();
   const initial = [
     makeRow({ id: 1, parentId: null, name: 'root', depth: 0, hasChildren: true, isExpanded: false }),
@@ -166,9 +169,10 @@ test('after fx publishes children, the tree renders them', async () => {
 
   assert.equal(container.querySelectorAll('[role="treeitem"]').length, 1);
 
-  // Click chevron to trigger local expansion.
-  const chevron = container.querySelector('button[data-mille-chevron]');
-  await act(async () => { dispatchClick(chevron); });
+  assert.ok(
+    fx.calls.setExpanded.some((call) => Array.from(call.add).includes(1)),
+    'expected the workspace root to be expanded automatically',
+  );
 
   // Engine publishes the expanded snapshot with children.
   const expanded = [
@@ -181,6 +185,56 @@ test('after fx publishes children, the tree renders them', async () => {
   });
 
   assert.equal(container.querySelectorAll('[role="treeitem"]').length, 3);
+
+  await act(async () => { root.unmount(); });
+  container.remove();
+});
+
+test('a root arriving asynchronously expands once and stays collapsed after user action', async () => {
+  const fx = createFakeEngine();
+  const { container, root } = mount();
+  const obs = makeObservers();
+
+  await act(async () => {
+    root.render(
+      createElement(FileTree, {
+        fx,
+        ariaLabel: 'Async root',
+        rowHeight: 22,
+        overscan: 5,
+        __testObserveElementRect: obs.observeElementRect,
+        __testObserveElementOffset: obs.observeElementOffset,
+      }),
+    );
+  });
+  assert.equal(fx.calls.setExpanded.length, 0);
+
+  const rows = [
+    makeRow({ id: 7, parentId: null, name: 'root', depth: 0, hasChildren: true, isExpanded: false }),
+  ];
+  await act(async () => {
+    fx.emitDelta(createFakeSnapshot({ rows, treeVersion: 1 }));
+  });
+  assert.ok(
+    fx.calls.setExpanded.some((call) => Array.from(call.add).includes(7)),
+    'expected an asynchronously discovered root to expand',
+  );
+
+  fx.calls.setExpanded.length = 0;
+  const chevron = container.querySelector('button[data-mille-chevron]');
+  assert.ok(chevron);
+  await act(async () => { dispatchClick(chevron); });
+  assert.deepEqual(fx.calls.setExpanded, [{ add: [], remove: [7] }]);
+
+  fx.calls.setExpanded.length = 0;
+  await act(async () => {
+    fx.emitDelta(createFakeSnapshot({ rows, treeVersion: 2 }));
+  });
+  assert.equal(
+    fx.calls.setExpanded.length,
+    0,
+    'a later snapshot must not reopen a root the user collapsed',
+  );
 
   await act(async () => { root.unmount(); });
   container.remove();
@@ -304,13 +358,13 @@ test('chevron click dispatches tree.expand through the command registry', async 
   await act(async () => { dispatchClick(chevron); });
 
   assert.equal(dispatched.length, 1);
-  assert.equal(dispatched[0].id, 'tree.expand');
+  assert.equal(dispatched[0].id, 'tree.collapse');
   assert.deepEqual(dispatched[0].args, { id: 42 });
 
-  // Second click (now locally expanded) should dispatch collapse.
+  // The second click expands the root again.
   await act(async () => { dispatchClick(chevron); });
   assert.equal(dispatched.length, 2);
-  assert.equal(dispatched[1].id, 'tree.collapse');
+  assert.equal(dispatched[1].id, 'tree.expand');
   assert.deepEqual(dispatched[1].args, { id: 42 });
 
   await act(async () => { root.unmount(); });

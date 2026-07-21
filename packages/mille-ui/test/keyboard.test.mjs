@@ -505,7 +505,8 @@ test('Escape clears selection', async () => {
 test('ArrowRight on a collapsed folder expands it; second press moves to first child', async () => {
   const fx = createFakeEngine();
   const rows = [
-    makeRow({ id: 1, parentId: null, name: 'root', depth: 0, hasChildren: true, isExpanded: false }),
+    makeRow({ id: 1, parentId: null, name: 'root', depth: 0, hasChildren: true, isExpanded: true }),
+    makeRow({ id: 2, parentId: 1, name: 'folder', depth: 1, hasChildren: true, isExpanded: false }),
   ];
   fx.emitDelta(createFakeSnapshot({ rows, treeVersion: 1 }));
 
@@ -527,12 +528,13 @@ test('ArrowRight on a collapsed folder expands it; second press moves to first c
 
   const tree = treeSelector(container);
   const rowsEls = container.querySelectorAll('[role="treeitem"]');
-  await act(async () => { clickRow(rowsEls[0]); });
+  await act(async () => { clickRow(rowsEls[1]); });
+  fx.calls.setExpanded.length = 0;
 
   // First ArrowRight — expand.
   await act(async () => { fireKey(tree, 'ArrowRight'); });
   assert.ok(
-    fx.calls.setExpanded.length >= 1,
+    fx.calls.setExpanded.some((call) => Array.from(call.add).includes(2)),
     `expected setExpanded recorded; got ${fx.calls.setExpanded.length}`,
   );
 
@@ -541,15 +543,16 @@ test('ArrowRight on a collapsed folder expands it; second press moves to first c
     fx.emitDelta(createFakeSnapshot({
       rows: [
         makeRow({ id: 1, parentId: null, name: 'root', depth: 0, hasChildren: true, isExpanded: true }),
-        makeRow({ id: 2, parentId: 1, name: 'child', depth: 1, kind: 0 }),
+        makeRow({ id: 2, parentId: 1, name: 'folder', depth: 1, hasChildren: true, isExpanded: true }),
+        makeRow({ id: 3, parentId: 2, name: 'child', depth: 2, kind: 0 }),
       ],
       treeVersion: 2,
     }));
   });
 
-  // Second ArrowRight — focus first child (row 2).
+  // Second ArrowRight — focus first child (row 3).
   await act(async () => { fireKey(tree, 'ArrowRight'); });
-  assert.equal(focusedId(container), 2);
+  assert.equal(focusedId(container), 3);
 
   await act(async () => { root.unmount(); });
   container.remove();
@@ -581,14 +584,8 @@ test('ArrowLeft on an expanded folder collapses it', async () => {
 
   const tree = treeSelector(container);
   const rowsEls = container.querySelectorAll('[role="treeitem"]');
-  // Click the root to expand locally.
+  // Roots start expanded; clicking only establishes keyboard focus.
   await act(async () => { clickRow(rowsEls[0]); });
-  // Manually expand by clicking the chevron so the local Set has id 1.
-  const chevron = rowsEls[0].querySelector('button[data-mille-chevron]');
-  assert.ok(chevron);
-  await act(async () => {
-    chevron.dispatchEvent(new hdWindow.MouseEvent('click', { bubbles: true }));
-  });
   fx.calls.setExpanded.length = 0;
 
   await act(async () => { fireKey(tree, 'ArrowLeft'); });

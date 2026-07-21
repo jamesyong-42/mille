@@ -190,27 +190,10 @@ function Explorer({ fx, root }: { fx: PortFileExplorer; root: string }): ReactEl
     };
   }, [iconThemeId]);
 
-  // Expand workspace roots once (Project view depth-1).
-  const expandedRootsRef = useRef(false);
-  useEffect(() => {
-    expandedRootsRef.current = false;
-    const tryExpand = (): void => {
-      if (expandedRootsRef.current) return;
-      const roots = fx.getSnapshot().roots();
-      if (roots.length === 0) return;
-      expandedRootsRef.current = true;
-      fx.setExpanded({ add: roots.map((r) => r.id) });
-    };
-    tryExpand();
-    const sub = fx.on('change', tryExpand);
-    return () => sub.dispose();
-  }, [fx]);
-
   const [filterOpen, setFilterOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   /** Editor pane is secondary — off by default so Project feels primary. */
   const [editorOpen, setEditorOpen] = useState(false);
-  const [treeEpoch, setTreeEpoch] = useState(0);
 
   useEffect(() => {
     if (!settingsOpen) return;
@@ -344,9 +327,7 @@ function Explorer({ fx, root }: { fx: PortFileExplorer; root: string }): ReactEl
   }, []);
 
   const collapseProject = useCallback(() => {
-    treeRef.current?.reset();
-    expandedRootsRef.current = true;
-    setTreeEpoch((n) => n + 1);
+    treeRef.current?.collapseAll();
   }, [treeRef]);
 
   const workspaceLabel = useMemo(() => basename(root), [root]);
@@ -429,7 +410,6 @@ function Explorer({ fx, root }: { fx: PortFileExplorer; root: string }): ReactEl
             data-mille-theme={iconThemeId === 'minimal' ? 'minimal' : undefined}
           >
             <FileTree
-              key={treeEpoch}
               ref={treeRef}
               ariaLabel="Project"
               iconTheme={iconTheme}

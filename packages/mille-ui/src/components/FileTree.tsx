@@ -189,8 +189,36 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
   const embeddedFilterInputRef = useRef<FileTreeFilterHandle | null>(null);
 
   const scrollerRef = useRef<HTMLDivElement | null>(null);
-  const { expanded, toggle, add: addExpanded, remove: removeExpanded } =
-    useExpandedSet();
+  const initialRootIdsRef = useRef<readonly EntryId[]>(
+    snapshot.roots().map((root) => root.id),
+  );
+  const autoExpandedRootIdsRef = useRef<Set<EntryId>>(
+    new Set(initialRootIdsRef.current),
+  );
+  const {
+    expanded,
+    toggle,
+    add: addExpanded,
+    remove: removeExpanded,
+    setMany: setManyExpanded,
+    clear: clearExpanded,
+  } = useExpandedSet(initialRootIdsRef.current);
+
+  // Workspace roots are open by default. Roots commonly arrive after
+  // the provider's initial empty snapshot, so expand each one the first
+  // time it appears. Remembering which roots were initialized prevents
+  // later snapshot updates from reopening a root the user collapsed.
+  useEffect(() => {
+    const unseenRootIds: EntryId[] = [];
+    for (const root of snapshot.roots()) {
+      if (autoExpandedRootIdsRef.current.has(root.id)) continue;
+      autoExpandedRootIdsRef.current.add(root.id);
+      unseenRootIds.push(root.id);
+    }
+    if (unseenRootIds.length > 0) {
+      setManyExpanded({ add: unseenRootIds });
+    }
+  }, [snapshot, setManyExpanded]);
 
   // Selection (selection + focus state) — respects controlled props.
   const selection = useFileTreeSelection({
@@ -867,6 +895,9 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
       clearClipboard: () => {
         clipboard.clear();
       },
+      collapseAll: () => {
+        clearExpanded();
+      },
       focusFilter,
       reset: () => {
         selection.clear();
@@ -902,6 +933,7 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
       selection,
       filterState,
       clipboard,
+      clearExpanded,
       focusFilter,
       visibleRows,
     ],

@@ -274,6 +274,9 @@ export interface FileTreeRef {
   /** Drop cut/copy markers. */
   clearClipboard(): void;
 
+  /** Collapse every currently expanded folder, including workspace roots. */
+  collapseAll(): void;
+
   /**
    * Focus the filter input. Returns `true` if a filter input was found
    * (the caller-supplied `filterInputRef` or the tree's embedded

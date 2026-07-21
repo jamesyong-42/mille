@@ -307,6 +307,33 @@ test('ref.clearClipboard() drops cut ids', async () => {
   await h.cleanup();
 });
 
+test('ref.collapseAll() collapses roots and nested folders', async () => {
+  const fx = createFakeEngine();
+  fx.emitDelta(createFakeSnapshot({ rows: sampleRows(), treeVersion: 1 }));
+
+  const h = await mountTree({ fx });
+  const subChevron = rowByEntryId(h.container, 2)?.querySelector(
+    'button[data-mille-chevron]',
+  );
+  assert.ok(subChevron, 'subfolder chevron rendered');
+  await act(async () => {
+    subChevron.dispatchEvent(new hdWindow.MouseEvent('click', { bubbles: true }));
+  });
+
+  fx.calls.setExpanded.length = 0;
+  await act(async () => { h.ref.current.collapseAll(); });
+
+  assert.ok(
+    fx.calls.setExpanded.some((call) => {
+      const removed = new Set(call.remove);
+      return removed.has(1) && removed.has(2);
+    }),
+    'expected collapseAll() to remove the root and nested folder expansion ids',
+  );
+
+  await h.cleanup();
+});
+
 test('ref.reset() clears selection + filter + clipboard in one call', async () => {
   const fx = createFakeEngine();
   fx.emitDelta(createFakeSnapshot({ rows: sampleRows(), treeVersion: 1 }));

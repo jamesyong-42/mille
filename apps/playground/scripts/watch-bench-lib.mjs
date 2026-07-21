@@ -196,6 +196,34 @@ export async function executeOperation(root, operation) {
   }
 }
 
+export async function seedReferenceTree(root, totalFiles, { filesPerDirectory = 100 } = {}) {
+  if (!Number.isSafeInteger(totalFiles) || totalFiles < 0) {
+    throw new Error(`totalFiles must be a non-negative integer, got ${totalFiles}`);
+  }
+  if (!Number.isSafeInteger(filesPerDirectory) || filesPerDirectory < 1) {
+    throw new Error(`filesPerDirectory must be a positive integer, got ${filesPerDirectory}`);
+  }
+
+  let created = 0;
+  let directories = 0;
+  while (created < totalFiles) {
+    const directory = `reference-${String(directories + 1).padStart(4, '0')}`;
+    await mkdir(safePath(root, directory));
+    directories += 1;
+    const count = Math.min(filesPerDirectory, totalFiles - created);
+    await Promise.all(
+      Array.from({ length: count }, (_, index) => {
+        const fileNumber = created + index + 1;
+        const name = `reference-${String(fileNumber).padStart(6, '0')}.txt`;
+        return writeFile(safePath(root, `${directory}/${name}`), `reference ${fileNumber}\n`);
+      }),
+    );
+    created += count;
+  }
+
+  return Object.freeze({ files: created, directories, entries: created + directories });
+}
+
 function percentile(sorted, quantile) {
   if (sorted.length === 0) return 0;
   const index = Math.min(sorted.length - 1, Math.ceil(sorted.length * quantile) - 1);

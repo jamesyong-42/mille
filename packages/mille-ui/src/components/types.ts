@@ -280,6 +280,12 @@ export interface FileTreeRef {
   collapseAll(): void;
 
   /**
+   * Expand multiple known folders in one state transition. Useful for hosts
+   * restoring persisted expansion state and deterministic benchmark harnesses.
+   */
+  expand(ids: readonly EntryId[]): void;
+
+  /**
    * Focus the filter input. Returns `true` if a filter input was found
    * (the caller-supplied `filterInputRef` or the tree's embedded
    * filter when `showFilter` is on), `false` otherwise.

@@ -1,11 +1,13 @@
 #!/usr/bin/env node
 
 import { spawn } from 'node:child_process';
+import { readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const packageRoot = join(repoRoot, 'packages', 'mille');
+const uiPackageRoot = join(repoRoot, 'packages', 'mille-ui');
 const executable = (name) =>
   join(repoRoot, 'node_modules', '.bin', process.platform === 'win32' ? `${name}.cmd` : name);
 
@@ -48,10 +50,16 @@ try {
   );
   console.log('[mille watch bench] building current TypeScript package…');
   await run(executable('tsc'), ['--build'], packageRoot);
+  console.log('[mille watch bench] building current React package…');
+  await run(executable('tsc'), ['--build'], uiPackageRoot);
   const packageEntry = pathToFileURL(join(packageRoot, 'dist', 'index.js'));
   packageEntry.searchParams.set('bench-build', String(Date.now()));
   const { buildIdentity } = await import(packageEntry.href);
-  const identity = buildIdentity();
+  const uiManifest = JSON.parse(await readFile(join(uiPackageRoot, 'package.json'), 'utf8'));
+  const identity = {
+    ...buildIdentity(),
+    uiPackageVersion: typeof uiManifest.version === 'string' ? uiManifest.version : 'unknown',
+  };
   process.env.MILLE_BUILD_IDENTITY_JSON = JSON.stringify(identity);
   console.log('[mille watch bench] build', JSON.stringify(identity));
   await run(

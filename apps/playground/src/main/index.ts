@@ -180,8 +180,15 @@ async function createWindow(): Promise<void> {
     const observation = raw as Partial<WatchBenchObservation>;
     if (
       typeof observation.id !== 'number' ||
+      typeof observation.kind !== 'string' ||
+      typeof observation.treeVersion !== 'number' ||
       typeof observation.mirrorLatencyMs !== 'number' ||
+      typeof observation.commitLatencyMs !== 'number' ||
+      typeof observation.reactDurationMs !== 'number' ||
+      typeof observation.reactBaseDurationMs !== 'number' ||
       typeof observation.paintLatencyMs !== 'number' ||
+      typeof observation.commitToPaintMs !== 'number' ||
+      typeof observation.frameIntervalMs !== 'number' ||
       typeof observation.observedAt !== 'number'
     ) {
       return;

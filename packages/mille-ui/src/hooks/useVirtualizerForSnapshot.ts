@@ -1,5 +1,5 @@
 // useVirtualizerForSnapshot — thin wrapper around `@tanstack/react-virtual`
-// that adapts a `MirrorSnapshot` + expanded-id set to the virtualizer's
+// that adapts FileTree's materialized visible projection to the virtualizer's
 // row-count / key model.
 //
 // Fixed-height mode in v0.1; the `rowHeight` option can be a number (fixed)
@@ -9,11 +9,10 @@
 // Returns only the subset we actually use downstream (virtual items, total
 // size, scroll helpers) to keep the Phase 3 surface small.
 
-import { useMemo, type RefObject } from 'react';
+import type { RefObject } from 'react';
 import { useVirtualizer, type VirtualItem } from '@tanstack/react-virtual';
-import type { EntryId, VisibleRow } from '@vibecook/mille';
+import type { VisibleRow } from '@vibecook/mille';
 import type {
-  FileTreeSnapshotLike,
   VirtualizerOffsetObserver,
   VirtualizerRectObserver,
 } from '../components/types.js';
@@ -21,8 +20,8 @@ import type {
 export type { VirtualizerOffsetObserver, VirtualizerRectObserver };
 
 export interface UseVirtualizerForSnapshotOptions {
-  readonly snapshot: FileTreeSnapshotLike;
-  readonly expanded: ReadonlySet<EntryId>;
+  /** Complete visible projection, materialized once by FileTree. */
+  readonly visibleRows: readonly VisibleRow[];
   readonly rowHeight: number;
   readonly overscan: number;
   readonly scrollerRef: RefObject<HTMLElement | null>;
@@ -52,8 +51,7 @@ export function useVirtualizerForSnapshot(
   options: UseVirtualizerForSnapshotOptions,
 ): UseVirtualizerForSnapshotResult {
   const {
-    snapshot,
-    expanded,
+    visibleRows,
     rowHeight,
     overscan,
     scrollerRef,
@@ -61,12 +59,7 @@ export function useVirtualizerForSnapshot(
     observeElementOffset,
   } = options;
 
-  // `count` depends only on the snapshot identity and the expanded set.
-  // We recompute defensively (cheap; the snapshot caches it).
-  const count = useMemo(
-    () => snapshot.visibleRowCount(expanded).known,
-    [snapshot, expanded],
-  );
+  const count = visibleRows.length;
 
   const virtualizer = useVirtualizer<HTMLElement, Element>({
     count,
@@ -74,16 +67,10 @@ export function useVirtualizerForSnapshot(
     estimateSize: () => rowHeight,
     overscan,
     getItemKey: (index: number): string | number => {
-      // Pull a single row to learn its id. The real engine implements this
-      // in O(log n); the fake engine does a slice. If the slot is pending
-      // (not yet materialized), fall back to the index.
-      const rows: readonly VisibleRow[] = snapshot.visibleRows({
-        expanded,
-        offset: index,
-        limit: 1,
-      });
-      const first = rows[0];
-      return first ? first.id : index;
+      // FileTree already materializes the complete projection for keyboard
+      // navigation. Reuse it here instead of traversing the snapshot once per
+      // virtual item merely to recover a key.
+      return visibleRows[index]?.id ?? index;
     },
     ...(observeElementRect ? { observeElementRect } : null),
     ...(observeElementOffset ? { observeElementOffset } : null),

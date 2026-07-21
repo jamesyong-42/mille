@@ -2,7 +2,16 @@
 // Structural: pure tree surface first; settings tucked behind a gear.
 // Engine transport (UtilityProcess + MessagePort) is unchanged.
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
+import {
+  Profiler,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ProfilerOnRenderCallback,
+  type ReactElement,
+} from 'react';
 import { FileTreeProvider, FileTree, useFileTreeRef } from '@vibecook/mille-ui';
 import type { IconTheme } from '@vibecook/mille-ui/icons';
 import { defaultIconTheme, duotoneIconTheme, minimalIconTheme } from '@vibecook/mille-ui/icons';
@@ -13,6 +22,7 @@ import { fxPortReady, onFxPort } from './fx-port';
 import { Toolbar, type ThemeMode } from './Toolbar';
 import { stageIconTheme } from './stageIconTheme';
 import { WatchBenchPanel } from './WatchBenchPanel';
+import { createTreeCommit, publishTreeCommit } from '../../../scripts/watch-bench-render-lib.mjs';
 
 interface ConnectionState {
   fx: PortFileExplorer;
@@ -130,6 +140,24 @@ function Explorer({ fx, root }: { fx: PortFileExplorer; root: string }): ReactEl
   const commands = useMemo(() => createCommandRegistry(defaultCommands), []);
   const treeRef = useFileTreeRef();
   const settingsRef = useRef<HTMLDivElement | null>(null);
+  const onTreeRender = useCallback<ProfilerOnRenderCallback>(
+    (_id, phase, actualDuration, baseDuration, startTime, commitTime) => {
+      publishTreeCommit(
+        createTreeCommit(
+          {
+            phase,
+            treeVersion: fx.getSnapshot().treeVersion,
+            actualDurationMs: actualDuration,
+            baseDurationMs: baseDuration,
+            startTimeMs: startTime,
+            commitTimeMs: commitTime,
+          },
+          performance.timeOrigin,
+        ),
+      );
+    },
+    [fx],
+  );
 
   const [theme, setTheme] = useState<ThemeMode>('dark');
   useEffect(() => {
@@ -335,7 +363,7 @@ function Explorer({ fx, root }: { fx: PortFileExplorer; root: string }): ReactEl
   return (
     <FileTreeProvider fx={fx as unknown as FileExplorer} commands={commands}>
       <div className={`app${editorOpen ? ' app--split' : ' app--project'}`}>
-        <WatchBenchPanel fx={fx} />
+        <WatchBenchPanel fx={fx} treeRef={treeRef} />
         {/* ── Project tool window ─────────────────────────────── */}
         <aside className="sidebar">
           <div className="tool-header">
@@ -409,19 +437,21 @@ function Explorer({ fx, root }: { fx: PortFileExplorer; root: string }): ReactEl
             className="tree-container"
             data-mille-theme={iconThemeId === 'minimal' ? 'minimal' : undefined}
           >
-            <FileTree
-              ref={treeRef}
-              ariaLabel="Project"
-              iconTheme={iconTheme}
-              rowHeight={iconThemeId === 'minimal' ? 26 : 17}
-              overscan={36}
-              stickyRoots
-              showFilter={filterOpen}
-              searchMode="filter"
-              onOpen={(row) => {
-                void openEntry(row);
-              }}
-            />
+            <Profiler id="file-tree" onRender={onTreeRender}>
+              <FileTree
+                ref={treeRef}
+                ariaLabel="Project"
+                iconTheme={iconTheme}
+                rowHeight={iconThemeId === 'minimal' ? 26 : 17}
+                overscan={36}
+                stickyRoots
+                showFilter={filterOpen}
+                searchMode="filter"
+                onOpen={(row) => {
+                  void openEntry(row);
+                }}
+              />
+            </Profiler>
           </div>
         </aside>
 

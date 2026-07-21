@@ -88,6 +88,28 @@ function sortChildrenByName(ids: number[], byId: Map<number, ClientEntry>): numb
 }
 
 /**
+ * Build a snapshot-local child-order cache. A MirrorWorking is immutable once
+ * published, so a parent's sorted ids remain valid for the entire snapshot.
+ * The virtualizer asks for many one-row slices in a single render; without
+ * this cache every slice re-sorted all previously traversed directories.
+ *
+ * Exported from the internal module for focused regression tests; it is not
+ * part of the package's public entry point.
+ */
+export function createSortedChildrenLookup(
+  byId: Map<number, ClientEntry>,
+): (parentId: number, ids: number[]) => readonly number[] {
+  const cache = new Map<number, readonly number[]>();
+  return (parentId, ids) => {
+    const cached = cache.get(parentId);
+    if (cached !== undefined) return cached;
+    const sorted = sortChildrenByName(ids, byId);
+    cache.set(parentId, sorted);
+    return sorted;
+  };
+}
+
+/**
  * Whether an entry appears in the default Project-view slice.
  *
  * JetBrains Project tool window conventions:
@@ -125,9 +147,11 @@ function isVisibleEntry(e: ClientEntry, includeIgnored: boolean): boolean {
 export class ClientMirrorSnapshot {
   /** @internal */
   private readonly state: MirrorWorking;
+  private readonly sortedChildrenFor: (parentId: number, ids: number[]) => readonly number[];
 
   constructor(state: MirrorWorking) {
     this.state = state;
+    this.sortedChildrenFor = createSortedChildrenLookup(state.byId);
     // Freeze the wrapper so consumers can't swap the state reference
     // or attach extra properties. The inner maps are not frozen
     // because Map/Set have no Object.freeze-friendly equivalent, but
@@ -257,8 +281,7 @@ export class ClientMirrorSnapshot {
         // Same lazy-friendly semantic as hasChildren(id): unvisited
         // dirs / symlink-to-dir get a chevron so expand can fire.
         const cnt = this.state.directChildCounts.get(frame.id);
-        const hasChildren =
-          cnt === undefined ? isExpandableEntry(entry) : cnt > 0;
+        const hasChildren = cnt === undefined ? isExpandableEntry(entry) : cnt > 0;
         const base = clientEntryToEntry(entry);
         const row: VisibleRow = {
           ...base,
@@ -277,7 +300,7 @@ export class ClientMirrorSnapshot {
       if (expanded.has(frame.id)) {
         const kids = this.state.children.get(frame.id);
         if (kids !== undefined) {
-          const sorted = sortChildrenByName(kids, this.state.byId);
+          const sorted = this.sortedChildrenFor(frame.id, kids);
           const childDepth = frame.depth + 1;
           for (let i = sorted.length - 1; i >= 0; i--) {
             stack.push({ id: sorted[i]!, depth: childDepth });

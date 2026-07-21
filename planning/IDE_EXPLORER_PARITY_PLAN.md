@@ -1,6 +1,6 @@
 # IDE Explorer Parity Implementation Plan
 
-**Status:** proposed  
+**Status:** active — Phase 0 complete, Phase 1 in progress
 **Created:** 2026-07-21  
 **Baseline assessment:**
 [IDE_EXPLORER_PARITY_ASSESSMENT.md](./IDE_EXPLORER_PARITY_ASSESSMENT.md)
@@ -139,6 +139,27 @@ and trustworthy watcher lifecycle before optimizing any higher layer.
 Turn the existing playground benchmark into a repeatable quality gate that
 measures what a user sees and catches both correctness and responsiveness
 regressions.
+
+### First measured optimization
+
+The initial 2,000-file/120-operation Electron run measured paint p95 1,597.0
+ms, React-duration p95 203.4 ms, maximum sampled frame interval 433.3 ms, and
+1.2 operations/s. Snapshot-local child-order caching and projection reuse for
+virtualizer keys moved the identical workload to paint p95 136.4 ms,
+React-duration p95 16.2 ms, maximum frame interval 42.1 ms, and 10.0
+operations/s, with zero misses. CI now runs this workload under explicit
+150/25/50 ms paint-p95/React-p95/frame-max budgets and retains the report.
+
+Implemented in this slice:
+
+- deterministic reference-tree seeding plus complete plan serialization and a
+  SHA-256 plan identity;
+- operation-to-mirror-to-React correlation using timestamps and the exact
+  mirror tree version, followed by two animation-frame boundaries;
+- build/runtime provenance covering native, TypeScript UI, Node, Electron,
+  Chrome, platform, and architecture; and
+- non-zero automated exits for convergence misses or explicit paint, React,
+  and frame-budget violations, with retained CI reports.
 
 ### Work
 

@@ -108,6 +108,21 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+      - name: Electron renderer quality gate
+        run: >-
+          xvfb-run --auto-servernum node scripts/watch-bench.mjs
+          --operations 120 --seed-files 2000 --exit
+          --report electron-watch-bench-report.json
+
+      - name: Upload Electron renderer report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: electron-watch-bench-${{ github.sha }}
+          path: electron-watch-bench-report.json
+          if-no-files-found: warn
+          retention-days: 14
+
       # v0.2 B8 — mille-ui bundle size assertion. Fails CI on regression.
       # Budgets live in `packages/mille-ui/package.json` under
       # `size-limit`; see SPEC §12 for targets.

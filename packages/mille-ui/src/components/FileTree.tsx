@@ -245,25 +245,12 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
   // back through the provider's `useSyncExternalStore`.
   useSetExpandedBridge(fx, expanded);
 
-  // Virtualizer. `count` reflects the snapshot's `visibleRowCount`.
-  const { virtualItems, totalSize, count, scrollToIndex } = useVirtualizerForSnapshot({
-    snapshot,
-    expanded,
-    rowHeight,
-    overscan,
-    scrollerRef,
-    ...(__testObserveElementRect
-      ? { observeElementRect: __testObserveElementRect }
-      : null),
-    ...(__testObserveElementOffset
-      ? { observeElementOffset: __testObserveElementOffset }
-      : null),
-  });
-
-  const pendingSet = useMemo<ReadonlySet<EntryId>>(
-    () => snapshot.visibleRowCount(expanded).pendingExpansions,
+  const visibleCount = useMemo(
+    () => snapshot.visibleRowCount(expanded),
     [snapshot, expanded],
   );
+  const count = visibleCount.known;
+  const pendingSet = visibleCount.pendingExpansions;
 
   const rootsCount = snapshot.roots().length;
 
@@ -274,6 +261,22 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
     if (count === 0) return [];
     return snapshot.visibleRows({ expanded, offset: 0, limit: count });
   }, [snapshot, expanded, count]);
+
+  // Virtualizer keys come from the projection above. Older code asked the
+  // snapshot for a one-row slice per virtual item, multiplying traversal and
+  // child sorting work during every commit.
+  const { virtualItems, totalSize, scrollToIndex } = useVirtualizerForSnapshot({
+    visibleRows,
+    rowHeight,
+    overscan,
+    scrollerRef,
+    ...(__testObserveElementRect
+      ? { observeElementRect: __testObserveElementRect }
+      : null),
+    ...(__testObserveElementOffset
+      ? { observeElementOffset: __testObserveElementOffset }
+      : null),
+  });
 
   const previousTreeVersionRef = useRef(snapshot.treeVersion);
   const previousVisibleIdsRef = useRef<ReadonlySet<EntryId>>(
@@ -966,6 +969,9 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
       collapseAll: () => {
         clearExpanded();
       },
+      expand: (ids: readonly EntryId[]) => {
+        setManyExpanded({ add: ids });
+      },
       focusFilter,
       reset: () => {
         selection.clear();
@@ -1002,6 +1008,7 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
       filterState,
       clipboard,
       clearExpanded,
+      setManyExpanded,
       focusFilter,
       visibleRows,
     ],

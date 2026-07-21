@@ -44,13 +44,18 @@ Before measurement begins, an unmeasured create/delete pair must traverse the co
 Pass options after `--`:
 
 ```bash
-pnpm bench:watch -- --operations 1200 --debounce 25 --timeout 8000 --pause 10
+pnpm bench:watch -- --operations 1200 --seed-files 2000 --exit --report /tmp/mille-ui.json
 ```
 
 - `--operations N`: number of filesystem operations; default `240`.
+- `--seed-files N`: deterministic files present before watching; default `0`.
 - `--debounce MS`: native watcher debounce; default `40`.
 - `--timeout MS`: maximum time for one exact state to reach the renderer; default `5000`.
 - `--pause MS`: additional delay after each observed paint; default `0`.
+- `--max-paint-p95 MS`: fail above this visible-paint p95; default `150`.
+- `--max-react-p95 MS`: fail above this React render-duration p95; default `25`.
+- `--max-frame MS`: fail above this sampled frame interval; default `50`.
+- `--report PATH`: preserve the JSON report outside the temporary sandbox.
 - `--keep`: retain the temporary workspace and JSON report after the playground exits.
 - `--exit`: close the playground automatically after completion; useful for automated smoke runs.
 
@@ -62,8 +67,26 @@ Close the playground or press Ctrl+C in the launching terminal to stop. The benc
 
 - **Mirror latency** starts immediately after the filesystem syscall completes and ends when the renderer-side `PortFileExplorer` snapshot satisfies the expected state.
 - **Paint latency** ends after two `requestAnimationFrame` boundaries, approximating the first paint opportunity after the state reached React. Off-screen rows remain virtualized, so this is paint readiness rather than a guarantee that every row was physically painted.
+- **Commit latency** ends at the first `FileTree` React Profiler commit at or beyond both the operation timestamp and the mirror tree version that satisfied it.
+- **React duration** is React's `actualDuration` for that `FileTree` commit.
+- **Frame interval** is the interval between the two post-commit animation frames; it exposes long main-thread stalls.
 - **Operations/second** is sequential end-to-end throughput: the worker does not issue the next operation until the previous state has reached the paint-ready boundary.
 - **Missed** means the exact expected state failed to converge before `--timeout`; it is never silently counted as a slow success.
+
+With `--exit`, correctness and smoothness budgets are process gates: a miss or
+threshold violation exits non-zero. Reports include the complete observations,
+budgets, violations, reference-tree size, serialized operation plan and hash,
+runtime environment, and exact native and UI build identity.
+
+## Renderer optimization baseline
+
+On 2026-07-21, the 120-operation workload with 2,000 deterministic files first
+measured paint p95 1,597.0 ms, React-duration p95 203.4 ms, maximum frame
+interval 433.3 ms, and 1.2 operations/s. Caching immutable child ordering and
+reusing the already-materialized visible projection for virtualizer keys moved
+the identical workload to paint p95 136.4 ms, React-duration p95 16.2 ms,
+maximum frame interval 42.1 ms, and 10.0 operations/s, with 120/120 exact state
+convergences.
 
 For native primitive throughput without Electron, run:
 

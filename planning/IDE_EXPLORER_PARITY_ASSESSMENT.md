@@ -30,15 +30,15 @@ layers of work:
 The scores below are directional, not a claim of mathematical precision. A
 mature IDE explorer is the 10/10 reference point.
 
-| Area                                 | Score | Current assessment                                                                                                                                              |
-| ------------------------------------ | ----: | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Filesystem and renderer architecture |   7.5 | Strong native walker, lazy hydration, deltas, bounded client mirror, and virtualized rendering                                                                  |
-| Core tree interaction                |   7.0 | Keyboard navigation, multi-selection, create/rename/delete, clipboard, filtering, context menus, and drag/drop                                                  |
-| Visual behavior                      |   6.0 | Recent identity preservation and structural transitions reduce flicker, but high-churn behavior is not browser-gated                                            |
-| Accessibility                        |   6.0 | Good ARIA tree semantics and keyboard tests; no real assistive-technology matrix                                                                                |
-| Reliability and recovery             |   5.5 | Live watcher tests are green and a deterministic 1,000-operation soak now gates exact convergence; crash/restart and platform stress coverage remain incomplete |
-| Performance confidence               |   5.0 | Headless watcher p95 has an enforced budget and the Electron harness records build identity, but browser frame budgets are not yet enforced in CI               |
-| Explorer workflow breadth            |   3.5 | Important workspace, settings, editor, source-control, history, and remote-filesystem behavior is absent or host-only                                           |
+| Area                                 | Score | Current assessment                                                                                                                                               |
+| ------------------------------------ | ----: | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Filesystem and renderer architecture |   7.5 | Strong native walker, lazy hydration, deltas, bounded client mirror, and virtualized rendering                                                                   |
+| Core tree interaction                |   7.0 | Keyboard navigation, multi-selection, create/rename/delete, clipboard, filtering, context menus, and drag/drop                                                   |
+| Visual behavior                      |   6.2 | Mutation churn now has a real-Electron paint/frame gate; scroll, focus, selection, theme, and reduced-motion scenarios are still missing                         |
+| Accessibility                        |   6.0 | Good ARIA tree semantics and keyboard tests; no real assistive-technology matrix                                                                                 |
+| Reliability and recovery             |   5.5 | Live watcher tests are green and a deterministic 1,000-operation soak now gates exact convergence; crash/restart and platform stress coverage remain incomplete  |
+| Performance confidence               |   5.8 | Headless and Electron gates enforce correctness, paint, React-duration, and frame budgets with retained build-identified reports; scenario breadth is incomplete |
+| Explorer workflow breadth            |   3.5 | Important workspace, settings, editor, source-control, history, and remote-filesystem behavior is absent or host-only                                            |
 
 As a reusable tree widget, Mille is approximately **6.5-7/10**. As a complete
 IDE explorer experience, it is approximately **5/10**.

@@ -8,6 +8,14 @@ import type {
   WatchBenchOperation,
   WatchBenchSummary,
 } from '../../shared/watch-bench';
+import {
+  createRenderObservation,
+  isCommitEligible,
+  latestTreeCommit,
+  subscribeTreeCommits,
+  type RenderObservation,
+  type TreeCommitMetric,
+} from '../../../scripts/watch-bench-render-lib.mjs';
 
 interface PendingOperation {
   readonly operation: WatchBenchOperation;
@@ -15,12 +23,13 @@ interface PendingOperation {
   readonly warmup: boolean;
 }
 
-interface Sample {
-  readonly id: number;
-  readonly kind: string;
-  readonly mirrorLatencyMs: number;
-  readonly paintLatencyMs: number;
+interface AwaitingCommit {
+  readonly pending: PendingOperation;
+  readonly mirrorAt: number;
+  readonly mirrorTreeVersion: number;
 }
+
+type Sample = RenderObservation;
 
 function epochNow(): number {
   return performance.timeOrigin + performance.now();
@@ -49,7 +58,13 @@ function formatMs(value: number): string {
   return `${value.toFixed(value < 10 ? 1 : 0)} ms`;
 }
 
-export function WatchBenchPanel({ fx }: { fx: PortFileExplorer }): ReactElement | null {
+export function WatchBenchPanel({
+  fx,
+  treeRef,
+}: {
+  fx: PortFileExplorer;
+  treeRef: { readonly current: { expand(ids: readonly number[]): void } | null };
+}): ReactElement | null {
   const [config, setConfig] = useState<WatchBenchConfig | null>(null);
   const [samples, setSamples] = useState<Sample[]>([]);
   const [failed, setFailed] = useState(0);
@@ -60,12 +75,55 @@ export function WatchBenchPanel({ fx }: { fx: PortFileExplorer }): ReactElement 
   const configRef = useRef<WatchBenchConfig | null>(null);
   const expandedRef = useRef(new Set<number>());
   const pendingRef = useRef(new Map<number, PendingOperation>());
+  const awaitingCommitRef = useRef(new Map<number, AwaitingCommit>());
   const reportingRef = useRef(new Set<number>());
   const readySentRef = useRef(false);
   const aliveRef = useRef(true);
 
   useEffect(() => {
     aliveRef.current = true;
+
+    const observeAfterCommit = (
+      id: number,
+      awaiting: AwaitingCommit,
+      commit: TreeCommitMetric,
+    ): void => {
+      if (!awaitingCommitRef.current.delete(id)) return;
+      requestAnimationFrame((firstFrameTime) => {
+        requestAnimationFrame((secondFrameTime) => {
+          if (!aliveRef.current) return;
+          const sample = createRenderObservation({
+            id,
+            kind: awaiting.pending.operation.kind,
+            operationCompletedAt: awaiting.pending.completedAt,
+            mirrorAt: awaiting.mirrorAt,
+            mirrorTreeVersion: awaiting.mirrorTreeVersion,
+            commit,
+            firstFrameAt: performance.timeOrigin + firstFrameTime,
+            secondFrameAt: performance.timeOrigin + secondFrameTime,
+          });
+          pendingRef.current.delete(id);
+          reportingRef.current.delete(id);
+          if (!awaiting.pending.warmup) setSamples((previous) => [...previous, sample]);
+          window.millePlayground.reportWatchBenchObservation(sample);
+        });
+      });
+    };
+
+    const onTreeCommit = (commit: TreeCommitMetric): void => {
+      for (const [id, awaiting] of awaitingCommitRef.current) {
+        if (
+          isCommitEligible(
+            commit,
+            awaiting.pending.completedAt,
+            awaiting.mirrorTreeVersion,
+          )
+        ) {
+          observeAfterCommit(id, awaiting, commit);
+        }
+      }
+    };
+    const unsubscribeCommits = subscribeTreeCommits(onTreeCommit);
 
     const expandAndRead = () => {
       const snapshot = fx.getSnapshot();
@@ -84,7 +142,7 @@ export function WatchBenchPanel({ fx }: { fx: PortFileExplorer }): ReactElement 
       }
       if (directoriesToExpand.length > 0) {
         for (const id of directoriesToExpand) expandedRef.current.add(id);
-        queueMicrotask(() => fx.setExpanded({ add: directoriesToExpand }));
+        queueMicrotask(() => treeRef.current?.expand(directoriesToExpand));
       }
       return { snapshot, rows };
     };
@@ -121,23 +179,16 @@ export function WatchBenchPanel({ fx }: { fx: PortFileExplorer }): ReactElement 
 
         reportingRef.current.add(id);
         const mirrorAt = epochNow();
-        const mirrorLatencyMs = Math.max(0, mirrorAt - pending.completedAt);
-        requestAnimationFrame(() => {
-          requestAnimationFrame(() => {
-            if (!aliveRef.current) return;
-            const observedAt = epochNow();
-            const sample: Sample = {
-              id,
-              kind: pending.operation.kind,
-              mirrorLatencyMs,
-              paintLatencyMs: Math.max(0, observedAt - pending.completedAt),
-            };
-            pendingRef.current.delete(id);
-            reportingRef.current.delete(id);
-            if (!pending.warmup) setSamples((previous) => [...previous, sample]);
-            window.millePlayground.reportWatchBenchObservation({ ...sample, observedAt });
-          });
-        });
+        const awaiting = {
+          pending,
+          mirrorAt,
+          mirrorTreeVersion: snapshot.treeVersion,
+        };
+        awaitingCommitRef.current.set(id, awaiting);
+        const latestCommit = latestTreeCommit();
+        if (isCommitEligible(latestCommit, pending.completedAt, awaiting.mirrorTreeVersion)) {
+          observeAfterCommit(id, awaiting, latestCommit);
+        }
       }
     };
 
@@ -154,7 +205,19 @@ export function WatchBenchPanel({ fx }: { fx: PortFileExplorer }): ReactElement 
           evaluate();
           return;
         case 'timeout':
+          console.error('[watch-bench] convergence timeout', {
+            id: event.operation.id,
+            kind: event.operation.kind,
+            stage: awaitingCommitRef.current.has(event.operation.id)
+              ? 'react-commit'
+              : pendingRef.current.has(event.operation.id)
+                ? 'mirror'
+                : 'unknown',
+            treeVersion: fx.getSnapshot().treeVersion,
+            latestCommitAt: latestTreeCommit()?.commitAt ?? null,
+          });
           pendingRef.current.delete(event.operation.id);
+          awaitingCommitRef.current.delete(event.operation.id);
           reportingRef.current.delete(event.operation.id);
           setFailed((value) => value + 1);
           return;
@@ -178,14 +241,19 @@ export function WatchBenchPanel({ fx }: { fx: PortFileExplorer }): ReactElement 
 
     return () => {
       aliveRef.current = false;
+      unsubscribeCommits();
       subscription.dispose();
     };
-  }, [fx]);
+  }, [fx, treeRef]);
 
   const liveSummary = useMemo(() => {
     return {
       mirror: summarize(samples.map((sample) => sample.mirrorLatencyMs)),
+      commit: summarize(samples.map((sample) => sample.commitLatencyMs)),
+      reactDuration: summarize(samples.map((sample) => sample.reactDurationMs)),
       paint: summarize(samples.map((sample) => sample.paintLatencyMs)),
+      commitToPaint: summarize(samples.map((sample) => sample.commitToPaintMs)),
+      frameInterval: summarize(samples.map((sample) => sample.frameIntervalMs)),
     };
   }, [samples]);
 
@@ -196,6 +264,7 @@ export function WatchBenchPanel({ fx }: { fx: PortFileExplorer }): ReactElement 
     durationMs: 0,
     operationsPerSecond: 0,
     ...liveSummary,
+    qualityGate: { passed: true, violations: [] },
   };
   const finished = samples.length + failed;
   const progress = Math.min(100, (finished / config.operations) * 100);
@@ -218,6 +287,14 @@ export function WatchBenchPanel({ fx }: { fx: PortFileExplorer }): ReactElement 
         <div>
           <span>mirror p50</span>
           <strong>{formatMs(summary.mirror.p50)}</strong>
+        </div>
+        <div>
+          <span>commit p50</span>
+          <strong>{formatMs(summary.commit.p50)}</strong>
+        </div>
+        <div>
+          <span>React p95</span>
+          <strong>{formatMs(summary.reactDuration.p95)}</strong>
         </div>
         <div>
           <span>paint p50</span>
@@ -245,15 +322,18 @@ export function WatchBenchPanel({ fx }: { fx: PortFileExplorer }): ReactElement 
         {fatal ? (
           <span className="is-error">{fatal}</span>
         ) : complete ? (
-          <span>
-            {summary.operationsPerSecond.toFixed(1)} ops/s · {summary.failed} missed · report saved
+          <span className={summary.qualityGate.passed ? undefined : 'is-error'}>
+            {summary.qualityGate.passed
+              ? `${summary.operationsPerSecond.toFixed(1)} ops/s · ${summary.failed} missed · gate passed · report saved`
+              : `gate failed · ${summary.qualityGate.violations.join(' · ')}`}
           </span>
         ) : (
           <span>{current ? `#${current.id} ${current.label}` : 'Preparing expanded tree…'}</span>
         )}
       </div>
       <div className="watch-bench__config">
-        debounce {config.debounceMs} ms · timeout {config.timeoutMs} ms
+        {config.seedFiles} reference files · debounce {config.debounceMs} ms · timeout{' '}
+        {config.timeoutMs} ms
       </div>
     </section>
   );

@@ -1,9 +1,13 @@
 export interface WatchBenchConfig {
   readonly enabled: true;
   readonly operations: number;
+  readonly seedFiles: number;
   readonly debounceMs: number;
   readonly timeoutMs: number;
   readonly pauseMs: number;
+  readonly maxPaintP95Ms: number;
+  readonly maxReactP95Ms: number;
+  readonly maxFrameIntervalMs: number;
   readonly exitOnComplete: boolean;
   readonly reportPath: string;
   readonly workspaceRoot: string;
@@ -29,8 +33,15 @@ export interface WatchBenchOperation {
 
 export interface WatchBenchObservation {
   readonly id: number;
+  readonly kind: string;
+  readonly treeVersion: number;
   readonly mirrorLatencyMs: number;
+  readonly commitLatencyMs: number;
+  readonly reactDurationMs: number;
+  readonly reactBaseDurationMs: number;
   readonly paintLatencyMs: number;
+  readonly commitToPaintMs: number;
+  readonly frameIntervalMs: number;
   readonly observedAt: number;
 }
 
@@ -40,7 +51,15 @@ export interface WatchBenchSummary {
   readonly durationMs: number;
   readonly operationsPerSecond: number;
   readonly mirror: WatchBenchLatencySummary;
+  readonly commit: WatchBenchLatencySummary;
+  readonly reactDuration: WatchBenchLatencySummary;
   readonly paint: WatchBenchLatencySummary;
+  readonly commitToPaint: WatchBenchLatencySummary;
+  readonly frameInterval: WatchBenchLatencySummary;
+  readonly qualityGate: {
+    readonly passed: boolean;
+    readonly violations: readonly string[];
+  };
 }
 
 export interface WatchBenchLatencySummary {

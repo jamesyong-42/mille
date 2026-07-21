@@ -334,6 +334,31 @@ test('ref.collapseAll() collapses roots and nested folders', async () => {
   await h.cleanup();
 });
 
+test('ref.expand() expands multiple folders in one bridge update', async () => {
+  const fx = createFakeEngine();
+  fx.emitDelta(createFakeSnapshot({ rows: sampleRows(), treeVersion: 1 }));
+
+  const h = await mountTree({ fx });
+  await act(async () => {
+    h.ref.current.collapseAll();
+  });
+  fx.calls.setExpanded.length = 0;
+  await act(async () => {
+    h.ref.current.expand([1, 2]);
+  });
+
+  assert.ok(
+    fx.calls.setExpanded.some((call) => {
+      const added = new Set(call.add);
+      return added.has(1) && added.has(2);
+    }),
+    'expected one expansion bridge update containing both folders',
+  );
+  assert.ok(rowByEntryId(h.container, 3), 'nested child rendered after bulk expansion');
+
+  await h.cleanup();
+});
+
 test('ref.reset() clears selection + filter + clipboard in one call', async () => {
   const fx = createFakeEngine();
   fx.emitDelta(createFakeSnapshot({ rows: sampleRows(), treeVersion: 1 }));

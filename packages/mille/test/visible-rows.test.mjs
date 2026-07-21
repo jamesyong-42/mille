@@ -8,7 +8,7 @@
 import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
 import { createMirror } from '../dist/mirror.js';
-import { ClientMirrorSnapshot } from '../dist/mirror-snapshot.js';
+import { ClientMirrorSnapshot, createSortedChildrenLookup } from '../dist/mirror-snapshot.js';
 
 function entry(overrides = {}) {
   return {
@@ -37,6 +37,22 @@ function seedFile(m, id, name, parentId, overrides = {}) {
   m.byId.set(id, entry({ id, parentId, name, kind: 0, ...overrides }));
   m.directChildCounts.set(id, 0);
 }
+
+test('snapshot-local child ordering is cached without mutating wire order', () => {
+  const byId = new Map([
+    [2, entry({ id: 2, name: 'z.ts', kind: 0 })],
+    [3, entry({ id: 3, name: 'a', kind: 1 })],
+    [4, entry({ id: 4, name: 'a.ts', kind: 0 })],
+  ]);
+  const wireOrder = [2, 4, 3];
+  const lookup = createSortedChildrenLookup(byId);
+  const first = lookup(1, wireOrder);
+  const second = lookup(1, wireOrder);
+
+  assert.equal(second, first, 'repeated lookups reuse the exact sorted array');
+  assert.deepEqual(first, [3, 4, 2], 'directories remain first, then files by name');
+  assert.deepEqual(wireOrder, [2, 4, 3], 'sorting does not mutate the mirror payload');
+});
 
 test('visibleRows: empty mirror returns empty array', () => {
   const snap = new ClientMirrorSnapshot(createMirror());

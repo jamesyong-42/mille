@@ -93,11 +93,11 @@
 }
 
 /*
- * Filesystem layout changes only. The tree toggles this marker briefly
- * after a new treeVersion, so inserts/deletes/reorders glide into place
- * without making ordinary virtualized scrolling feel elastic.
+ * Filesystem layout changes only. The tree marks only mounted rows whose
+ * virtual offset materially changed. Keeping this row-scoped avoids turning
+ * every watcher notification into a viewport-wide compositor transaction.
  */
-.mille-tree[role="tree"][data-mille-layout-animating="true"] .mille-row {
+.mille-tree[role="tree"] .mille-row[data-mille-repositioning="true"] {
   transition: transform 150ms cubic-bezier(0.2, 0.8, 0.2, 1) !important;
   will-change: transform;
 }
@@ -124,10 +124,14 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .mille-tree[role="tree"][data-mille-layout-animating="true"] .mille-row,
+  .mille-tree[role="tree"] .mille-row[data-mille-repositioning="true"],
   .mille-tree[role="tree"] .mille-row[data-mille-entering="true"] {
     transition: none !important;
     animation: none !important;
+  }
+
+  .mille-tree [data-mille-chevron] svg {
+    transition: none !important;
   }
 }
 

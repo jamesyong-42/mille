@@ -42,6 +42,13 @@ import {
   resolveViewportAnchor,
 } from '../hooks/viewportAnchor.js';
 import { useFileTreeSelection } from '../hooks/useFileTreeSelection.js';
+import { reconcileTreeInteraction } from '../hooks/interactionReconciliation.js';
+import {
+  planLayoutAnimation,
+  type LayoutAnimationPlan,
+  type RenderedRowPosition,
+} from '../hooks/layoutAnimation.js';
+import { usePrefersReducedMotion } from '../hooks/usePrefersReducedMotion.js';
 import {
   useFileTreeKeyboard,
   type KeyboardExpansionActions,
@@ -267,6 +274,35 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
     return snapshot.visibleRows({ expanded, offset: 0, limit: count });
   }, [snapshot, expanded, count]);
 
+  const interactionProjectionRef = useRef({
+    treeVersion: snapshot.treeVersion,
+    rows: visibleRows,
+  });
+  useLayoutEffect(() => {
+    const previous = interactionProjectionRef.current;
+    if (previous.treeVersion === snapshot.treeVersion) return;
+    interactionProjectionRef.current = {
+      treeVersion: snapshot.treeVersion,
+      rows: visibleRows,
+    };
+    const reconciled = reconcileTreeInteraction(
+      previous.rows,
+      visibleRows,
+      selection.selectedIds,
+      selection.focusedId,
+      selection.anchorId,
+    );
+    if (reconciled.selectedIds !== selection.selectedIds) {
+      selection.setSelection(reconciled.selectedIds);
+    }
+    if (reconciled.focusedId !== selection.focusedId) {
+      selection.setFocused(reconciled.focusedId);
+    }
+    if (reconciled.anchorId !== selection.anchorId) {
+      selection.setAnchor(reconciled.anchorId);
+    }
+  }, [snapshot.treeVersion, visibleRows, selection]);
+
   // Virtualizer keys come from the projection above. Older code asked the
   // snapshot for a one-row slice per virtual item, multiplying traversal and
   // child sorting work during every commit.
@@ -333,50 +369,79 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
     viewportAnchorAdjustment,
   ]);
 
+  const prefersReducedMotion = usePrefersReducedMotion();
   const previousTreeVersionRef = useRef(snapshot.treeVersion);
-  const previousVisibleIdsRef = useRef<ReadonlySet<EntryId>>(
-    new Set(visibleRows.map((row) => row.id)),
-  );
-  const [layoutAnimation, setLayoutAnimation] = useState<{
-    readonly active: boolean;
-    readonly enteringIds: ReadonlySet<EntryId>;
-  }>(() => ({ active: false, enteringIds: new Set<EntryId>() }));
+  const previousRenderedPositionsRef = useRef<ReadonlyMap<EntryId, number>>(new Map());
+  const [layoutAnimation, setLayoutAnimation] = useState<LayoutAnimationPlan>(() => ({
+    active: false,
+    enteringIds: new Set<EntryId>(),
+    repositioningIds: new Set<EntryId>(),
+    suppressedBy: 'initial',
+  }));
   const treeVersionChanged = previousTreeVersionRef.current !== snapshot.treeVersion;
-  const newlyEnteringIds = useMemo<ReadonlySet<EntryId>>(() => {
-    if (!treeVersionChanged || previousVisibleIdsRef.current.size === 0) {
-      return new Set<EntryId>();
+  const renderedPositions = useMemo<readonly RenderedRowPosition[]>(() => {
+    const positions: RenderedRowPosition[] = [];
+    for (const item of virtualItems) {
+      const row = visibleRows[item.index];
+      if (row) positions.push({ id: row.id, offsetPx: item.start });
     }
-    const ids = new Set<EntryId>();
-    for (const row of visibleRows) {
-      if (!previousVisibleIdsRef.current.has(row.id)) ids.add(row.id);
-    }
-    return ids;
-  }, [treeVersionChanged, visibleRows]);
-  // A scroll correction and a transform transition would move in opposite
-  // coordinate systems for one frame. Keep the anchored commit visually
-  // stationary; newly inserted rows may animate on later, unanchored commits.
-  const layoutAnimationActive =
-    viewportAnchorAdjustment === null &&
-    anchoredTreeVersionRef.current !== snapshot.treeVersion &&
-    (treeVersionChanged || layoutAnimation.active);
-  const enteringIds = treeVersionChanged
-    ? newlyEnteringIds
-    : layoutAnimation.enteringIds;
+    return positions;
+  }, [virtualItems, visibleRows]);
+  const nextLayoutAnimation = useMemo<LayoutAnimationPlan>(() => {
+    if (!treeVersionChanged) return layoutAnimation;
+    return planLayoutAnimation(previousRenderedPositionsRef.current, renderedPositions, {
+      viewportAnchored:
+        viewportAnchorAdjustment !== null ||
+        anchoredTreeVersionRef.current === snapshot.treeVersion,
+      prefersReducedMotion,
+      animationInFlight: layoutAnimation.active,
+    });
+  }, [
+    treeVersionChanged,
+    layoutAnimation,
+    renderedPositions,
+    viewportAnchorAdjustment,
+    snapshot.treeVersion,
+    prefersReducedMotion,
+  ]);
+  const displayedLayoutAnimation = prefersReducedMotion
+    ? {
+        active: false,
+        enteringIds: new Set<EntryId>(),
+        repositioningIds: new Set<EntryId>(),
+        suppressedBy: 'reduced-motion' as const,
+      }
+    : nextLayoutAnimation;
+  const animationSuppression =
+    displayedLayoutAnimation.suppressedBy === 'anchored' ||
+    displayedLayoutAnimation.suppressedBy === 'reduced-motion' ||
+    displayedLayoutAnimation.suppressedBy === 'in-flight' ||
+    displayedLayoutAnimation.suppressedBy === 'budget'
+      ? displayedLayoutAnimation.suppressedBy
+      : undefined;
 
-  useEffect(() => {
-    previousVisibleIdsRef.current = new Set(visibleRows.map((row) => row.id));
-  }, [visibleRows]);
+  useLayoutEffect(() => {
+    previousRenderedPositionsRef.current = new Map(
+      renderedPositions.map((row) => [row.id, row.offsetPx]),
+    );
+  }, [renderedPositions]);
 
   useEffect(() => {
     if (previousTreeVersionRef.current === snapshot.treeVersion) return;
     previousTreeVersionRef.current = snapshot.treeVersion;
-    setLayoutAnimation({ active: true, enteringIds: newlyEnteringIds });
+    setLayoutAnimation(nextLayoutAnimation);
+    if (!nextLayoutAnimation.active) return;
     const timeout = setTimeout(() => {
-      setLayoutAnimation({ active: false, enteringIds: new Set<EntryId>() });
+      setLayoutAnimation({
+        active: false,
+        enteringIds: new Set<EntryId>(),
+        repositioningIds: new Set<EntryId>(),
+        suppressedBy: 'no-visible-change',
+      });
     }, 170);
     return () => clearTimeout(timeout);
-    // `newlyEnteringIds` belongs to this exact treeVersion render. A state
-    // render must not restart the timer for the same version.
+    // `nextLayoutAnimation` belongs to this exact treeVersion render. A state
+    // render must not restart the transaction for the same version.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [snapshot.treeVersion]);
 
@@ -1222,7 +1287,8 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
             : 'mille-tree'
       }
       data-mille-tree-state="ready"
-      data-mille-layout-animating={layoutAnimationActive ? 'true' : undefined}
+      data-mille-layout-animating={displayedLayoutAnimation.active ? 'true' : undefined}
+      data-mille-animation-suppressed={animationSuppression}
       data-mille-filter-active={filterActive && searchMode === 'filter' ? 'true' : undefined}
       style={scrollerStyle}
       onKeyDown={onKeyDown}
@@ -1290,7 +1356,8 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
             style: rowStyle,
             ariaProps: aria,
             isStickyRoot,
-            entering: enteringIds.has(row.id),
+            entering: displayedLayoutAnimation.enteringIds.has(row.id),
+            repositioning: displayedLayoutAnimation.repositioningIds.has(row.id),
             cut: isCut,
             hidden: isHidden,
             renameTargetId: renameState.renameTargetId,

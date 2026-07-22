@@ -114,6 +114,8 @@ export interface UseFileTreeRowRowProps {
   readonly 'data-mille-under-library-root'?: 'true';
   /** Symlink whose target is a directory (pnpm/npm workspace link). */
   readonly 'data-mille-symlink-dir'?: 'true';
+  readonly 'data-mille-entering'?: 'true';
+  readonly 'data-mille-repositioning'?: 'true';
   readonly className?: string;
   readonly style: CSSProperties;
   readonly tabIndex: 0 | -1;
@@ -215,6 +217,7 @@ export function useFileTreeRow(props: FileTreeRowProps): UseFileTreeRowResult {
     ariaProps,
     isStickyRoot,
     entering,
+    repositioning,
     cut,
     hidden,
     onChevronClick,
@@ -355,6 +358,7 @@ export function useFileTreeRow(props: FileTreeRowProps): UseFileTreeRowResult {
     if (pending) out['data-mille-pending'] = t;
     if (isStickyRoot) out['data-mille-sticky-root'] = t;
     if (entering) out['data-mille-entering'] = t;
+    if (repositioning) out['data-mille-repositioning'] = t;
     if (cut) out['data-mille-cut'] = t;
     if (hidden) out['data-mille-hidden'] = t;
     if (dragging) out['data-mille-dragging'] = t;
@@ -404,6 +408,7 @@ export function useFileTreeRow(props: FileTreeRowProps): UseFileTreeRowResult {
     pending,
     isStickyRoot,
     entering,
+    repositioning,
     cut,
     hidden,
     dragging,

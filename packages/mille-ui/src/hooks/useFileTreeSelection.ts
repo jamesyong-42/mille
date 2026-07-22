@@ -56,6 +56,8 @@ export interface FileTreeSelectionHandle {
   setFocused(id: EntryId | null): void;
   /** Replace selection directly (used by Cmd+A / clear). */
   setSelection(ids: ReadonlySet<EntryId>): void;
+  /** Replace the range-selection anchor during structural reconciliation. */
+  setAnchor(id: EntryId | null): void;
   /** Current anchor, if any. Read-only; mutated by selectOne / selectRange / toggle. */
   readonly anchorId: EntryId | null;
 }
@@ -172,6 +174,10 @@ export function useFileTreeSelection(
     [setSelection],
   );
 
+  const setAnchor = useCallback((id: EntryId | null) => {
+    anchorRef.current = id;
+  }, []);
+
   // Expose a getter for the anchor ref so tests (and keyboard handler)
   // can observe it without a re-render. We purposely don't surface the
   // raw ref — callers read via `anchorId` from the handle.
@@ -188,7 +194,18 @@ export function useFileTreeSelection(
       clear,
       setFocused,
       setSelection: setSelectionDirect,
+      setAnchor,
     }),
-    [selection, focused, selectOne, selectRange, toggle, clear, setFocused, setSelectionDirect],
+    [
+      selection,
+      focused,
+      selectOne,
+      selectRange,
+      toggle,
+      clear,
+      setFocused,
+      setSelectionDirect,
+      setAnchor,
+    ],
   );
 }

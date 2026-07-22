@@ -260,6 +260,18 @@ cannot fight the scroll adjustment.
 - Use compositor-friendly properties and cancel stale transitions.
 - Disable nonessential motion under `prefers-reduced-motion`.
 
+First animation-budget result (2026-07-21): structural motion is now planned
+from the mounted virtual window rather than the complete visible projection.
+Only newly entered rows and mounted rows whose pixel offset materially changed
+receive animation markers. Anchored corrections, reduced-motion sessions, a
+second update during an active transaction, and commits affecting more than 64
+mounted rows suppress motion entirely. The markers expire after 170 ms, which
+also removes `will-change`; ordinary scroll and unrelated tree versions create
+no compositor work. The 500,000-row gate observes 37 animated rows for a normal
+1,000-child expansion, zero for a 130-mounted-row storm, and zero for an
+anchored 1,000-row insertion. Published CSS additionally disables disclosure
+chevron transitions under `prefers-reduced-motion`.
+
 #### 2.4 Reduce render and allocation work
 
 - Profile the 500,000-row and high-churn fixtures with browser tooling.
@@ -275,6 +287,15 @@ cannot fight the scroll adjustment.
 - Remove deleted rows from selection without clearing unrelated selection.
 - Keep an inline rename open when an unrelated delta arrives.
 - Give stale rename/move failures a recoverable state rather than closing input.
+
+First interaction-reconciliation result (2026-07-21): structural tree versions
+preserve surviving selection IDs, focus, and the range anchor by stable entry
+ID. Deleted IDs alone are pruned. If the focused row disappears, focus moves to
+the nearest surviving row (forward first, then backward); when it was the sole
+selection, that replacement becomes selected. Reconciliation runs before paint
+to avoid a transient empty-focus frame. The 500,000-row CI invariant bench now
+asserts both 0.5 px viewport stability and focused-selection preservation while
+1,000 rows are inserted above the active row.
 
 ### Exit criteria
 

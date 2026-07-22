@@ -2,8 +2,9 @@
 
 A minimal, scripted perf harness for `@vibecook/mille-ui`. Runs under Node +
 happy-dom; **not** a browser. Timing numbers are indicative only, while the
-viewport-anchor drift assertion is deterministic and exits non-zero. Real paint
-and frame budgets are enforced separately by `pnpm bench:watch`.
+viewport, interaction, and animation-work assertions are deterministic and exit
+non-zero. Real paint and frame budgets are enforced separately by
+`pnpm bench:watch`.
 
 ## Run
 
@@ -25,7 +26,7 @@ pnpm --filter @vibecook/mille-ui build
 
 The harness builds a synthetic 500,000-row snapshot with 1,000
 pre-expanded folders, mounts `<FileTree>` against a fake engine
-(`createFakeEngine()`), and times four operations with
+(`createFakeEngine()`), and times five operations with
 `performance.now()`:
 
 | Scenario | What happens |
@@ -33,10 +34,11 @@ pre-expanded folders, mounts `<FileTree>` against a fake engine
 | **initial render** | First paint with the full 500k snapshot. Virtualizer windows down to ~40 treeitems. |
 | **scroll shift** | Moves `scrollTop` by 1000 × rowHeight and times the next commit. |
 | **expand 1000 children** | Emits a delta that inserts 1000 rows under the root folder. |
-| **insert 1000 above viewport** | Preserves the top row's pixel offset and fails above 0.5 px drift. |
+| **budget 1000-row visible storm** | Uses a tall virtual window to prove a commit affecting more than the 64-row animation budget produces zero transition markers. |
+| **insert 1000 above viewport** | Preserves the top row's pixel offset, focus, and selection; fails above 0.5 px drift or on interaction-state loss. |
 
-Output is a small markdown table. Timing numbers are reporters; structural and
-viewport-anchor invariant failures exit non-zero.
+Output is a small markdown table. Timing numbers are reporters; virtualization,
+viewport-anchor, interaction-state, and animation-budget failures exit non-zero.
 
 ## Why happy-dom
 

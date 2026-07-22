@@ -176,6 +176,7 @@ export function areFileTreeRowPropsEqual(
     prev.ariaProps['aria-expanded'] === next.ariaProps['aria-expanded'] &&
     prev.isStickyRoot === next.isStickyRoot &&
     prev.entering === next.entering &&
+    prev.repositioning === next.repositioning &&
     prev.cut === next.cut &&
     prev.hidden === next.hidden &&
     prev.decorations === next.decorations &&

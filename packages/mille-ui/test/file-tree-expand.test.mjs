@@ -32,6 +32,24 @@ installGlobal('Node', hdWindow.Node);
 installGlobal('Element', hdWindow.Element);
 installGlobal('MessageChannel', hdWindow.MessageChannel);
 installGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+let reducedMotion = false;
+const reducedMotionListeners = new Set();
+hdWindow.matchMedia = (query) => ({
+  matches: query === '(prefers-reduced-motion: reduce)' && reducedMotion,
+  media: query,
+  onchange: null,
+  addEventListener: (_type, listener) => reducedMotionListeners.add(listener),
+  removeEventListener: (_type, listener) => reducedMotionListeners.delete(listener),
+  addListener: (listener) => reducedMotionListeners.add(listener),
+  removeListener: (listener) => reducedMotionListeners.delete(listener),
+  dispatchEvent: () => true,
+});
+function setReducedMotion(next) {
+  reducedMotion = next;
+  for (const listener of reducedMotionListeners) {
+    listener({ matches: next, media: '(prefers-reduced-motion: reduce)' });
+  }
+}
 if (typeof globalThis.ResizeObserver === 'undefined') {
   class ResizeObserverMock {
     observe() {}
@@ -195,6 +213,29 @@ test('root expands by default and renders children when the engine publishes the
     'new filesystem rows should receive the enter-animation marker',
   );
 
+  // A second filesystem update inside the 150 ms transaction cancels the
+  // stale animation instead of restarting motion across the viewport.
+  const burst = [
+    ...expanded,
+    makeRow({ id: 4, parentId: 1, name: 'child-c', depth: 1, kind: 0 }),
+  ];
+  await act(async () => {
+    fx.emitDelta(createFakeSnapshot({ rows: burst, treeVersion: 3 }));
+  });
+  assert.equal(
+    container.querySelector('[role="tree"]')?.getAttribute('data-mille-layout-animating'),
+    null,
+  );
+  assert.equal(
+    container.querySelector('[role="tree"]')?.getAttribute('data-mille-animation-suppressed'),
+    'in-flight',
+  );
+  assert.equal(
+    container.querySelectorAll('[data-mille-entering], [data-mille-repositioning]').length,
+    0,
+    'a burst update must clear stale row animation markers',
+  );
+
   await act(async () => {
     await new Promise((resolve) => setTimeout(resolve, 190));
   });
@@ -210,6 +251,62 @@ test('root expands by default and renders children when the engine publishes the
 
   await act(async () => { root.unmount(); });
   container.remove();
+});
+
+test('reduced motion emits no structural animation markers', async () => {
+  setReducedMotion(true);
+  const fx = createFakeEngine();
+  const initial = [
+    makeRow({ id: 20, parentId: null, name: 'root', depth: 0, hasChildren: true }),
+  ];
+  fx.emitDelta(createFakeSnapshot({ rows: initial, treeVersion: 1 }));
+  const { container, root } = mount();
+  const obs = makeObservers();
+
+  try {
+    await act(async () => {
+      root.render(
+        createElement(FileTree, {
+          fx,
+          ariaLabel: 'Reduced motion',
+          rowHeight: 22,
+          overscan: 5,
+          __testObserveElementRect: obs.observeElementRect,
+          __testObserveElementOffset: obs.observeElementOffset,
+        }),
+      );
+    });
+    await act(async () => {
+      fx.emitDelta(
+        createFakeSnapshot({
+          rows: [
+            makeRow({
+              id: 20,
+              parentId: null,
+              name: 'root',
+              depth: 0,
+              hasChildren: true,
+              isExpanded: true,
+            }),
+            makeRow({ id: 21, parentId: 20, name: 'child', depth: 1, kind: 0 }),
+          ],
+          treeVersion: 2,
+        }),
+      );
+    });
+
+    const tree = container.querySelector('[role="tree"]');
+    assert.equal(tree?.getAttribute('data-mille-layout-animating'), null);
+    assert.equal(tree?.getAttribute('data-mille-animation-suppressed'), 'reduced-motion');
+    assert.equal(
+      container.querySelectorAll('[data-mille-entering], [data-mille-repositioning]').length,
+      0,
+    );
+  } finally {
+    await act(async () => root.unmount());
+    container.remove();
+    setReducedMotion(false);
+  }
 });
 
 test('a root arriving asynchronously expands once and stays collapsed after user action', async () => {

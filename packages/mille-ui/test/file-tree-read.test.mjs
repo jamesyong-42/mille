@@ -360,3 +360,87 @@ test('structural inserts and anchor deletion preserve viewport pixel positions',
   await act(async () => { root.unmount(); });
   container.remove();
 });
+
+test('structural churn preserves surviving selection and repairs deleted focus', async () => {
+  const fx = createFakeEngine();
+  const rows = buildRows(20, { rootCount: 1 });
+  fx.emitDelta(createFakeSnapshot({ rows, treeVersion: 1 }));
+  const { container, root } = mount();
+  const obs = makeObservers({ height: 400 });
+
+  await act(async () => {
+    root.render(
+      createElement(FileTree, {
+        fx,
+        ariaLabel: 'Interaction churn',
+        rowHeight: 20,
+        overscan: 5,
+        __testObserveElementRect: obs.observeElementRect,
+        __testObserveElementOffset: obs.observeElementOffset,
+      }),
+    );
+  });
+
+  const row = (id) => container.querySelector(`[data-mille-row-id="${id}"]`);
+  await act(async () => {
+    row(3).dispatchEvent(new hdWindow.MouseEvent('click', { bubbles: true, detail: 1 }));
+  });
+  await act(async () => {
+    row(5).dispatchEvent(
+      new hdWindow.MouseEvent('click', {
+        bubbles: true,
+        detail: 1,
+        shiftKey: true,
+      }),
+    );
+  });
+  assert.equal(row(3).getAttribute('aria-selected'), 'true');
+  assert.equal(row(4).getAttribute('aria-selected'), 'true');
+  assert.equal(row(5).getAttribute('aria-selected'), 'true');
+  assert.equal(row(5).getAttribute('data-mille-focused'), 'true');
+
+  const inserted = makeRow({
+    id: 10_000,
+    parentId: 1,
+    name: 'inserted-above',
+    depth: 1,
+    kind: 0,
+    hasChildren: false,
+    isExpanded: false,
+  });
+  await act(async () => {
+    fx.emitDelta(
+      createFakeSnapshot({ rows: [rows[0], inserted, ...rows.slice(1)], treeVersion: 2 }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  });
+  assert.equal(row(3).getAttribute('aria-selected'), 'true');
+  assert.equal(row(4).getAttribute('aria-selected'), 'true');
+  assert.equal(row(5).getAttribute('aria-selected'), 'true');
+  assert.equal(row(5).getAttribute('data-mille-focused'), 'true');
+
+  await act(async () => {
+    fx.emitDelta(
+      createFakeSnapshot({ rows: [rows[0], inserted, ...rows.slice(1).filter((r) => r.id !== 3)], treeVersion: 3 }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  });
+  assert.equal(row(3), null);
+  assert.equal(row(4).getAttribute('aria-selected'), 'true');
+  assert.equal(row(5).getAttribute('aria-selected'), 'true');
+  assert.equal(row(5).getAttribute('data-mille-focused'), 'true');
+
+  await act(async () => {
+    fx.emitDelta(
+      createFakeSnapshot({ rows: [rows[0], inserted, ...rows.slice(1).filter((r) => r.id !== 3 && r.id !== 5)], treeVersion: 4 }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  });
+  assert.equal(row(5), null);
+  assert.equal(row(4).getAttribute('aria-selected'), 'true');
+  assert.equal(row(6).getAttribute('aria-selected'), 'false');
+  assert.equal(row(6).getAttribute('data-mille-focused'), 'true');
+
+  await act(async () => { root.unmount(); });
+  container.remove();
+});

@@ -137,6 +137,8 @@ export interface FileTreeRowProps {
   readonly isStickyRoot?: boolean;
   /** Internal file-change enter animation marker. */
   readonly entering?: boolean;
+  /** Internal marker for a mounted row whose virtual offset changed. */
+  readonly repositioning?: boolean;
   /**
    * Phase 7 — whether this row's id is in the clipboard `cutIds` set.
    * Rendered as `data-mille-cut="true"`; the default CSS dims the row

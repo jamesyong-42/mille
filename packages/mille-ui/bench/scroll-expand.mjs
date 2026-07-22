@@ -59,6 +59,7 @@ const { createRoot } = await import('react-dom/client');
 
 const { FileTree } = await import('../dist/index.js');
 const { createFakeEngine, createFakeSnapshot } = await import('../dist/testing.js');
+const { MAX_LAYOUT_ANIMATION_ROWS } = await import('../dist/hooks/layoutAnimation.js');
 
 // ─── Synthetic 500k-row hierarchy ─────────────────────────────────────
 //
@@ -319,11 +320,66 @@ async function runExpandChildren(rows) {
   });
 
   const treeitems = container.querySelectorAll('[role="treeitem"]').length;
+  const animatedRows = container.querySelectorAll(
+    '[data-mille-entering], [data-mille-repositioning]',
+  ).length;
+  const animationActive =
+    container.querySelector('[role="tree"]')?.getAttribute('data-mille-layout-animating') ===
+    'true';
   await act(async () => {
     root.unmount();
   });
   container.remove();
-  return { ...result, rendered: treeitems };
+  return { ...result, rendered: treeitems, animatedRows, animationActive };
+}
+
+async function runAnimationStorm(rows) {
+  const fx = createFakeEngine();
+  fx.emitDelta(createFakeSnapshot({ rows, treeVersion: 1 }));
+  const { container, root } = mountContainer();
+  const obs = makeObservers({ height: 2_400 });
+
+  await act(async () => {
+    root.render(
+      createElement(FileTree, {
+        fx,
+        ariaLabel: 'bench-animation-budget',
+        rowHeight: 22,
+        overscan: 20,
+        __testObserveElementRect: obs.observeElementRect,
+        __testObserveElementOffset: obs.observeElementOffset,
+      }),
+    );
+  });
+
+  const inserted = Array.from({ length: 1_000 }, (_, index) =>
+    makeRow({
+      id: 30_000_000 + index,
+      parentId: 1,
+      name: `storm-${index}.ts`,
+      depth: 1,
+      kind: 0,
+      hasChildren: false,
+      isExpanded: false,
+    }),
+  );
+  const nextRows = [rows[0], ...inserted, ...rows.slice(1)];
+  const result = await measureAsync('budget 1000-row visible storm', async () => {
+    await act(async () => {
+      fx.emitDelta(createFakeSnapshot({ rows: nextRows, treeVersion: 2 }));
+    });
+  });
+  const rendered = container.querySelectorAll('[role="treeitem"]').length;
+  const animatedRows = container.querySelectorAll(
+    '[data-mille-entering], [data-mille-repositioning]',
+  ).length;
+  const suppressedBy = container
+    .querySelector('[role="tree"]')
+    ?.getAttribute('data-mille-animation-suppressed');
+
+  await act(async () => root.unmount());
+  container.remove();
+  return { ...result, rendered, animatedRows, suppressedBy };
 }
 
 async function runAnchoredInsert(rows) {
@@ -360,6 +416,13 @@ async function runAnchoredInsert(rows) {
   });
   const anchorId = rows[anchorIndex]?.id;
   if (anchorId === undefined) throw new Error('anchor row is missing');
+  const anchorBefore = container.querySelector(`[data-mille-row-id="${anchorId}"]`);
+  if (!anchorBefore) throw new Error('anchor row is outside the rendered window');
+  await act(async () => {
+    anchorBefore.dispatchEvent(
+      new hdWindow.MouseEvent('click', { bubbles: true, cancelable: true }),
+    );
+  });
 
   const insertCount = 1_000;
   const inserted = Array.from({ length: insertCount }, (_, index) =>
@@ -388,11 +451,24 @@ async function runAnchoredInsert(rows) {
   const viewportPosition = Number(match[1]) - tree.scrollTop;
   const driftPx = Math.abs(viewportPosition);
   const unanchoredDriftPx = insertCount * rowHeight;
+  const interactionPreserved =
+    anchoredRow.getAttribute('aria-selected') === 'true' &&
+    anchoredRow.getAttribute('data-mille-focused') === 'true';
   const rendered = container.querySelectorAll('[role="treeitem"]').length;
+  const animatedRows = container.querySelectorAll(
+    '[data-mille-entering], [data-mille-repositioning]',
+  ).length;
 
   await act(async () => root.unmount());
   container.remove();
-  return { ...result, rendered, driftPx, unanchoredDriftPx };
+  return {
+    ...result,
+    rendered,
+    driftPx,
+    unanchoredDriftPx,
+    interactionPreserved,
+    animatedRows,
+  };
 }
 
 // ─── Runner ───────────────────────────────────────────────────────────
@@ -402,13 +478,15 @@ function printTable(rows) {
   const w2 = 10;
   const w3 = 10;
   const w4 = 10;
-  const header = `| ${'scenario'.padEnd(w1)} | ${'ms'.padStart(w2)} | ${'rendered'.padStart(w3)} | ${'drift px'.padStart(w4)} |`;
-  const sep = `|${'-'.repeat(w1 + 2)}|${'-'.repeat(w2 + 2)}|${'-'.repeat(w3 + 2)}|${'-'.repeat(w4 + 2)}|`;
+  const w5 = 11;
+  const w6 = 9;
+  const header = `| ${'scenario'.padEnd(w1)} | ${'ms'.padStart(w2)} | ${'rendered'.padStart(w3)} | ${'drift px'.padStart(w4)} | ${'interaction'.padStart(w5)} | ${'animated'.padStart(w6)} |`;
+  const sep = `|${'-'.repeat(w1 + 2)}|${'-'.repeat(w2 + 2)}|${'-'.repeat(w3 + 2)}|${'-'.repeat(w4 + 2)}|${'-'.repeat(w5 + 2)}|${'-'.repeat(w6 + 2)}|`;
   console.log(header);
   console.log(sep);
   for (const r of rows) {
     console.log(
-      `| ${r.label.padEnd(w1)} | ${r.ms.toFixed(2).padStart(w2)} | ${String(r.rendered).padStart(w3)} | ${(r.driftPx === undefined ? '—' : r.driftPx.toFixed(2)).padStart(w4)} |`,
+      `| ${r.label.padEnd(w1)} | ${r.ms.toFixed(2).padStart(w2)} | ${String(r.rendered).padStart(w3)} | ${(r.driftPx === undefined ? '—' : r.driftPx.toFixed(2)).padStart(w4)} | ${(r.interactionPreserved === undefined ? '—' : r.interactionPreserved ? 'preserved' : 'lost').padStart(w5)} | ${(r.animatedRows === undefined ? '—' : String(r.animatedRows)).padStart(w6)} |`,
     );
   }
 }
@@ -426,7 +504,10 @@ async function main() {
   const results = [];
   results.push(await runInitialRender(rows));
   results.push(await runScrollShift(rows));
-  results.push(await runExpandChildren(rows));
+  const expandResult = await runExpandChildren(rows);
+  results.push(expandResult);
+  const stormResult = await runAnimationStorm(rows);
+  results.push(stormResult);
   const anchorResult = await runAnchoredInsert(rows);
   results.push(anchorResult);
 
@@ -441,6 +522,26 @@ async function main() {
   );
   if (anchorResult.driftPx > 0.5) {
     throw new Error(`viewport anchor drift ${anchorResult.driftPx.toFixed(2)} px exceeds 0.5 px`);
+  }
+  if (!anchorResult.interactionPreserved) {
+    throw new Error('focused selection was not preserved during insert-above churn');
+  }
+  if (
+    !expandResult.animationActive ||
+    expandResult.animatedRows === 0 ||
+    expandResult.animatedRows > MAX_LAYOUT_ANIMATION_ROWS
+  ) {
+    throw new Error(
+      `ordinary expansion animated ${expandResult.animatedRows} rows; expected 1-${MAX_LAYOUT_ANIMATION_ROWS}`,
+    );
+  }
+  if (stormResult.animatedRows !== 0 || stormResult.suppressedBy !== 'budget') {
+    throw new Error(
+      `visible animation storm was not budget-suppressed: ${stormResult.animatedRows} rows, reason=${stormResult.suppressedBy}`,
+    );
+  }
+  if (anchorResult.animatedRows !== 0) {
+    throw new Error(`anchored update animated ${anchorResult.animatedRows} rows`);
   }
 }
 

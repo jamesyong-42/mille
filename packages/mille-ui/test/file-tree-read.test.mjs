@@ -474,3 +474,98 @@ test('structural churn preserves surviving selection and repairs deleted focus',
   await act(async () => { root.unmount(); });
   container.remove();
 });
+
+test('local keyboard navigation reads a bounded row neighborhood', async () => {
+  const fx = createFakeEngine();
+  const rows = buildRows(10_000);
+  const baseSnapshot = createFakeSnapshot({ rows, treeVersion: 1 });
+  const requestedLimits = [];
+  fx.emitDelta({
+    ...baseSnapshot,
+    visibleRows: (options) => {
+      requestedLimits.push(options.limit);
+      return baseSnapshot.visibleRows(options);
+    },
+  });
+  requestedLimits.length = 0;
+
+  const { container, root } = mount();
+  const obs = makeObservers({ height: 400 });
+  let observedFocusedId = null;
+  await act(async () => {
+    root.render(
+      createElement(FileTree, {
+        fx,
+        ariaLabel: 'Bounded keyboard',
+        rowHeight: 20,
+        overscan: 10,
+        onFocusedIdChange: (id) => {
+          observedFocusedId = id;
+        },
+        __testObserveElementRect: obs.observeElementRect,
+        __testObserveElementOffset: obs.observeElementOffset,
+      }),
+    );
+  });
+  await act(async () => {
+    obs.setOffset(5_000 * 20);
+  });
+
+  const tree = container.querySelector('[role="tree"]');
+  const mountedRows = container.querySelectorAll('[role="treeitem"]');
+  const target = mountedRows[Math.floor(mountedRows.length / 2)];
+  assert.ok(tree && target);
+  const targetId = Number(target.getAttribute('data-mille-row-id'));
+  await act(async () => {
+    target.dispatchEvent(
+      new hdWindow.MouseEvent('click', { bubbles: true, cancelable: true }),
+    );
+  });
+  requestedLimits.length = 0;
+
+  await act(async () => {
+    tree.dispatchEvent(
+      new hdWindow.KeyboardEvent('keydown', {
+        key: 'ArrowDown',
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+  });
+
+  assert.equal(
+    container
+      .querySelector('[data-mille-focused="true"]')
+      ?.getAttribute('data-mille-row-id'),
+    String(targetId + 1),
+  );
+  assert.equal(observedFocusedId, targetId + 1);
+  assert.ok(requestedLimits.length > 0, 'navigation should read its target row');
+  assert.ok(
+    Math.max(...requestedLimits) <= 256,
+    `navigation requested ${Math.max(...requestedLimits)} rows at once`,
+  );
+  assert.ok(
+    requestedLimits.reduce((total, limit) => total + limit, 0) <= 512,
+    `navigation requested ${requestedLimits.reduce((total, limit) => total + limit, 0)} rows total`,
+  );
+
+  requestedLimits.length = 0;
+  await act(async () => {
+    tree.dispatchEvent(
+      new hdWindow.KeyboardEvent('keydown', {
+        key: 'PageDown',
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+  });
+  // happy-dom exposes no clientHeight, so PageDown uses the documented
+  // 10-row fallback after the preceding one-row ArrowDown.
+  assert.equal(observedFocusedId, targetId + 11);
+  assert.ok(Math.max(...requestedLimits) <= 256);
+  assert.ok(requestedLimits.reduce((total, limit) => total + limit, 0) <= 512);
+
+  await act(async () => { root.unmount(); });
+  container.remove();
+});

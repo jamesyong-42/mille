@@ -38,8 +38,8 @@ import { useExpandedSet } from '../hooks/useExpandedSet.js';
 import { useSetExpandedBridge } from '../hooks/useSetExpandedBridge.js';
 import { useVirtualizerForSnapshot } from '../hooks/useVirtualizerForSnapshot.js';
 import {
-  captureViewportAnchor,
-  resolveViewportAnchor,
+  captureWindowedViewportAnchor,
+  resolveWindowedViewportAnchor,
 } from '../hooks/viewportAnchor.js';
 import { useFileTreeSelection } from '../hooks/useFileTreeSelection.js';
 import {
@@ -403,11 +403,23 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
     ) {
       return null;
     }
-    const previousRows = previous.projection.readAllRows();
-    const nextRows = projection.readAllRows();
-    const anchor = captureViewportAnchor(previousRows, previous.scrollOffset, rowHeight);
+    const previousWindow = {
+      rowCount: previous.projection.visibleCount.known,
+      readRows: previous.projection.readRows,
+      findRowIndex: previous.projection.findRowIndex,
+    };
+    const nextWindow = {
+      rowCount: projection.visibleCount.known,
+      readRows: projection.readRows,
+      findRowIndex: projection.findRowIndex,
+    };
+    const anchor = captureWindowedViewportAnchor(
+      previousWindow,
+      previous.scrollOffset,
+      rowHeight,
+    );
     return anchor
-      ? resolveViewportAnchor(anchor, previousRows, nextRows, rowHeight)
+      ? resolveWindowedViewportAnchor(anchor, previousWindow, nextWindow, rowHeight)
       : null;
   }, [snapshot.treeVersion, projection, rowHeight, viewportScrollOffset]);
   const viewportAnchorAdjustment =
@@ -530,57 +542,75 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
     [expanded, addExpanded, removeExpanded, toggle],
   );
 
+  const findVisibleRowIndex = useCallback(
+    (id: EntryId, hintIndex = mountedViewportOffset): number => {
+      const boundedIndex = projection.findRowIndex(id, hintIndex);
+      return boundedIndex !== -1
+        ? boundedIndex
+        : readAllVisibleRows().findIndex((row) => row.id === id);
+    },
+    [mountedViewportOffset, projection, readAllVisibleRows],
+  );
+
   const rowsLookup = useMemo<KeyboardRowLookup>(
     () => ({
       get visibleRows() {
         return readAllVisibleRows();
       },
+      rowCount: count,
+      readRows: projection.readRows,
+      findRowIndex: findVisibleRowIndex,
       getRowById: (id) => {
-        for (const r of readAllVisibleRows()) {
-          if (r.id === id) return r;
-        }
-        return null;
+        const mounted = visibleRows.find((row) => row.id === id);
+        if (mounted) return mounted;
+        const index = findVisibleRowIndex(id);
+        return index === -1 ? null : projection.readRows(index, 1)[0] ?? null;
       },
     }),
-    [readAllVisibleRows],
+    [
+      readAllVisibleRows,
+      count,
+      findVisibleRowIndex,
+      projection,
+      mountedViewportOffset,
+      visibleRows,
+    ],
   );
 
   const viewportActions = useMemo<ViewportKeyboardActions>(
     () => ({
       pageUp: (fromId) => {
-        const rows = readAllVisibleRows();
         const el = scrollerRef.current;
         const viewportPx = el ? el.clientHeight || 0 : 0;
         const rowsPerPage = viewportPx > 0
           ? Math.max(1, Math.floor(viewportPx / rowHeight))
           : 10;
-        if (rows.length === 0) return null;
+        if (count === 0) return null;
         const fromIdx = fromId !== null
-          ? rows.findIndex((r) => r.id === fromId)
+          ? findVisibleRowIndex(fromId)
           : -1;
         const base = fromIdx >= 0 ? fromIdx : 0;
         const targetIdx = Math.max(0, base - rowsPerPage);
-        const target = rows[targetIdx];
+        const target = projection.readRows(targetIdx, 1)[0];
         return target ? target.id : null;
       },
       pageDown: (fromId) => {
-        const rows = readAllVisibleRows();
         const el = scrollerRef.current;
         const viewportPx = el ? el.clientHeight || 0 : 0;
         const rowsPerPage = viewportPx > 0
           ? Math.max(1, Math.floor(viewportPx / rowHeight))
           : 10;
-        if (rows.length === 0) return null;
+        if (count === 0) return null;
         const fromIdx = fromId !== null
-          ? rows.findIndex((r) => r.id === fromId)
+          ? findVisibleRowIndex(fromId)
           : -1;
         const base = fromIdx >= 0 ? fromIdx : 0;
-        const targetIdx = Math.min(rows.length - 1, base + rowsPerPage);
-        const target = rows[targetIdx];
+        const targetIdx = Math.min(count - 1, base + rowsPerPage);
+        const target = projection.readRows(targetIdx, 1)[0];
         return target ? target.id : null;
       },
     }),
-    [readAllVisibleRows, rowHeight],
+    [count, findVisibleRowIndex, projection, rowHeight],
   );
 
   // ─── Phase 5: create-new-entry flow ─────────────────────────────────
@@ -918,16 +948,15 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
       // itself, not a descendant row (rows fire onFocus separately).
       if (e.target !== e.currentTarget) return;
       if (selection.focusedId !== null) return;
-      const rows = readAllVisibleRows();
       const restoreId = lastFocusedRef.current;
-      const first = rows[0];
-      if (restoreId !== null && rows.some((r) => r.id === restoreId)) {
+      const first = projection.readRows(0, 1)[0];
+      if (restoreId !== null && findVisibleRowIndex(restoreId) !== -1) {
         selection.setFocused(restoreId);
       } else if (first) {
         selection.setFocused(first.id);
       }
     },
-    [selection, readAllVisibleRows],
+    [selection, projection, findVisibleRowIndex],
   );
 
   const onRowFocus = useCallback(
@@ -1471,8 +1500,29 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
                 multiSelect && (e.shiftKey || e.metaKey || e.ctrlKey);
               if (multiSelect && e.shiftKey) {
                 const anchor = selection.anchorId ?? selection.focusedId ?? row.id;
-                const allIds: EntryId[] = readAllVisibleRows().map((r) => r.id);
-                selection.selectRange(anchor, row.id, allIds);
+                const anchorIndex = projection.findRowIndex(
+                  anchor,
+                  mountedViewportOffset,
+                );
+                const targetIndex = projection.findRowIndex(
+                  row.id,
+                  mountedViewportOffset,
+                );
+                if (anchorIndex !== -1 && targetIndex !== -1) {
+                  const start = Math.min(anchorIndex, targetIndex);
+                  const length = Math.abs(targetIndex - anchorIndex) + 1;
+                  selection.selectRange(
+                    anchor,
+                    row.id,
+                    projection.readRows(start, length).map((candidate) => candidate.id),
+                  );
+                } else {
+                  selection.selectRange(
+                    anchor,
+                    row.id,
+                    readAllVisibleRows().map((candidate) => candidate.id),
+                  );
+                }
               } else if (multiSelect && (e.metaKey || e.ctrlKey)) {
                 selection.toggle(row.id);
               } else {

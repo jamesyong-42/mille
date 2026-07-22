@@ -342,8 +342,47 @@ Viewport drift remained 0.00 px, rename identity/focus survived churn, and all
 304 UI tests passed. The real Electron gate observed 24/24 operations with zero
 misses, mirror p95 121.5 ms, paint p95 137.5 ms, React p95 16.3 ms, and 10.1
 ops/s. O(n) ordered-id metadata for extremely wide folders and the intentionally
-lazy full-order path used by global commands/deep anchoring remain Phase 2.4
+lazy full-order path used by global commands/deep anchoring remained Phase 2.4
 follow-up work.
+
+Sixth bounded-anchor result (2026-07-22): deep viewport anchoring no longer
+materializes the complete previous and next visible orders. It captures the
+single top row and resolves its stable id through 256-row probes centered on the
+prior logical index, with bounded nearest-neighbor recovery when that row is
+deleted. On the 500,000-row insert-above gate, adding 1,000 rows preserved the
+anchor at 0.00 px drift and retained focus/selection while reading 2,241 rows
+total, no more than 256 per request, instead of allocating two 500,000-row
+arrays. Runtime was 207.63 ms versus the preceding 203.26 ms result, a neutral
+single-run difference in this timing-only happy-dom reporter. Five repeated
+validation runs ranged from 259.02 to 387.87 ms with a 269.56 ms median, so no
+latency claim is attached to this slice; the deterministic allocation bound is
+the improvement. All 308 UI tests passed. Remaining Phase 2.4 scaling work is
+the O(n) ordered-id metadata for extremely wide folders and the deliberately
+lazy full-order reads used by global commands.
+
+The real Electron follow-up did not produce a clean watcher-convergence signal:
+two identical 24-operation runs observed 20/24 and 8/24 operations before the
+host watcher stopped converging. Their observed renderer work stayed within the
+ratified budgets (worst run: mirror p95 94.9 ms, paint p95 111.7 ms, React p95
+17.7 ms), but both correctly exited non-zero for state misses. This matches the
+open watcher-readiness/reliability risk and is not counted as an end-to-end pass
+for the bounded-anchor slice.
+
+Seventh windowed-keyboard result (2026-07-22): the keyboard hook no longer
+materializes the complete visible order before determining the key intent.
+Arrow Up/Down, Home/End, Page Up/Down, folder navigation, adjacent range
+extension, and container-focus restoration now use count, bounded index lookup,
+and row windows; the legacy full-order property remains as a compatibility and
+correctness fallback. The regression test first demonstrated that one
+`ArrowDown` on a 10,000-row fixture requested 9,999 rows at once. It now passes
+from a viewport around row 5,000 with both ArrowDown and PageDown capped at 256
+rows per request and 512 total. The 500,000-row gate consistently read 295 rows
+total (including the 38-row rerendered viewport), with a 256-row maximum.
+Across five runs, ArrowDown ranged from 11.09 to 29.99 ms with a 14.68 ms
+median; focus moved to the exact next id in every run. All 309 UI tests and all
+12 playground harness tests passed. Remaining global-order consumers are
+typeahead, Select All, deliberately long range selection, reveal/path fallback,
+and rare recovery when a focused id is far outside the mounted neighborhood.
 
 #### 2.5 Define state under deletion and errors
 

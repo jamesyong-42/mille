@@ -571,9 +571,83 @@ async function runRenameChurn(rows) {
   return { ...result, rendered, animatedRows, interactionPreserved };
 }
 
+async function runKeyboardNavigation(rows) {
+  const fx = createFakeEngine();
+  let maxProjectionReadRows = 0;
+  let projectionRowsRead = 0;
+  const snapshot = createFakeSnapshot({ rows, treeVersion: 1 });
+  fx.emitDelta({
+    ...snapshot,
+    visibleRows: (options) => {
+      // createFakeEngine snapshots its input once with MAX_SAFE_INTEGER.
+      if (options.limit !== Number.MAX_SAFE_INTEGER) {
+        maxProjectionReadRows = Math.max(maxProjectionReadRows, options.limit);
+        projectionRowsRead += options.limit;
+      }
+      return snapshot.visibleRows(options);
+    },
+  });
+  const { container, root } = mountContainer();
+  const obs = makeObservers({ height: 600 });
+
+  await act(async () => {
+    root.render(
+      createElement(FileTree, {
+        fx,
+        ariaLabel: 'bench-keyboard-navigation',
+        rowHeight: 22,
+        overscan: 10,
+        __testObserveElementRect: obs.observeElementRect,
+        __testObserveElementOffset: obs.observeElementOffset,
+      }),
+    );
+  });
+  const tree = container.querySelector('[role="tree"]');
+  const target = container.querySelector(`[data-mille-row-id="${rows[5]?.id}"]`);
+  if (!tree || !target) throw new Error('keyboard bench target is not mounted');
+  await act(async () => dispatchClick(target));
+  maxProjectionReadRows = 0;
+  projectionRowsRead = 0;
+
+  const result = await measureAsync('ArrowDown in 500k-row tree', async () => {
+    await act(async () => dispatchKey(tree, 'ArrowDown'));
+  });
+  const focusedId = Number(
+    container
+      .querySelector('[data-mille-focused="true"]')
+      ?.getAttribute('data-mille-row-id'),
+  );
+  const interactionPreserved = focusedId === rows[6]?.id;
+  const rendered = container.querySelectorAll('[role="treeitem"]').length;
+
+  await act(async () => root.unmount());
+  container.remove();
+  return {
+    ...result,
+    rendered,
+    interactionPreserved,
+    maxMaterializedRows: maxProjectionReadRows,
+    projectionRowsRead,
+  };
+}
+
 async function runAnchoredInsert(rows) {
   const fx = createFakeEngine();
-  fx.emitDelta(createFakeSnapshot({ rows, treeVersion: 1 }));
+  let maxProjectionReadRows = 0;
+  let projectionRowsRead = 0;
+  const trackProjectionReads = (snapshot) => ({
+    ...snapshot,
+    visibleRows: (options) => {
+      // createFakeEngine snapshots its input once with MAX_SAFE_INTEGER.
+      // Exclude that harness-internal read and measure FileTree probes only.
+      if (options.limit !== Number.MAX_SAFE_INTEGER) {
+        maxProjectionReadRows = Math.max(maxProjectionReadRows, options.limit);
+        projectionRowsRead += options.limit;
+      }
+      return snapshot.visibleRows(options);
+    },
+  });
+  fx.emitDelta(trackProjectionReads(createFakeSnapshot({ rows, treeVersion: 1 })));
   const { container, root } = mountContainer();
   const obs = makeObservers({ height: 600 });
   const rowHeight = 22;
@@ -590,6 +664,8 @@ async function runAnchoredInsert(rows) {
       }),
     );
   });
+  maxProjectionReadRows = 0;
+  projectionRowsRead = 0;
 
   const tree = container.querySelector('[role="tree"]');
   if (!tree) throw new Error('anchor bench did not mount a tree');
@@ -628,7 +704,9 @@ async function runAnchoredInsert(rows) {
   const nextRows = [rows[0], ...inserted, ...rows.slice(1)];
   const result = await measureAsync('insert 1000 above viewport', async () => {
     await act(async () => {
-      fx.emitDelta(createFakeSnapshot({ rows: nextRows, treeVersion: 2 }));
+      fx.emitDelta(
+        trackProjectionReads(createFakeSnapshot({ rows: nextRows, treeVersion: 2 })),
+      );
       await new Promise((resolve) => setTimeout(resolve, 25));
     });
   });
@@ -657,6 +735,8 @@ async function runAnchoredInsert(rows) {
     unanchoredDriftPx,
     interactionPreserved,
     animatedRows,
+    maxMaterializedRows: maxProjectionReadRows,
+    projectionRowsRead,
   };
 }
 
@@ -704,6 +784,8 @@ async function main() {
   results.push(stormResult);
   const renameResult = await runRenameChurn(rows);
   results.push(renameResult);
+  const keyboardResult = await runKeyboardNavigation(rows);
+  results.push(keyboardResult);
   const anchorResult = await runAnchoredInsert(rows);
   results.push(anchorResult);
 
@@ -715,6 +797,12 @@ async function main() {
   );
   console.log(
     `      Anchor counterfactual without correction: ${anchorResult.unanchoredDriftPx.toFixed(0)} px; measured: ${anchorResult.driftPx.toFixed(2)} px.`,
+  );
+  console.log(
+    `      Anchor projection probes: ${anchorResult.projectionRowsRead.toLocaleString()} rows total, ${anchorResult.maxMaterializedRows} max per read.`,
+  );
+  console.log(
+    `      Keyboard projection reads: ${keyboardResult.projectionRowsRead.toLocaleString()} rows total, ${keyboardResult.maxMaterializedRows} max per read.`,
   );
   if (anchorResult.driftPx > 0.5) {
     throw new Error(`viewport anchor drift ${anchorResult.driftPx.toFixed(2)} px exceeds 0.5 px`);
@@ -738,6 +826,22 @@ async function main() {
   }
   if (anchorResult.animatedRows !== 0) {
     throw new Error(`anchored update animated ${anchorResult.animatedRows} rows`);
+  }
+  if (anchorResult.maxMaterializedRows > 256 || anchorResult.projectionRowsRead > 4_096) {
+    throw new Error(
+      `anchor probing read max=${anchorResult.maxMaterializedRows}, total=${anchorResult.projectionRowsRead} rows`,
+    );
+  }
+  if (!keyboardResult.interactionPreserved) {
+    throw new Error('ArrowDown did not move focus to the next visible row');
+  }
+  if (
+    keyboardResult.maxMaterializedRows > 256 ||
+    keyboardResult.projectionRowsRead > 512
+  ) {
+    throw new Error(
+      `keyboard navigation read max=${keyboardResult.maxMaterializedRows}, total=${keyboardResult.projectionRowsRead} rows`,
+    );
   }
   if (!decorationResult.decorationVisible) {
     throw new Error('decoration-only update was not visible');

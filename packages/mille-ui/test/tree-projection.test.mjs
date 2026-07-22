@@ -76,3 +76,26 @@ test('row windows are bounded and the complete projection stays lazy', () => {
   assert.deepEqual(projection.readAllRows().map((row) => row.id), [1]);
   assert.equal(counters.rows, 2, 'full projection materializes only on explicit demand');
 });
+
+test('visible index lookup probes bounded chunks around a prior index', () => {
+  const rows = Array.from({ length: 20_000 }, (_, index) => ({
+    id: index + 1,
+    name: `row-${index + 1}`,
+  }));
+  const requests = [];
+  const snapshot = {
+    ...makeSnapshot(8, { count: 0, rows: 0, maxLimit: 0 }),
+    roots: () => [rows[0]],
+    visibleRowCount: () => ({ known: rows.length, pendingExpansions: new Set() }),
+    visibleRows: ({ offset, limit }) => {
+      requests.push({ offset, limit });
+      return rows.slice(offset, offset + limit);
+    },
+  };
+  const projection = readTreeProjection(snapshot, new Set(), null);
+
+  assert.equal(projection.findRowIndex(11_001, 10_000), 11_000);
+  assert.ok(requests.length > 1, 'lookup should expand beyond its first probe');
+  assert.ok(Math.max(...requests.map((request) => request.limit)) <= 256);
+  assert.ok(requests.reduce((total, request) => total + request.limit, 0) <= 4_096);
+});

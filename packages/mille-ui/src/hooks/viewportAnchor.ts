@@ -14,6 +14,77 @@ export interface ViewportAnchorResolution {
   readonly usedFallback: boolean;
 }
 
+export interface WindowedAnchorProjection {
+  readonly rowCount: number;
+  readRows(offset: number, limit: number): readonly VisibleRow[];
+  findRowIndex(id: EntryId, hintIndex: number, maxProbeRows?: number): number;
+}
+
+/** Capture the top row without allocating the complete visible order. */
+export function captureWindowedViewportAnchor(
+  projection: WindowedAnchorProjection,
+  scrollOffsetPx: number,
+  rowHeight: number,
+): ViewportAnchor | null {
+  if (projection.rowCount === 0 || rowHeight <= 0) return null;
+  const index = Math.min(
+    projection.rowCount - 1,
+    Math.max(0, Math.floor(scrollOffsetPx / rowHeight)),
+  );
+  const row = projection.readRows(index, 1)[0];
+  return row
+    ? { id: row.id, index, viewportOffsetPx: index * rowHeight - scrollOffsetPx }
+    : null;
+}
+
+/** Resolve an anchor with bounded chunk probes around its previous index. */
+export function resolveWindowedViewportAnchor(
+  anchor: ViewportAnchor,
+  previous: WindowedAnchorProjection,
+  next: WindowedAnchorProjection,
+  rowHeight: number,
+): ViewportAnchorResolution | null {
+  if (next.rowCount === 0 || rowHeight <= 0) return null;
+  let id = anchor.id;
+  let oldIndex = anchor.index;
+  let nextIndex = next.findRowIndex(id, anchor.index);
+  let usedFallback = false;
+
+  if (nextIndex === -1) {
+    usedFallback = true;
+    for (let distance = 1; distance <= 32; distance += 1) {
+      const afterIndex = anchor.index + distance;
+      const beforeIndex = anchor.index - distance;
+      const candidates = [
+        ...(afterIndex < previous.rowCount ? previous.readRows(afterIndex, 1) : []),
+        ...(beforeIndex >= 0 ? previous.readRows(beforeIndex, 1) : []),
+      ];
+      let matched = false;
+      for (const candidate of candidates) {
+        const candidateIndex = next.findRowIndex(candidate.id, anchor.index);
+        if (candidateIndex === -1) continue;
+        id = candidate.id;
+        oldIndex = candidate === candidates[0] && afterIndex < previous.rowCount
+          ? afterIndex
+          : beforeIndex;
+        nextIndex = candidateIndex;
+        matched = true;
+        break;
+      }
+      if (matched) break;
+    }
+  }
+
+  if (nextIndex === -1) return null;
+  const oldViewportOffset = anchor.viewportOffsetPx + (oldIndex - anchor.index) * rowHeight;
+  return {
+    id,
+    index: nextIndex,
+    scrollOffsetPx: Math.max(0, nextIndex * rowHeight - oldViewportOffset),
+    usedFallback,
+  };
+}
+
 export function captureViewportAnchor(
   rows: readonly VisibleRow[],
   scrollOffsetPx: number,

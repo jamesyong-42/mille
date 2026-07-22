@@ -11,6 +11,8 @@ export interface TreeProjection {
   readRows(offset: number, limit: number): readonly VisibleRow[];
   /** Lazily materialize full order for discrete keyboard/imperative commands. */
   readAllRows(): readonly VisibleRow[];
+  /** Find an id near a prior logical index using bounded row-window probes. */
+  findRowIndex(id: EntryId, hintIndex: number, maxProbeRows?: number): number;
 }
 
 /**
@@ -64,6 +66,43 @@ export function readTreeProjection(
     }
     return cachedAllRows;
   };
+  const findRowIndex = (
+    id: EntryId,
+    hintIndex: number,
+    maxProbeRows = 16_384,
+  ): number => {
+    if (visibleCount.known === 0 || maxProbeRows <= 0) return -1;
+    if (cachedAllRows !== null) return cachedAllRows.findIndex((row) => row.id === id);
+    const chunkSize = 256;
+    const hint = Math.max(0, Math.min(visibleCount.known - 1, Math.trunc(hintIndex)));
+    const baseStart = Math.max(
+      0,
+      Math.min(visibleCount.known - chunkSize, hint - Math.floor(chunkSize / 2)),
+    );
+    const visited = new Set<number>();
+    let probedRows = 0;
+    const probe = (rawStart: number): number => {
+      const start = Math.max(0, Math.min(visibleCount.known - 1, rawStart));
+      if (visited.has(start) || probedRows >= maxProbeRows) return -1;
+      visited.add(start);
+      const limit = Math.min(chunkSize, visibleCount.known - start, maxProbeRows - probedRows);
+      const rows = readRows(start, limit);
+      probedRows += limit;
+      const localIndex = rows.findIndex((row) => row.id === id);
+      return localIndex === -1 ? -1 : start + localIndex;
+    };
+
+    let found = probe(baseStart);
+    if (found !== -1) return found;
+    for (let distance = chunkSize; probedRows < maxProbeRows; distance += chunkSize) {
+      found = probe(baseStart + distance);
+      if (found !== -1) return found;
+      found = probe(baseStart - distance);
+      if (found !== -1) return found;
+      if (baseStart + distance >= visibleCount.known && baseStart - distance <= 0) break;
+    }
+    return -1;
+  };
   return {
     treeVersion: snapshot.treeVersion,
     projectionVersion,
@@ -71,5 +110,6 @@ export function readTreeProjection(
     visibleCount,
     readRows,
     readAllRows,
+    findRowIndex,
   };
 }

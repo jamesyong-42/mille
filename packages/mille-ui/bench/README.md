@@ -26,7 +26,7 @@ pnpm --filter @vibecook/mille-ui build
 
 The harness builds a synthetic 500,000-row snapshot with 1,000
 pre-expanded folders, mounts `<FileTree>` against a fake engine
-(`createFakeEngine()`), and times seven operations with
+(`createFakeEngine()`), and times eight operations with
 `performance.now()`:
 
 | Scenario | What happens |
@@ -37,7 +37,8 @@ pre-expanded folders, mounts `<FileTree>` against a fake engine
 | **decoration-only viewport update** | Updates one visible badge without rematerializing the 500k structural projection; requires exactly one row render. |
 | **budget 1000-row visible storm** | Uses a tall virtual window to prove a commit affecting more than the 64-row animation budget produces zero transition markers. |
 | **rename during 1000-row tail churn** | Keeps the exact input node, draft text, and focus while unrelated rows arrive outside the viewport. |
-| **insert 1000 above viewport** | Preserves the top row's pixel offset, focus, and selection; fails above 0.5 px drift or on interaction-state loss. |
+| **ArrowDown in 500k-row tree** | Moves focus by one logical row without materializing the complete order; fails above 256 rows per read or 512 rows total. |
+| **insert 1000 above viewport** | Preserves the top row's pixel offset, focus, and selection; fails above 0.5 px drift, on interaction-state loss, or if anchor lookup reads more than 256 rows at once / 4,096 rows total. |
 
 Output is a small markdown table. Timing numbers are reporters; virtualization,
 viewport-anchor, interaction-state, and animation-budget failures exit non-zero.
@@ -45,7 +46,10 @@ Decoration-only work additionally fails if it rebuilds the structural projection
 or renders anything other than the changed row. Scroll fails unless the mounted
 virtual range is published through `setViewport`, the prerequisite for future
 host-side viewport retention. Initial render, scroll, and expansion additionally
-fail if React materializes more than 100 rows for their mounted windows.
+fail if React materializes more than 100 rows for their mounted windows. The
+insert-above scenario separately proves that deep viewport anchoring stays
+windowed instead of materializing the complete 500,000-row order. The keyboard
+scenario applies the same hard allocation signal to ordinary local navigation.
 
 ## Why happy-dom
 

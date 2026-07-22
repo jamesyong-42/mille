@@ -30,15 +30,15 @@ layers of work:
 The scores below are directional, not a claim of mathematical precision. A
 mature IDE explorer is the 10/10 reference point.
 
-| Area                                 | Score | Current assessment                                                                                                                                                        |
-| ------------------------------------ | ----: | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Filesystem and renderer architecture |   8.3 | Strong native walker, roots-only handshake, binary ordered lazy hydration, bounded viewport mirror, and windowed React rendering                                          |
-| Core tree interaction                |   7.2 | Keyboard navigation, multi-selection, resilient inline rename, create/delete, clipboard, filtering, context menus, and drag/drop                                          |
-| Visual behavior                      |   7.4 | Viewport, focus, selection, and rename drafts survive churn; animation is row-scoped, storm-bounded, and reduced-motion aware; broader theme/sticky-root scenarios remain |
-| Accessibility                        |   6.0 | Good ARIA tree semantics and keyboard tests; no real assistive-technology matrix                                                                                          |
-| Reliability and recovery             |   5.5 | Warmed Electron and deterministic soak gates converge; direct native tests expose an unresolved watcher-startup readiness race, and crash/platform stress remains         |
-| Performance confidence               |   7.1 | Binary-wire, bounded-hydration, windowed 500,000-row UI, and Electron gates cover payload, paint, React duration, projection, retention, ordering, and eviction           |
-| Explorer workflow breadth            |   3.5 | Important workspace, settings, editor, source-control, history, and remote-filesystem behavior is absent or host-only                                                     |
+| Area                                 | Score | Current assessment                                                                                                                                                                |
+| ------------------------------------ | ----: | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Filesystem and renderer architecture |   8.5 | Strong native walker, roots-only handshake, binary ordered lazy hydration, bounded viewport mirror, windowed React rendering, anchoring, and local keyboard access                |
+| Core tree interaction                |   7.2 | Keyboard navigation, multi-selection, resilient inline rename, create/delete, clipboard, filtering, context menus, and drag/drop                                                  |
+| Visual behavior                      |   7.4 | Viewport, focus, selection, and rename drafts survive churn; animation is row-scoped, storm-bounded, and reduced-motion aware; broader theme/sticky-root scenarios remain         |
+| Accessibility                        |   6.0 | Good ARIA tree semantics and keyboard tests; no real assistive-technology matrix                                                                                                  |
+| Reliability and recovery             |   5.5 | Deterministic soak gates converge, but repeated Electron watcher stalls and direct native startup misses remain unresolved; crash/platform stress also remains                    |
+| Performance confidence               |   7.3 | Binary-wire, bounded-hydration, windowed 500,000-row UI, and Electron gates cover payload, paint, React duration, projection, anchoring, keyboard access, retention, and eviction |
+| Explorer workflow breadth            |   3.5 | Important workspace, settings, editor, source-control, history, and remote-filesystem behavior is absent or host-only                                                             |
 
 As a reusable tree widget, Mille is approximately **6.5-7/10**. As a complete
 IDE explorer experience, it is approximately **5/10**.
@@ -125,8 +125,11 @@ the 500,000-row gate measured 38 rows initially, 48 after a 1,000-row scroll,
 and 38 during a 1,000-child expansion. Against the prior baseline, initial
 render improved 30.6%, scroll 23.1%, and expansion 9.7%. Decoration-only work
 remained one row render with zero structural rebuilds, viewport drift remained
-0.00 px, and rename identity/focus survived churn. Full ordering is lazy and
-reserved for discrete global commands and deep viewport anchoring.
+0.00 px, and rename identity/focus survived churn. Deep viewport anchoring now
+captures one row and resolves it with bounded 256-row probes: the insert-above
+gate read 2,241 rows total rather than allocating two 500,000-row arrays, while
+preserving 0.00 px drift and interaction state. Full ordering is now reserved
+for global operations and rare correctness fallbacks.
 
 The windowed Electron smoke observed 24/24 operations with zero misses, mirror
 p95 121.5 ms, paint p95 137.5 ms, React p95 16.3 ms, and 10.1 ops/s. Current
@@ -134,9 +137,29 @@ validation passed 225 core tests with one documented skip; three direct native
 watcher tests missed events during startup, while the warmed Electron watcher
 converged. All 304 UI tests and all 12 playground tests passed.
 
+The bounded-anchor follow-up increased the UI suite to 308 passing tests. Five
+repeated insert-above runs ranged from 259.02 to 387.87 ms with a 269.56 ms
+median. Since this happy-dom timing reporter is noisy, the material gain is the
+deterministic allocation cap rather than a claimed latency win.
+
+Two subsequent real Electron runs kept observed renderer work inside the
+ratified budgets (worst run: mirror p95 94.9 ms, paint p95 111.7 ms, React p95
+17.7 ms) but failed watcher state convergence at 20/24 and 8/24 operations. The
+gate correctly exited non-zero. This is an unresolved integration signal and
+reinforces the existing watcher-readiness/reliability gap; it is not counted as
+a successful end-to-end validation of the anchor slice.
+
+Local keyboard navigation is windowed as well. Before the change, a single
+ArrowDown on a 10,000-row regression fixture requested 9,999 rows. The
+500,000-row gate now reads 295 rows total, including the 38-row rerendered
+viewport, and caps every request at 256 rows. Five ArrowDown runs ranged from
+11.09 to 29.99 ms with a 14.68 ms median and preserved the exact next-row focus.
+The deep-viewport test also covers PageDown around row 5,000. Current validation
+is 309/309 UI tests and 12/12 playground harness tests.
+
 Remaining scaling gaps are O(n) ordered-id metadata for an extremely wide
-expanded folder and the deliberately lazy full-order reads used by global
-commands and deep viewport-anchor recovery.
+expanded folder and deliberately lazy full-order reads for typeahead, Select
+All, long ranges, reveal/path fallback, and rare off-viewport recovery.
 
 ## What is already strong
 

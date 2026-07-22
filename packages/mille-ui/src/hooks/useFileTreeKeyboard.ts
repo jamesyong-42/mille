@@ -63,8 +63,14 @@ export interface KeyboardExpansionActions {
 export interface KeyboardRowLookup {
   /** Snapshot-derived lookup for a row id → entry. */
   getRowById(id: EntryId): VisibleRow | null;
-  /** The flat visible row list (same order the tree renders). */
+  /** The flat visible row list (same order the tree renders). Legacy fallback. */
   readonly visibleRows: readonly VisibleRow[];
+  /** Authoritative visible count without materializing the complete order. */
+  readonly rowCount?: number;
+  /** Read a bounded ordered window. Falls back to `visibleRows.slice`. */
+  readRows?(offset: number, limit: number): readonly VisibleRow[];
+  /** Resolve an id near its expected index. Falls back to a full-order scan. */
+  findRowIndex?(id: EntryId, hintIndex?: number): number;
 }
 
 export interface UseFileTreeKeyboardOptions {
@@ -145,6 +151,40 @@ function findRowIndex(rows: readonly VisibleRow[], id: EntryId | null): number {
     if (row && row.id === id) return i;
   }
   return -1;
+}
+
+function lookupRowCount(rows: KeyboardRowLookup): number {
+  return rows.rowCount ?? rows.visibleRows.length;
+}
+
+function readRowWindow(
+  rows: KeyboardRowLookup,
+  offset: number,
+  limit: number,
+): readonly VisibleRow[] {
+  return rows.readRows?.(offset, limit) ?? rows.visibleRows.slice(offset, offset + limit);
+}
+
+function lookupRowIndex(
+  rows: KeyboardRowLookup,
+  id: EntryId | null,
+  hintIndex?: number,
+): number {
+  if (id === null) return -1;
+  return rows.findRowIndex?.(id, hintIndex) ?? findRowIndex(rows.visibleRows, id);
+}
+
+function readSelectionRange(
+  rows: KeyboardRowLookup,
+  fromId: EntryId,
+  toId: EntryId,
+  hintIndex: number,
+): readonly EntryId[] {
+  const fromIndex = lookupRowIndex(rows, fromId, hintIndex);
+  const toIndex = lookupRowIndex(rows, toId, hintIndex);
+  if (fromIndex === -1 || toIndex === -1) return visibleIds(rows.visibleRows);
+  const start = Math.min(fromIndex, toIndex);
+  return visibleIds(readRowWindow(rows, start, Math.abs(toIndex - fromIndex) + 1));
 }
 
 /** Dispatch a command through the registry; swallow missing-command errors. */
@@ -332,8 +372,8 @@ export function useFileTreeKeyboard(
 
   const onKeyDown = useCallback(
     (event: ReactKeyboardEvent<HTMLElement>) => {
-      const visible = rows.visibleRows;
-      if (visible.length === 0) return;
+      const rowCount = lookupRowCount(rows);
+      if (rowCount === 0) return;
 
       const intent = matchIntent(event);
 
@@ -341,6 +381,7 @@ export function useFileTreeKeyboard(
       // is printable, let typeahead try a name-match.
       if (intent === null) {
         if (!isTypeaheadKey(event)) return;
+        const visible = rows.visibleRows;
         const nextId = typeahead.push(
           event.key,
           toTypeaheadRows(visible),
@@ -354,32 +395,33 @@ export function useFileTreeKeyboard(
       }
 
       const focusedId = selection.focusedId;
-      const focusedIdx = findRowIndex(visible, focusedId);
 
       switch (intent.id) {
         case 'cursor.down': {
           event.preventDefault();
-          const nextIdx = focusedIdx >= 0 ? Math.min(focusedIdx + 1, visible.length - 1) : 0;
-          const nextRow = visible[nextIdx];
+          const focusedIdx = lookupRowIndex(rows, focusedId);
+          const nextIdx = focusedIdx >= 0 ? Math.min(focusedIdx + 1, rowCount - 1) : 0;
+          const nextRow = readRowWindow(rows, nextIdx, 1)[0];
           if (nextRow) selection.selectOne(nextRow.id);
           return;
         }
         case 'cursor.up': {
           event.preventDefault();
+          const focusedIdx = lookupRowIndex(rows, focusedId);
           const nextIdx = focusedIdx > 0 ? focusedIdx - 1 : 0;
-          const nextRow = visible[nextIdx];
+          const nextRow = readRowWindow(rows, nextIdx, 1)[0];
           if (nextRow) selection.selectOne(nextRow.id);
           return;
         }
         case 'cursor.home': {
           event.preventDefault();
-          const first = visible[0];
+          const first = readRowWindow(rows, 0, 1)[0];
           if (first) selection.selectOne(first.id);
           return;
         }
         case 'cursor.end': {
           event.preventDefault();
-          const last = visible[visible.length - 1];
+          const last = readRowWindow(rows, rowCount - 1, 1)[0];
           if (last) selection.selectOne(last.id);
           return;
         }
@@ -398,47 +440,65 @@ export function useFileTreeKeyboard(
         case 'range.extend.down': {
           event.preventDefault();
           if (!multiSelect) return;
-          const nextIdx = focusedIdx >= 0 ? Math.min(focusedIdx + 1, visible.length - 1) : 0;
-          const nextRow = visible[nextIdx];
+          const focusedIdx = lookupRowIndex(rows, focusedId);
+          const nextIdx = focusedIdx >= 0 ? Math.min(focusedIdx + 1, rowCount - 1) : 0;
+          const nextRow = readRowWindow(rows, nextIdx, 1)[0];
           if (!nextRow) return;
           const anchor = selection.anchorId ?? focusedId;
           if (anchor === null) {
             selection.selectOne(nextRow.id);
           } else {
-            selection.selectRange(anchor, nextRow.id, visibleIds(visible));
+            selection.selectRange(
+              anchor,
+              nextRow.id,
+              readSelectionRange(rows, anchor, nextRow.id, focusedIdx),
+            );
           }
           return;
         }
         case 'range.extend.up': {
           event.preventDefault();
           if (!multiSelect) return;
+          const focusedIdx = lookupRowIndex(rows, focusedId);
           const nextIdx = focusedIdx > 0 ? focusedIdx - 1 : 0;
-          const nextRow = visible[nextIdx];
+          const nextRow = readRowWindow(rows, nextIdx, 1)[0];
           if (!nextRow) return;
           const anchor = selection.anchorId ?? focusedId;
           if (anchor === null) {
             selection.selectOne(nextRow.id);
           } else {
-            selection.selectRange(anchor, nextRow.id, visibleIds(visible));
+            selection.selectRange(
+              anchor,
+              nextRow.id,
+              readSelectionRange(rows, anchor, nextRow.id, focusedIdx),
+            );
           }
           return;
         }
         case 'range.extend.home': {
           event.preventDefault();
           if (!multiSelect) return;
-          const first = visible[0];
+          const first = readRowWindow(rows, 0, 1)[0];
           if (!first) return;
           const anchor = selection.anchorId ?? focusedId ?? first.id;
-          selection.selectRange(anchor, first.id, visibleIds(visible));
+          selection.selectRange(
+            anchor,
+            first.id,
+            readSelectionRange(rows, anchor, first.id, 0),
+          );
           return;
         }
         case 'range.extend.end': {
           event.preventDefault();
           if (!multiSelect) return;
-          const last = visible[visible.length - 1];
+          const last = readRowWindow(rows, rowCount - 1, 1)[0];
           if (!last) return;
           const anchor = selection.anchorId ?? focusedId ?? last.id;
-          selection.selectRange(anchor, last.id, visibleIds(visible));
+          selection.selectRange(
+            anchor,
+            last.id,
+            readSelectionRange(rows, anchor, last.id, rowCount - 1),
+          );
           return;
         }
         case 'tree.expandOrFocusChild': {
@@ -454,8 +514,9 @@ export function useFileTreeKeyboard(
             return;
           }
           // Already expanded — focus first child (next row if child exists).
+          const focusedIdx = lookupRowIndex(rows, focusedId);
           const nextIdx = focusedIdx + 1;
-          const nextRow = visible[nextIdx];
+          const nextRow = readRowWindow(rows, nextIdx, 1)[0];
           if (nextRow && nextRow.parentId === focusedId) {
             selection.selectOne(nextRow.id);
           }
@@ -560,7 +621,7 @@ export function useFileTreeKeyboard(
           event.preventDefault();
           if (!multiSelect) return;
           const all = new Set<EntryId>();
-          for (const r of visible) all.add(r.id);
+          for (const r of rows.visibleRows) all.add(r.id);
           selection.setSelection(all);
           return;
         }

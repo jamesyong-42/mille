@@ -80,6 +80,7 @@ export function WatchBenchPanel({
   const reportingRef = useRef(new Set<number>());
   const readySentRef = useRef(false);
   const readyScheduledRef = useRef(false);
+  const hydrationWindowRef = useRef<string | null>(null);
   const aliveRef = useRef(true);
 
   useEffect(() => {
@@ -140,7 +141,25 @@ export function WatchBenchPanel({
         for (const id of directoriesToExpand) expandedRef.current.add(id);
         queueMicrotask(() => treeRef.current?.expand(directoriesToExpand));
       }
-      return { snapshot, rows, outstandingExpansions: directoriesToExpand.length };
+      const firstPendingIndex = rows.findIndex((row) => row.pending === true);
+      let hydrationPending = 0;
+      if (firstPendingIndex >= 0) {
+        const hydrationKey = `${snapshot.treeVersion}:${firstPendingIndex}`;
+        hydrationPending = 1;
+        if (hydrationWindowRef.current !== hydrationKey) {
+          hydrationWindowRef.current = hydrationKey;
+          queueMicrotask(() => {
+            fx.setViewport({ offset: firstPendingIndex, limit: 200, overscan: 0 });
+          });
+        }
+      } else {
+        hydrationWindowRef.current = null;
+      }
+      return {
+        snapshot,
+        rows,
+        outstandingExpansions: directoriesToExpand.length + hydrationPending,
+      };
     };
 
     const evaluate = (): void => {

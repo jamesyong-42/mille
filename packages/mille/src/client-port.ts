@@ -31,7 +31,7 @@ import {
   type InboundSnapshot,
 } from './mirror-reducer.js';
 import { ClientMirrorSnapshot, clientEntryToEntry } from './mirror-snapshot.js';
-import { createMirror, type MirrorWorking } from './mirror.js';
+import { cloneMirror, createMirror, type MirrorWorking } from './mirror.js';
 import {
   frame,
   PROTOCOL_VERSION,
@@ -194,20 +194,28 @@ export class PortFileExplorer {
     const remove = diff.remove ?? [];
     if (add.length === 0 && remove.length === 0) return;
 
-    // Track pending on the working mirror. The reducer clears them
-    // when a delta lands; we publish immediately so consumers see the
-    // change count even before the host replies.
+    // Clone before mutating so an already-published snapshot keeps its
+    // immutable working-state view.
+    const next = cloneMirror(this.working);
     let touched = false;
     for (const id of add) {
-      if (!this.working.pendingExpansions.has(id)) {
-        this.working.pendingExpansions.add(id);
+      if (!next.expanded.has(id)) {
+        next.expanded.add(id);
+        touched = true;
+      }
+      if (!next.pendingExpansions.has(id)) {
+        next.pendingExpansions.add(id);
         touched = true;
       }
     }
     for (const id of remove) {
-      if (this.working.pendingExpansions.delete(id)) touched = true;
+      if (next.expanded.delete(id)) touched = true;
+      if (next.pendingExpansions.delete(id)) touched = true;
     }
-    if (touched) this.publishSnapshot();
+    if (touched) {
+      this.working = next;
+      this.publishSnapshot();
+    }
 
     this.sendAfterReady(
       frame('setExpanded', {
@@ -698,4 +706,3 @@ function toWire(d: Decoration): DecorationOnWire {
   if (d.propagate !== undefined) out.propagate = d.propagate;
   return out;
 }
-

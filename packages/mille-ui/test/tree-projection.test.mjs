@@ -3,10 +3,11 @@ import { strict as assert } from 'node:assert';
 
 import { readTreeProjection } from '../dist/hooks/treeProjection.js';
 
-function makeSnapshot(treeVersion, counters) {
+function makeSnapshot(treeVersion, counters, projectionVersion = treeVersion) {
   const rows = [{ id: 1, name: 'root' }];
   return {
     treeVersion,
+    projectionVersion,
     decorationVersion: 0,
     roots: () => rows,
     visibleRowCount: () => {
@@ -52,4 +53,14 @@ test('tree-version and expansion changes each rematerialize exactly once', () =>
   assert.notEqual(nextTree, first);
   assert.notEqual(nextExpansion, nextTree);
   assert.deepEqual(counters, { count: 3, rows: 3 });
+});
+
+test('viewport hydration rematerializes without advancing treeVersion', () => {
+  const counters = { count: 0, rows: 0 };
+  const expanded = new Set();
+  const first = readTreeProjection(makeSnapshot(7, counters, 10), expanded, null);
+  const hydrated = readTreeProjection(makeSnapshot(7, counters, 11), expanded, first);
+
+  assert.notEqual(hydrated, first);
+  assert.deepEqual(counters, { count: 2, rows: 2 });
 });

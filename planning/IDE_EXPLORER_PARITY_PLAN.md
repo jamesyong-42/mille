@@ -290,9 +290,44 @@ fixture, a one-row decoration update moved from 113.16 ms to 51.23 ms (about 55%
 faster), with CI-enforced counts of zero projection materializations, exactly one
 row render, and zero animation markers. The virtualizer now publishes its exact
 mounted range through `setViewport`; scroll tests and the 500,000-row gate assert
-that UI-to-host contract. The current host records the hint, but viewport-aware
-mirror pinning, eviction/re-fetch measurement, and patch delivery remain open
-Phase 2.4 work.
+that UI-to-host contract.
+
+Second viewport-retention result (2026-07-21): `setViewport` now produces an
+authoritative host patch instead of only recording the hint. The client mirror
+pins roots, expanded and pending folders, and the latest viewport IDs; moving
+the viewport releases the old window to LRU eviction. Overlapping moves transfer
+only newly entered rows, and structural tree versions refresh the viewport even
+when its pixel range is unchanged. The end-to-end gate re-fetches five rows that
+an eight-entry mirror evicted, then proves a one-row shift transfers exactly one
+entry. A separate 50,000-entry, 4,096-cap harness moves a 64-row viewport 200
+times: patch reducer p50 is 0.69 ms, p95 1.10 ms, max 3.15 ms, with a hard 4,096
+peak and verified cold-window eviction.
+
+Third bounded-hydration result (2026-07-21): the initial handshake now ships
+only roots; a 256-file gate reduced the snapshot from 257 full entry records to
+one. Expansion publishes the complete, stable child order as compact ids while
+full entry records remain limited to the mounted viewport; the 16-row gate
+transfers at most 15 child records. Structural deltas refresh the active viewport
+without waiting for a scroll event, and `projectionVersion` rematerializes rows
+when placeholders hydrate at an unchanged tree version. The updated 50,000-row
+harness reports root handshake 0.29 ms, structure seed 2.30 ms, and viewport
+patch reducer p50 0.64 ms, p95 0.92 ms, max 2.07 ms while holding the 4,096-entry
+cap exactly. The Electron watch bench observed 24/24 operations with zero misses,
+mirror p95 115.4 ms, paint p95 126.7 ms, and React p95 18.2 ms. Binary viewport
+patches were the next open transport item.
+
+Fourth binary-transport result (2026-07-22): root and viewport entry records now
+use a bincode-compatible `Vec<ClientEntry>` ArrayBuffer, with JSON retained only
+as a protocol-v1 compatibility fallback. The codec round-trips every field and
+rejects truncated or schema-drifted payloads. Across 200 64-row moves, average
+payload size fell from 12,336 bytes to 1,920 bytes (**84.4% smaller**); binary
+encode p50/p95 was 0.048/0.093 ms and reducer decode+apply p50/p95/max was
+0.74/1.06/2.60 ms. A production-shaped MessageChannel benchmark cloned and
+decoded 2,000 patches in 43.19 ms versus 55.18 ms for JSON (**21.7% faster**).
+The Electron watch gate proved the ArrayBuffer path across the real
+UtilityProcess/renderer boundary with 24/24 operations and zero misses. O(n) id
+metadata for extremely wide expanded folders and avoiding the full visible-row
+React projection remain open Phase 2.4 work.
 
 #### 2.5 Define state under deletion and errors
 

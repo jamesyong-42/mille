@@ -5,10 +5,9 @@
 // forces a resync). applyDelta() is the incremental merge the wire
 // calls on every tick.
 //
-// Payload encoding: Phase 8 ships JSON inside a string field for
-// entry records (see SPEC §4.9.1 note on encoding). Bincode for the
-// client mirror arrives in Phase 12 with benchmarks; current loads
-// are small enough that JSON's overhead is invisible.
+// Entry records prefer bincode-compatible ArrayBuffers. `entriesJson`
+// remains as a compatibility fallback for older hosts and direct reducer
+// consumers while protocol v1 transitions to the binary viewport path.
 //
 // Invariants this module preserves (SPEC §4.9.5 invalidation rules):
 //   - A delta's `version` becomes the new `treeVersion` regardless of
@@ -30,6 +29,7 @@ import {
   type DecorationOnWireLocal,
   type MirrorWorking,
 } from './mirror.js';
+import { decodeClientEntries } from './entry-codec.js';
 
 /**
  * Default ceiling for the client mirror (SPEC §4.9.7). Keeps idle
@@ -44,9 +44,8 @@ export const DEFAULT_MIRROR_CAP = 4096;
 /**
  * Trim `state.byId` (and the aliased child/count maps) back to
  * `cap` entries by evicting the oldest lruTouch timestamps first.
- * Entries pinned by activeIds (current expansion set + roots)
- * always survive — the viewport would otherwise thrash on every
- * tick. Phase 9 layers in viewport-scoped pinning on top.
+ * Entries pinned by activeIds (roots + expansion + viewport sets)
+ * always survive — the viewport would otherwise thrash on every tick.
  */
 export function evictToCap(
   state: MirrorWorking,
@@ -69,22 +68,27 @@ export function evictToCap(
     if (toEvict <= 0) break;
     state.byId.delete(c.id);
     state.children.delete(c.id);
+    state.orderedChildren.delete(c.id);
     state.directChildCounts.delete(c.id);
     state.pendingExpansions.delete(c.id);
+    state.expanded.delete(c.id);
+    state.viewportIds.delete(c.id);
     state.volatileSubtrees.delete(c.id);
     state.lruTouch.delete(c.id);
     toEvict--;
   }
   // If we couldn't evict enough (everything is active), just stop —
   // better to overrun the cap than evict the viewport out from under
-  // the renderer. Phase 9's viewport-scoped pinning tightens this.
+  // the renderer.
 }
 
 /** Compute the "active" set — entries that must never be evicted. */
 function activeSet(state: MirrorWorking): Set<number> {
   const active = new Set<number>();
   for (const id of state.roots) active.add(id);
+  for (const id of state.expanded) active.add(id);
   for (const id of state.pendingExpansions) active.add(id);
+  for (const id of state.viewportIds) active.add(id);
   return active;
 }
 
@@ -103,14 +107,15 @@ function touch(state: MirrorWorking, id: number): void {
 }
 
 /**
- * Inbound snapshot frame body. The host serializes ClientEntry
- * records as JSON inside `entriesJson` so the wire doesn't need a
- * schema negotiation for Phase 8.
+ * Inbound snapshot frame body. Binary records use the bincode-compatible
+ * ClientEntry codec; `entriesJson` is the protocol-v1 compatibility fallback.
  */
 export interface InboundSnapshot {
   version: number;
   roots: number[];
-  /** JSON-encoded ClientEntry[]. Absent when the snapshot is empty. */
+  /** Bincode-compatible ClientEntry[]. Absent when the snapshot is empty. */
+  mirror?: ArrayBuffer | Uint8Array;
+  /** Legacy JSON-encoded ClientEntry[] fallback. */
   entriesJson?: string;
   /** parentId → direct child count. JSON-object, string keys. */
   directChildCounts: Record<string, number>;
@@ -121,9 +126,13 @@ export interface InboundSnapshot {
 /** Inbound delta frame body — incremental merge payload. */
 export interface InboundDelta {
   version: number;
-  /** Ids whose ClientEntry shape changed — values in `entriesJson`. */
+  /** Ids whose ClientEntry shape changed. */
   changedIds: number[];
-  /** JSON-encoded ClientEntry[] for added + changed ids. */
+  /** Binary changed/added entry records. */
+  addedRows?: ArrayBuffer | Uint8Array;
+  /** Binary viewport-refill entry records. */
+  viewportPatch?: ArrayBuffer | Uint8Array;
+  /** Legacy JSON-encoded ClientEntry[] fallback. */
   entriesJson?: string;
   /**
    * Parents whose child list mutated (add/remove/reparent). The reducer
@@ -136,6 +145,8 @@ export interface InboundDelta {
   removedIds: number[];
   /** Fresh direct-child-count values to merge in. */
   directChildCounts: Record<string, number>;
+  /** Complete authoritative child-id arrays keyed by parent id. */
+  childLists?: Record<string, number[]>;
   /** Subtrees flagged coarse (SPEC §4.9.9 / wave 2 7.7). */
   coarseSubtrees: number[];
   /** Subtrees flipped volatile / resynced (7.9, SPEC §4.9.10). */
@@ -163,6 +174,27 @@ export interface InboundDelta {
    * version bump — root churn rides the delta's `version` field.
    */
   roots?: number[];
+  /** Authoritative ids in the host's latest viewport slice. */
+  viewportIds?: number[];
+}
+
+function decodeEntryPayload(
+  binary: ArrayBuffer | Uint8Array | undefined,
+  json: string | undefined,
+): ClientEntry[] {
+  if (binary !== undefined) return decodeClientEntries(binary);
+  if (json !== undefined && json.length > 0) return JSON.parse(json) as ClientEntry[];
+  return [];
+}
+
+function decodeDeltaEntryPayload(msg: InboundDelta): ClientEntry[] {
+  if (msg.addedRows === undefined && msg.viewportPatch === undefined) {
+    return decodeEntryPayload(undefined, msg.entriesJson);
+  }
+  const entries: ClientEntry[] = [];
+  if (msg.addedRows !== undefined) entries.push(...decodeClientEntries(msg.addedRows));
+  if (msg.viewportPatch !== undefined) entries.push(...decodeClientEntries(msg.viewportPatch));
+  return entries;
 }
 
 /**
@@ -170,10 +202,9 @@ export interface InboundDelta {
  * host forces a resync. Returns a brand-new MirrorWorking; callers
  * should treat the previous one as discarded.
  *
- * Children lists are derived from the entries' `parentId`. The wire
- * doesn't ship a separate children map — every (entry, parent) pair
- * reaches us as the entry's own parentId, and snapshots are total so
- * grouping byId is sufficient to recover the full child set.
+ * Child records included in a snapshot are grouped by `parentId`.
+ * Expanded-folder structure subsequently arrives as authoritative
+ * `childLists`, allowing full entry records to remain viewport-bounded.
  *
  * `mirrorCap` bounds the post-apply byId size (SPEC §4.9.7). Exceeds
  * the cap evict oldest-touch entries first until we're back under.
@@ -186,10 +217,14 @@ export function applySnapshot(
   const next: MirrorWorking = {
     byId: new Map(),
     children: new Map(),
+    orderedChildren: new Set(),
     directChildCounts: new Map(),
     pendingExpansions: new Set(),
+    expanded: new Set(_prev.expanded),
+    viewportIds: new Set(_prev.viewportIds),
     roots: [...msg.roots],
     treeVersion: msg.version,
+    projectionVersion: _prev.projectionVersion + 1,
     decorationVersion: 0,
     decorations: new Map(),
     volatileSubtrees: new Set(),
@@ -197,8 +232,8 @@ export function applySnapshot(
     lruCounter: 0,
   };
 
-  if (msg.entriesJson !== undefined && msg.entriesJson.length > 0) {
-    const entries = JSON.parse(msg.entriesJson) as ClientEntry[];
+  const entries = decodeEntryPayload(msg.mirror, msg.entriesJson);
+  if (entries.length > 0) {
     for (const e of entries) {
       next.byId.set(e.id, e);
       touch(next, e.id);
@@ -213,6 +248,19 @@ export function applySnapshot(
       } else {
         list.push(e.id);
       }
+    }
+    for (const [parentId, ids] of next.children) {
+      ids.sort((a, b) => {
+        const ea = next.byId.get(a);
+        const eb = next.byId.get(b);
+        const ka = ea && (ea.kind === 1 || ea.symlinkTargetIsDir === true) ? 0 : 1;
+        const kb = eb && (eb.kind === 1 || eb.symlinkTargetIsDir === true) ? 0 : 1;
+        if (ka !== kb) return ka - kb;
+        const na = ea?.name ?? '';
+        const nb = eb?.name ?? '';
+        return na === nb ? a - b : na < nb ? -1 : 1;
+      });
+      next.orderedChildren.add(parentId);
     }
   }
 
@@ -239,11 +287,18 @@ export function applyDelta(
   const next = cloneMirror(state);
   next.treeVersion = msg.version;
 
+  // A viewport patch replaces the prior pin set before entries are merged,
+  // so the incoming window survives the eviction pass and the previous one
+  // becomes eligible immediately.
+  const viewportIds = new Set(msg.viewportIds ?? []);
+  if (msg.viewportIds !== undefined) next.viewportIds = viewportIds;
+
   // Coarse subtrees invalidate the cached child list first. Entries and
   // childSetChanged later in the same frame are the post-reconciliation
   // replacement and therefore rebuild it immediately.
   for (const rootId of msg.coarseSubtrees) {
     next.children.delete(rootId);
+    next.orderedChildren.delete(rootId);
     next.pendingExpansions.add(rootId);
   }
 
@@ -252,10 +307,17 @@ export function applyDelta(
   // parent we discover as we merge entries — an entry whose parentId
   // doesn't already have that id in `children[parent]` is a new child.
   const parentsToRebuild = new Set<number>(msg.childSetChanged ?? []);
+  const incomingChildLists = msg.childLists ?? {};
+  const entries = decodeDeltaEntryPayload(msg);
+  if (entries.length > 0 || Object.keys(incomingChildLists).length > 0) {
+    next.projectionVersion += 1;
+  }
+  for (const key of Object.keys(incomingChildLists)) {
+    parentsToRebuild.delete(Number(key));
+  }
 
   // Add / update entries.
-  if (msg.entriesJson !== undefined && msg.entriesJson.length > 0) {
-    const entries = JSON.parse(msg.entriesJson) as ClientEntry[];
+  if (entries.length > 0) {
     for (const e of entries) {
       const prev = next.byId.get(e.id);
       next.byId.set(e.id, e);
@@ -264,7 +326,7 @@ export function applyDelta(
       if (prev !== undefined && prev.parentId !== e.parentId) {
         if (prev.parentId !== null) parentsToRebuild.add(prev.parentId);
         if (e.parentId !== null) parentsToRebuild.add(e.parentId);
-      } else if (prev === undefined && e.parentId !== null) {
+      } else if (prev === undefined && e.parentId !== null && !viewportIds.has(e.id)) {
         // New entry — parent's child list grew.
         parentsToRebuild.add(e.parentId);
       }
@@ -280,8 +342,11 @@ export function applyDelta(
     }
     next.byId.delete(id);
     next.children.delete(id);
+    next.orderedChildren.delete(id);
     next.directChildCounts.delete(id);
     next.pendingExpansions.delete(id);
+    next.expanded.delete(id);
+    next.viewportIds.delete(id);
     next.volatileSubtrees.delete(id);
   }
 
@@ -304,10 +369,18 @@ export function applyDelta(
     for (const parentId of parentsToRebuild) {
       const fresh = byParent.get(parentId) ?? [];
       next.children.set(parentId, fresh);
+      next.orderedChildren.delete(parentId);
       // Arrival of a parent's children clears its pendingExpansions
       // flag — consumers stop rendering a spinner for it.
       next.pendingExpansions.delete(parentId);
     }
+  }
+
+  for (const [key, ids] of Object.entries(incomingChildLists)) {
+    const parentId = Number(key);
+    next.children.set(parentId, [...ids]);
+    next.orderedChildren.add(parentId);
+    next.pendingExpansions.delete(parentId);
   }
 
   // Merge direct-child-counts (fresh values win).

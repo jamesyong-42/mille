@@ -6,10 +6,9 @@
 // / isCompatibleVersion) that gate inbound frames before dispatch.
 //
 // No routing lives here — message handlers land in 7.3 (host) and 7.4
-// (client). Bulk payloads (`snapshot.mirror`, `delta.addedRows`) are
-// typed as ArrayBuffer so they can ride postMessage's transfer list
-// and skip the structured-clone copy; their bincode encoding is wired
-// through in 7.3.
+// (client). Entry payloads (`snapshot.mirror`, `delta.viewportPatch`)
+// are compact bincode-compatible ArrayBuffers. MessagePort currently
+// structured-clones them so the same frame works in Node and Electron.
 
 /**
  * Wire protocol version. Bump on shape changes; clients with a mismatched
@@ -162,11 +161,13 @@ export interface SnapshotMsg {
   body: {
     version: number;                             // tree version
     roots: number[];
-    /** Bincode-encoded flat rows. Transferred, not cloned. */
-    mirror: ArrayBuffer;
+    /** Bincode-compatible root ClientEntry records. */
+    mirror?: ArrayBuffer;
+    /** Legacy JSON fallback accepted during protocol-v1 migration. */
+    entriesJson?: string;
     directChildCounts: Record<string, number>;   // keys are stringified ids
-    /** Bincode-encoded viewport slice (see SPEC §4.8). */
-    viewport: ArrayBuffer;
+    /** Reserved native viewport-row payload (see SPEC §4.8). */
+    viewport?: ArrayBuffer;
     visibleCount: number;
   };
 }
@@ -176,10 +177,18 @@ export interface DeltaMsg {
   body: {
     version: number;
     changedIds: number[];
+    /** Bincode-compatible changed/added ClientEntry records. */
     addedRows?: ArrayBuffer;
+    /** Legacy JSON fallback accepted during protocol-v1 migration. */
+    entriesJson?: string;
     removedIds: number[];
     directChildCounts: Record<string, number>;
+    /** Complete child-id arrays in authoritative display order. */
+    childLists?: Record<string, number[]>;
+    /** Bincode-compatible viewport-refill ClientEntry records. */
     viewportPatch?: ArrayBuffer;
+    /** Authoritative ids covered by this viewport patch. */
+    viewportIds?: number[];
     newVisibleCount: number;
     coarseSubtrees: number[];
     subtreeDirty: number[];

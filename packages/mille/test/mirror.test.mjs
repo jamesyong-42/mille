@@ -38,10 +38,14 @@ test('createMirror returns empty working state', () => {
   const m = createMirror();
   assert.equal(m.byId.size, 0);
   assert.equal(m.children.size, 0);
+  assert.equal(m.orderedChildren.size, 0);
   assert.equal(m.directChildCounts.size, 0);
   assert.equal(m.pendingExpansions.size, 0);
+  assert.equal(m.expanded.size, 0);
+  assert.equal(m.viewportIds.size, 0);
   assert.deepEqual(m.roots, []);
   assert.equal(m.treeVersion, 0);
+  assert.equal(m.projectionVersion, 0);
   assert.equal(m.decorationVersion, 0);
   assert.equal(m.volatileSubtrees.size, 0);
 });
@@ -50,10 +54,14 @@ test('cloneMirror returns independent map references', () => {
   const src = createMirror();
   src.byId.set(1, entry({ id: 1, name: 'root', kind: 1 }));
   src.directChildCounts.set(1, 3);
+  src.orderedChildren.add(1);
   src.pendingExpansions.add(1);
+  src.expanded.add(1);
+  src.viewportIds.add(1);
   src.roots.push(1);
   src.volatileSubtrees.add(1);
   src.treeVersion = 5;
+  src.projectionVersion = 4;
   src.decorationVersion = 2;
 
   const clone = cloneMirror(src);
@@ -61,24 +69,36 @@ test('cloneMirror returns independent map references', () => {
   // Mutations to the clone must not leak back.
   clone.byId.set(2, entry({ id: 2, parentId: 1, name: 'child', kind: 0, size: 10 }));
   clone.directChildCounts.set(2, 0);
+  clone.orderedChildren.add(2);
   clone.pendingExpansions.add(2);
+  clone.expanded.add(2);
+  clone.viewportIds.add(2);
   clone.roots.push(2);
   clone.volatileSubtrees.add(2);
   clone.treeVersion = 99;
+  clone.projectionVersion = 98;
   clone.decorationVersion = 42;
 
   assert.equal(src.byId.size, 1, 'byId on src untouched');
   assert.equal(src.directChildCounts.size, 1, 'directChildCounts on src untouched');
+  assert.equal(src.orderedChildren.size, 1, 'orderedChildren on src untouched');
   assert.equal(src.pendingExpansions.size, 1, 'pendingExpansions on src untouched');
+  assert.equal(src.expanded.size, 1, 'expanded on src untouched');
+  assert.equal(src.viewportIds.size, 1, 'viewportIds on src untouched');
   assert.deepEqual(src.roots, [1], 'roots on src untouched');
   assert.equal(src.volatileSubtrees.size, 1, 'volatileSubtrees on src untouched');
   assert.equal(src.treeVersion, 5, 'treeVersion on src untouched');
+  assert.equal(src.projectionVersion, 4, 'projectionVersion on src untouched');
   assert.equal(src.decorationVersion, 2, 'decorationVersion on src untouched');
 
   // Clone carries forward the initial content.
   assert.ok(clone.byId.has(1));
   assert.equal(clone.directChildCounts.get(1), 3);
+  assert.equal(clone.projectionVersion, 98);
+  assert.ok(clone.orderedChildren.has(1));
   assert.ok(clone.pendingExpansions.has(1));
+  assert.ok(clone.expanded.has(1));
+  assert.ok(clone.viewportIds.has(1));
   assert.ok(clone.volatileSubtrees.has(1));
 });
 
@@ -141,13 +161,16 @@ test('ClientMirrorSnapshot.getById translates null holes to undefined', () => {
 
 test('ClientMirrorSnapshot.getById preserves optional fields when present', () => {
   const m = createMirror();
-  m.byId.set(1, entry({
-    id: 1,
-    name: 'lnk',
-    kind: 2,
-    symlinkTargetIsDir: true,
-    pathSegments: ['a', 'b', 'c'],
-  }));
+  m.byId.set(
+    1,
+    entry({
+      id: 1,
+      name: 'lnk',
+      kind: 2,
+      symlinkTargetIsDir: true,
+      pathSegments: ['a', 'b', 'c'],
+    }),
+  );
   const snap = new ClientMirrorSnapshot(m);
   const e = snap.getById(1);
   assert.ok(e);
@@ -261,6 +284,73 @@ test('applyDelta: pendingExpansions are pinned across cap eviction', () => {
   );
   assert.ok(next.byId.size <= 10);
   assert.ok(next.byId.has(500), 'pending-expansion target retained');
+});
+
+test('applyDelta: expanded folders are pinned across cap eviction', () => {
+  const state = createMirror();
+  state.expanded.add(500);
+  state.byId.set(500, entry({ id: 500, name: 'expanded', kind: 1 }));
+  state.lruTouch.set(500, 1);
+  state.lruCounter = 1;
+  const entries = [];
+  for (let i = 600; i < 650; i++) {
+    entries.push(entry({ id: i, name: `f${i}`, kind: 0 }));
+  }
+  const next = applyDelta(
+    state,
+    {
+      version: 2,
+      changedIds: entries.map((e) => e.id),
+      entriesJson: JSON.stringify(entries),
+      removedIds: [],
+      directChildCounts: {},
+      coarseSubtrees: [],
+      subtreeDirty: [],
+      subtreeResynced: [],
+    },
+    10,
+  );
+  assert.ok(next.byId.size <= 10);
+  assert.ok(next.byId.has(500), 'expanded folder retained');
+});
+
+test('applyDelta: viewport patch pins incoming rows and releases the old window', () => {
+  const state = createMirror();
+  state.roots.push(1);
+  state.viewportIds.add(2);
+  state.children.set(1, [2, 3, 4, 5]);
+  for (const id of [1, 2, 3]) {
+    state.byId.set(id, entry({ id, parentId: id === 1 ? null : 1, name: `f${id}` }));
+    state.lruTouch.set(id, id);
+  }
+  state.lruCounter = 3;
+
+  const incoming = [
+    entry({ id: 4, parentId: 1, name: 'f4' }),
+    entry({ id: 5, parentId: 1, name: 'f5' }),
+  ];
+  const next = applyDelta(
+    state,
+    {
+      version: 2,
+      changedIds: [],
+      entriesJson: JSON.stringify(incoming),
+      viewportIds: [4, 5],
+      removedIds: [],
+      directChildCounts: {},
+      coarseSubtrees: [],
+      subtreeDirty: [],
+      subtreeResynced: [],
+    },
+    3,
+  );
+
+  assert.deepEqual([...next.viewportIds], [4, 5]);
+  assert.deepEqual(
+    [...next.byId.keys()].sort((a, b) => a - b),
+    [1, 4, 5],
+  );
+  assert.deepEqual(next.children.get(1), [2, 3, 4, 5], 'viewport refill keeps structural order');
 });
 
 test('applyDelta: explicit mirrorCap honored', () => {

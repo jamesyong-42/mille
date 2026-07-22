@@ -347,7 +347,12 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
       // The virtual item range already includes UI overscan.
       overscan: 0,
     });
-  }, [fx, mountedViewportOffset, mountedViewportLimit]);
+  }, [
+    fx,
+    snapshot.treeVersion,
+    mountedViewportOffset,
+    mountedViewportLimit,
+  ]);
 
   const previousProjectionRef = useRef({
     treeVersion: snapshot.treeVersion,

@@ -110,7 +110,10 @@ test('visibleRows: Project view shows ignored dirs (library roots)', () => {
   const rowsDefault = snap.visibleRows({ expanded: new Set([1]), offset: 0, limit: 100 });
   assert.equal(rowsDefault.length, 3);
   // Directories first, then files.
-  assert.deepEqual(rowsDefault.map((r) => r.name), ['root', 'node_modules', 'a.txt']);
+  assert.deepEqual(
+    rowsDefault.map((r) => r.name),
+    ['root', 'node_modules', 'a.txt'],
+  );
 });
 
 test('visibleRows: OS noise hidden; project dotfiles shown', () => {
@@ -124,7 +127,10 @@ test('visibleRows: OS noise hidden; project dotfiles shown', () => {
   const snap = new ClientMirrorSnapshot(m);
 
   const rows = snap.visibleRows({ expanded: new Set([1]), offset: 0, limit: 100 });
-  assert.deepEqual(rows.map((r) => r.name), ['root', '.gitignore', 'README.md']);
+  assert.deepEqual(
+    rows.map((r) => r.name),
+    ['root', '.gitignore', 'README.md'],
+  );
 
   // includeIgnored reveals OS noise (.DS_Store) too.
   const rowsAll = snap.visibleRows({
@@ -133,12 +139,10 @@ test('visibleRows: OS noise hidden; project dotfiles shown', () => {
     limit: 100,
     includeIgnored: true,
   });
-  assert.deepEqual(rowsAll.map((r) => r.name), [
-    'root',
-    '.DS_Store',
-    '.gitignore',
-    'README.md',
-  ]);
+  assert.deepEqual(
+    rowsAll.map((r) => r.name),
+    ['root', '.DS_Store', '.gitignore', 'README.md'],
+  );
 });
 
 test('visibleRows: offset + limit slicing', () => {
@@ -208,9 +212,18 @@ test('visibleRows: deep nested expansion reports correct depths + DFS order', ()
     offset: 0,
     limit: 100,
   });
-  assert.deepEqual(rows.map((r) => r.name), ['root', 'mid', 'leaf.txt']);
-  assert.deepEqual(rows.map((r) => r.depth), [0, 1, 2]);
-  assert.deepEqual(rows.map((r) => r.isExpanded), [true, true, false]);
+  assert.deepEqual(
+    rows.map((r) => r.name),
+    ['root', 'mid', 'leaf.txt'],
+  );
+  assert.deepEqual(
+    rows.map((r) => r.depth),
+    [0, 1, 2],
+  );
+  assert.deepEqual(
+    rows.map((r) => r.isExpanded),
+    [true, true, false],
+  );
 });
 
 test('visibleRows: child list out of order is sorted by name', () => {
@@ -225,7 +238,31 @@ test('visibleRows: child list out of order is sorted by name', () => {
   const snap = new ClientMirrorSnapshot(m);
 
   const rows = snap.visibleRows({ expanded: new Set([1]), offset: 0, limit: 100 });
-  assert.deepEqual(rows.slice(1).map((r) => r.name), ['aaa', 'mmm', 'zzz']);
+  assert.deepEqual(
+    rows.slice(1).map((r) => r.name),
+    ['aaa', 'mmm', 'zzz'],
+  );
+});
+
+test('visibleRows: authoritative child order survives evicted entry metadata', () => {
+  const m = createMirror();
+  seedDir(m, 1, 'root', null, 2);
+  seedFile(m, 10, 'first.txt', 1);
+  // Entry 11 is intentionally absent: only its structural id remains.
+  m.children.set(1, [10, 11]);
+  m.orderedChildren.add(1);
+  m.roots.push(1);
+
+  const rows = new ClientMirrorSnapshot(m).visibleRows({
+    expanded: new Set([1]),
+    offset: 0,
+    limit: 100,
+  });
+  assert.deepEqual(
+    rows.map((row) => row.id),
+    [1, 10, 11],
+  );
+  assert.equal(rows[2].pending, true);
 });
 
 test('visibleRows: cache miss (expanded dir without children entry) is skipped silently', () => {
@@ -271,7 +308,10 @@ test('visibleRows: siblings of invisible-expanded parent still render', () => {
     offset: 0,
     limit: 100,
   });
-  assert.deepEqual(rows.map((r) => r.name), ['root', 'visible-sibling']);
+  assert.deepEqual(
+    rows.map((r) => r.name),
+    ['root', 'visible-sibling'],
+  );
 });
 
 // ─── 8.7: cache-miss placeholder rows ────────────────────────────────
@@ -346,9 +386,7 @@ test('visibleRows: mixed real + placeholder rows interleave at correct positions
   assert.ok(pendingRow, 'pending row emitted');
   assert.equal(pendingRow.id, 99);
   assert.equal(pendingRow.depth, 1);
-  const names = rows
-    .filter((r) => r.pending !== true)
-    .map((r) => r.name);
+  const names = rows.filter((r) => r.pending !== true).map((r) => r.name);
   assert.deepEqual(names, ['root', 'known-a.txt', 'known-b.txt']);
 });
 

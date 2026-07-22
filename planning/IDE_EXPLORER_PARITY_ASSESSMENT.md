@@ -1,6 +1,6 @@
 # IDE Explorer Parity Assessment
 
-**Assessment date:** 2026-07-21  
+**Assessment date:** 2026-07-22
 **Repository baseline:** `476b601` (`perf(ui): smooth live file tree updates`)  
 **Target:** the day-to-day reliability, responsiveness, and workflow depth of the
 file explorers in mature IDEs such as Visual Studio Code and WebStorm.
@@ -32,12 +32,12 @@ mature IDE explorer is the 10/10 reference point.
 
 | Area                                 | Score | Current assessment                                                                                                                                                        |
 | ------------------------------------ | ----: | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Filesystem and renderer architecture |   7.7 | Strong native walker, lazy hydration, deltas, bounded client mirror, virtualized rendering, and viewport publication                                                      |
+| Filesystem and renderer architecture |   8.2 | Strong native walker, roots-only handshake, binary ordered lazy hydration, deltas, bounded viewport-refilling mirror, and virtualized rendering                           |
 | Core tree interaction                |   7.2 | Keyboard navigation, multi-selection, resilient inline rename, create/delete, clipboard, filtering, context menus, and drag/drop                                          |
 | Visual behavior                      |   7.4 | Viewport, focus, selection, and rename drafts survive churn; animation is row-scoped, storm-bounded, and reduced-motion aware; broader theme/sticky-root scenarios remain |
 | Accessibility                        |   6.0 | Good ARIA tree semantics and keyboard tests; no real assistive-technology matrix                                                                                          |
-| Reliability and recovery             |   5.5 | Live watcher tests are green and a deterministic 1,000-operation soak now gates exact convergence; crash/restart and platform stress coverage remain incomplete           |
-| Performance confidence               |   6.2 | Headless and Electron gates cover paint, React duration, frame, projection, row-render, animation, and viewport invariants; broader scenario profiling remains            |
+| Reliability and recovery             |   5.5 | Warmed Electron and deterministic soak gates converge; direct native tests expose an unresolved watcher-startup readiness race, and crash/platform stress remains         |
+| Performance confidence               |   6.8 | Binary-wire, bounded-hydration, 500,000-row UI, and Electron gates cover payload, paint, React duration, projection, retention, ordering, and eviction                    |
 | Explorer workflow breadth            |   3.5 | Important workspace, settings, editor, source-control, history, and remote-filesystem behavior is absent or host-only                                                     |
 
 As a reusable tree widget, Mille is approximately **6.5-7/10**. As a complete
@@ -95,6 +95,43 @@ Mille UI + playground: 284 passed, 0 failed
 TypeScript: all four package/application configs passed
 ```
 
+## Viewport-retention result
+
+The UI-to-host viewport contract now completes the round trip. The host returns
+the authoritative mounted rows, the bounded client mirror pins that window plus
+expanded ancestors, and overlapping scrolls transfer only newly entered rows.
+An end-to-end port test forces five requested rows out of an eight-entry mirror,
+then verifies they are re-fetched and retained; shifting by one row transfers
+one entry.
+
+The initial handshake now contains only root entry records. On expansion, the
+host publishes complete stable child ordering as compact ids while hydrating
+full entry records only for the active viewport. A 256-file integration gate
+reduced the handshake from 257 records to one, then bounded a 16-row expansion
+to at most 15 child records. The mirror preserves ordering while records are
+evicted and rehydrates rows at the same tree version without stale projections.
+
+Root and viewport records now use a bincode-compatible binary codec, retaining
+JSON only as a protocol-v1 fallback. The dedicated 50,000-entry harness moved a
+64-row viewport 200 times against a 4,096-entry cap. It held the cap exactly,
+evicted the first cold window, and reduced the average patch from 12,336 bytes
+to 1,920 bytes (**84.4%**). Binary encode p50/p95 was 0.048/0.093 ms and reducer
+decode+apply p50/p95/max was 0.74/1.06/2.60 ms. A MessageChannel clone+decode
+gate processed 2,000 binary patches in 43.19 ms versus 55.18 ms for JSON, a
+**21.7% improvement**.
+
+The 500,000-row UI bench remained green, including a 50.34 ms decoration-only
+update with zero projection rebuilds and one row render. The binary Electron
+smoke observed 24/24 operations with zero misses, mirror p95 132.5 ms, paint p95
+140.2 ms, and React p95 20.3 ms. Current validation passed 225 core tests with
+one documented skip; three direct native watcher tests missed events during
+startup, while the warmed Electron watcher converged. All 303 UI tests and all
+12 playground tests passed.
+
+Remaining scaling gaps are O(n) ordered-id metadata for an extremely wide
+expanded folder and React still materializing the full visible-row projection
+rather than only the mounted window.
+
 ## What is already strong
 
 ### Engine and host architecture
@@ -104,7 +141,8 @@ TypeScript: all four package/application configs passed
 - UtilityProcess/MessagePort separation suitable for Electron.
 - Roots-only initial hydration with children fetched on expansion.
 - Delta fan-out instead of shipping a complete tree on every update.
-- A bounded client mirror with roots and pending expansions pinned.
+- A bounded client mirror with roots, expansion state, and the current viewport
+  pinned, plus host-driven refill on viewport movement.
 - Coalescing and reconciliation concepts for rename storms and volatile
   subtrees.
 - Multi-root representation at the engine and protocol level.

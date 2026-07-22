@@ -32,6 +32,7 @@ const VARINT_U16 = 251;
 const VARINT_U32 = 252;
 const VARINT_U64 = 253;
 const VARINT_U128 = 254;
+const textDecoder = new TextDecoder('utf-8');
 
 // u64 values above Number.MAX_SAFE_INTEGER (2^53 - 1) can't round-trip
 // through JS number without precision loss. fx-core's EntryId allocator
@@ -199,7 +200,7 @@ export class BincodeReader {
     // TextDecoder gives us WHATWG-standard UTF-8 handling (replacement
     // char for invalid sequences). Rust never emits invalid UTF-8 via
     // serde/String, so this is defence-in-depth only.
-    return new TextDecoder('utf-8').decode(slice);
+    return textDecoder.decode(slice);
   }
 
   readOption<T>(readSome: (r: BincodeReader) => T): T | null {

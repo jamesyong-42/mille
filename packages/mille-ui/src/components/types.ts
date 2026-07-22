@@ -72,6 +72,8 @@ export interface FileTreeEngine {
  */
 export interface FileTreeSnapshotLike {
   readonly treeVersion: number;
+  /** Optional cache-hydration dimension; falls back to treeVersion. */
+  readonly projectionVersion?: number;
   readonly decorationVersion: number;
   roots(): readonly Entry[];
   visibleRows(options: VisibleRowsOptions): readonly VisibleRow[];

@@ -237,6 +237,8 @@ export interface VisibleRowCount {
  */
 export interface MirrorSnapshot {
   readonly treeVersion: TreeVersion;
+  /** Advances when viewport rows hydrate without an authoritative tree change. */
+  readonly projectionVersion: number;
   readonly decorationVersion: DecorationVersion;
 
   /** Workspace roots in display order. */

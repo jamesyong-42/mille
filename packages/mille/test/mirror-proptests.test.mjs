@@ -39,8 +39,7 @@ const ID_POOL = 64;
 
 const idArb = fc.integer({ min: 1, max: ID_POOL });
 
-// ClientEntry shape — null-for-undefined holes, matching the
-// JSON-over-wire encoding the reducer consumes.
+// ClientEntry shape — null-for-undefined holes, matching both wire codecs.
 const entryArb = fc.record({
   id: idArb,
   parentId: fc.option(idArb, { nil: null }),
@@ -58,7 +57,7 @@ const entryArb = fc.record({
   isHidden: fc.boolean(),
 });
 
-// De-dupe entries by id — JSON.parse produces an array but the reducer
+// De-dupe entries by id — entry payloads decode to arrays but the reducer
 // treats later occurrences as overwrites, which weakens "apply a
 // snapshot means exactly these ids live in byId" guarantees.
 function dedupeById(entries) {
@@ -74,11 +73,9 @@ const snapshotArb = fc
   .record({
     version: fc.nat(1_000_000),
     entries: fc.array(entryArb, { maxLength: 24 }).map(dedupeById),
-    countsExtra: fc.dictionary(
-      fc.integer({ min: 1, max: ID_POOL }).map(String),
-      fc.nat(20),
-      { maxKeys: 8 },
-    ),
+    countsExtra: fc.dictionary(fc.integer({ min: 1, max: ID_POOL }).map(String), fc.nat(20), {
+      maxKeys: 8,
+    }),
     visibleCount: fc.nat(50),
     rootsPickMask: fc.integer({ min: 0, max: 0xffff_ffff }),
   })
@@ -90,7 +87,8 @@ const snapshotArb = fc
       const rootCount = Math.min(entries.length, (rootsPickMask & 0x3) + 1);
       const seen = new Set();
       for (let i = 0; i < rootCount; i++) {
-        const pickIdx = ((rootsPickMask >>> (2 + i * 6)) % entries.length + entries.length) % entries.length;
+        const pickIdx =
+          (((rootsPickMask >>> (2 + i * 6)) % entries.length) + entries.length) % entries.length;
         const pickId = entries[pickIdx].id;
         if (!seen.has(pickId)) {
           seen.add(pickId);
@@ -129,11 +127,9 @@ const deltaArb = fc
     coarseSubtrees: fc.array(idArb, { maxLength: 3 }),
     subtreeDirty: fc.array(idArb, { maxLength: 3 }),
     subtreeResynced: fc.array(idArb, { maxLength: 3 }),
-    countsExtra: fc.dictionary(
-      fc.integer({ min: 1, max: ID_POOL }).map(String),
-      fc.nat(20),
-      { maxKeys: 6 },
-    ),
+    countsExtra: fc.dictionary(fc.integer({ min: 1, max: ID_POOL }).map(String), fc.nat(20), {
+      maxKeys: 6,
+    }),
   })
   .map((r) => ({
     version: r.version,
@@ -226,13 +222,15 @@ test('prop: byId.size stays bounded by cap + pinned-active after arbitrary apply
       fc.integer({ min: 1, max: 16 }),
       (snap, deltas, cap) => {
         let state = applySnapshot(createMirror(), snap, cap);
-        // Active set is roots + pendingExpansions — the evictor pins
+        // Active set is roots + expansion state + viewport — the evictor pins
         // these above the cap (see mirror-reducer.ts evictToCap). The
         // bound we prove here is byId.size <= cap + |active ∩ byId|.
         const activeCount = (s) => {
           const active = new Set();
           for (const id of s.roots) active.add(id);
+          for (const id of s.expanded) active.add(id);
           for (const id of s.pendingExpansions) active.add(id);
+          for (const id of s.viewportIds) active.add(id);
           let n = 0;
           for (const id of active) if (s.byId.has(id)) n++;
           return n;

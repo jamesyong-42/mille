@@ -2,7 +2,7 @@
 //
 // Locks in the invariants called out in mirror-reducer.ts:
 //   - snapshot replaces state wholesale, delta merges incrementally
-//   - entries are parsed from JSON-encoded `entriesJson`
+//   - entries prefer binary payloads and retain `entriesJson` fallback
 //   - removedIds drops aliased caches (children, directChildCounts,
 //     pendingExpansions, volatileSubtrees)
 //   - directChildCounts merge: new keys + updates to existing
@@ -13,6 +13,7 @@ import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
 import { createMirror } from '../dist/mirror.js';
 import { applySnapshot, applyDelta } from '../dist/mirror-reducer.js';
+import { encodeClientEntries } from '../dist/entry-codec.js';
 
 function entry(overrides = {}) {
   return {
@@ -102,6 +103,17 @@ test('applySnapshot tolerates empty-string entriesJson', () => {
   assert.equal(next.byId.size, 0);
 });
 
+test('applySnapshot decodes binary mirror entries', () => {
+  const next = applySnapshot(createMirror(), {
+    version: 2,
+    roots: [7],
+    mirror: encodeClientEntries([entry({ id: 7, name: 'binary-root', kind: 1 })]),
+    directChildCounts: { 7: 0 },
+    visibleCount: 1,
+  });
+  assert.equal(next.byId.get(7).name, 'binary-root');
+});
+
 // ─── applyDelta: entries ────────────────────────────────────────────
 
 test('applyDelta adds entries from entriesJson', () => {
@@ -117,6 +129,20 @@ test('applyDelta adds entries from entriesJson', () => {
   assert.equal(next.treeVersion, 5);
   assert.equal(next.byId.get(1).name, 'a');
   assert.equal(next.byId.get(2).name, 'b');
+});
+
+test('applyDelta decodes binary viewport entries', () => {
+  const next = applyDelta(
+    createMirror(),
+    emptyDelta({
+      version: 6,
+      changedIds: [8],
+      viewportPatch: encodeClientEntries([entry({ id: 8, name: 'binary-row' })]),
+      viewportIds: [8],
+    }),
+  );
+  assert.equal(next.byId.get(8).name, 'binary-row');
+  assert.deepEqual([...next.viewportIds], [8]);
 });
 
 test('applyDelta updates existing entries (changedIds)', () => {

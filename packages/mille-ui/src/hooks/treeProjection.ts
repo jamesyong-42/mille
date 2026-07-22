@@ -4,6 +4,7 @@ import type { FileTreeSnapshotLike } from '../components/types.js';
 /** Structural projection cached independently from decoration snapshots. */
 export interface TreeProjection {
   readonly treeVersion: number;
+  readonly projectionVersion: number;
   readonly expanded: ReadonlySet<EntryId>;
   readonly visibleCount: VisibleRowCount;
   readonly rows: readonly VisibleRow[];
@@ -19,9 +20,11 @@ export function readTreeProjection(
   expanded: ReadonlySet<EntryId>,
   previous: TreeProjection | null,
 ): TreeProjection {
+  const projectionVersion = snapshot.projectionVersion ?? snapshot.treeVersion;
   if (
     previous !== null &&
     previous.treeVersion === snapshot.treeVersion &&
+    previous.projectionVersion === projectionVersion &&
     previous.expanded === expanded
   ) {
     return previous;
@@ -38,6 +41,7 @@ export function readTreeProjection(
         });
   return {
     treeVersion: snapshot.treeVersion,
+    projectionVersion,
     expanded,
     visibleCount,
     rows,

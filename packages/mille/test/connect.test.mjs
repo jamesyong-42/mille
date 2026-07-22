@@ -14,14 +14,20 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { MessageChannel } from 'node:worker_threads';
-import {
-  createFileExplorerHost,
-  connectFileExplorer,
-  FileSystemError,
-} from '../dist/index.js';
+import { createFileExplorerHost, connectFileExplorer, FileSystemError } from '../dist/index.js';
 
 function tempRoot() {
   return mkdtempSync(join(tmpdir(), 'mille-connect-'));
+}
+
+async function waitFor(predicate, timeoutMs = 2000) {
+  const started = performance.now();
+  while (performance.now() - started <= timeoutMs) {
+    const value = predicate();
+    if (value) return value;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`waitFor timed out after ${timeoutMs}ms`);
 }
 
 test('connectFileExplorer completes handshake and exposes treeVersion', async () => {
@@ -162,7 +168,7 @@ test('two clients on the same host each get their own session', async () => {
 
 // ── 8.6: ClientMirrorSnapshot wiring ─────────────────────────────────
 
-test('handshake delivers real Entry records via ClientMirrorSnapshot', async () => {
+test('handshake delivers root Entry records without hydrating descendants', async () => {
   const dir = tempRoot();
   try {
     writeFileSync(join(dir, 'hello.txt'), 'world');
@@ -179,15 +185,14 @@ test('handshake delivers real Entry records via ClientMirrorSnapshot', async () 
     const root = roots[0];
     assert.equal(typeof root.name, 'string');
     assert.ok(root.name.length > 0, 'root has a real name');
-    // The child file should be in byId as an entry (queryable via getById).
+    // Descendants remain host-side until expansion/viewport demand.
     const hostSnap = host.local.getSnapshot();
     const hostRoot = hostSnap.roots()[0];
     const hostKids = hostSnap.childrenOf(hostRoot.id);
     assert.ok(hostKids.length > 0, 'host has children');
     for (const kidId of hostKids) {
       const entry = snap.getById(kidId);
-      assert.ok(entry, `client mirror has entry for kid ${kidId}`);
-      assert.equal(typeof entry.name, 'string');
+      assert.equal(entry, null, `handshake does not hydrate kid ${kidId}`);
     }
 
     await client.dispose();
@@ -212,13 +217,13 @@ test('setExpanded triggers a delta that populates visibleRows', async () => {
     const root = client.getSnapshot().roots()[0];
     assert.ok(root, 'root exists');
 
-    // Wait for the delta that lands after setExpanded.
-    await new Promise((resolve) => {
-      const sub = client.on('change', () => {
-        sub.dispose();
-        resolve();
-      });
-      client.setExpanded({ add: [root.id] });
+    client.setExpanded({ add: [root.id] });
+    await waitFor(() => {
+      const names = client
+        .getSnapshot()
+        .visibleRows({ expanded: new Set([root.id]), offset: 0, limit: 100 })
+        .map((row) => row.name);
+      return names.includes('a.txt') && names.includes('b.txt');
     });
 
     const rows = client.getSnapshot().visibleRows({
@@ -250,14 +255,14 @@ test('rename on host propagates updated entry to client mirror', async () => {
     const client = await connectFileExplorer(port2);
 
     const root = client.getSnapshot().roots()[0];
-    // Make sure the client mirror knows about 'before.txt' — it's
-    // shipped at handshake time because Phase 8 ships the whole tree.
-    const snap0 = client.getSnapshot();
     const hostKids = host.local.getSnapshot().childrenOf(root.id);
     const targetId = hostKids.find(
       (id) => host.local.getSnapshot().getById(id)?.name === 'before.txt',
     );
     assert.ok(targetId !== undefined, 'host has before.txt');
+    client.setExpanded({ add: [root.id] });
+    await waitFor(() => client.getSnapshot().getById(targetId) !== null);
+    const snap0 = client.getSnapshot();
     assert.equal(snap0.getById(targetId)?.name, 'before.txt');
 
     // Rename on the host; wait for the delta to flow back.

@@ -24,10 +24,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { MessageChannel } from 'node:worker_threads';
 
-import {
-  createFileExplorerHost,
-  connectFileExplorer,
-} from '../dist/index.js';
+import { createFileExplorerHost, connectFileExplorer } from '../dist/index.js';
 
 function tempRoot() {
   return mkdtempSync(join(tmpdir(), 'mille-lazy-expand-'));
@@ -106,9 +103,7 @@ test('initialWalk=roots-only seeds root; setExpanded triggers child walk via del
     // NOT be in the client mirror — that's the point of roots-only.
     // childrenOf the root should be empty until we expand.
     const snapBeforeExpand = client.getSnapshot();
-    const kidsBeforeExpand = snapBeforeExpand.childrenOf
-      ? snapBeforeExpand.childrenOf(rootId)
-      : [];
+    const kidsBeforeExpand = snapBeforeExpand.childrenOf ? snapBeforeExpand.childrenOf(rootId) : [];
     assert.equal(
       kidsBeforeExpand.length,
       0,
@@ -165,7 +160,7 @@ test('initialWalk=roots-only seeds root; setExpanded triggers child walk via del
     // At least one delta after the expand should carry entries.
     const expansionDeltas = observedDeltaFrames.slice(beforeExpandFrameCount);
     const deltaWithEntries = expansionDeltas.find(
-      (b) => typeof b.entriesJson === 'string' && b.entriesJson.length > 2,
+      (b) => b.viewportPatch instanceof ArrayBuffer && b.viewportPatch.byteLength > 1,
     );
     assert.ok(
       deltaWithEntries !== undefined,
@@ -235,15 +230,18 @@ test('re-expanding an already-walked folder does not re-trigger a walk', async (
     // but firing the walk at all is wasted work.
     await new Promise((r) => setTimeout(r, 80));
 
-    // Count deltas that carry fresh entries (entriesJson non-trivial).
+    // Re-expansion does not walk again, but it does produce one bounded
+    // viewport refill because collapsing changed the mounted host window to
+    // the root alone.
     const entriesOnSecondExpand = observedDeltaFrames
       .slice(deltasAfterFirstExpand)
-      .filter((b) => typeof b.entriesJson === 'string' && b.entriesJson.length > 2);
+      .filter((b) => b.viewportPatch instanceof ArrayBuffer && b.viewportPatch.byteLength > 1);
     assert.equal(
       entriesOnSecondExpand.length,
-      0,
-      `re-expand should not ship fresh entries (saw ${entriesOnSecondExpand.length})`,
+      1,
+      `re-expand should ship one viewport refill (saw ${entriesOnSecondExpand.length})`,
     );
+    assert.ok(Array.isArray(entriesOnSecondExpand[0].viewportIds));
 
     await client.dispose();
     await host.dispose();

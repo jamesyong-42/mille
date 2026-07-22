@@ -7,18 +7,19 @@
 // via Node `worker_threads` MessageChannels — the same shape Electron's
 // `MessageChannelMain` produces.
 //
-// 7.3 adds message routing: handshake -> snapshot, setExpanded -> delta
-// (empty mirror until wave 3), setViewport -> fire-and-forget, mutate ->
+// 7.3 adds message routing: handshake -> snapshot, setExpanded -> delta,
+// setViewport -> authoritative bounded patch, mutate ->
 // dispatchMutation -> mutateResult, call -> dispatchCall -> callResult,
 // dispose -> detach. Version gating + handshake-first sequencing are
 // enforced; malformed or wrong-version frames produce an `error` frame.
-// Bulk mirror/delta payloads land in wave 3 via a shared encoder.
+// Root and viewport entry records use a shared bincode-compatible encoder.
 
 import { FileExplorer, type Entry, type MirrorSnapshot } from './client.js';
 import type { EntryId, ExplorerOptions } from './client.js';
 import { DecorationStore, type Decoration, type DecorationProvider } from './decorations.js';
 import { computeSessionDelta, type SessionView } from './delta.js';
 import { isFileSystemError } from './errors.js';
+import { encodeClientEntries } from './entry-codec.js';
 import type { ClientEntry } from './mirror.js';
 import {
   frame,
@@ -32,13 +33,13 @@ import type { Disposable, FileExplorerHost, MessagePortLike } from './types.js';
 /**
  * Project a public `Entry` into the mirror-local `ClientEntry` shape.
  * The public Entry uses `undefined`-holes for optional fields; the
- * wire (JSON) representation needs explicit `null` so round-trips
+ * binary and legacy JSON wire shapes use explicit `null` so round-trips
  * don't lose the distinction between "absent" and "present-undefined".
  */
 function entryToClient(e: Entry): ClientEntry {
   return {
     id: e.id,
-    parentId: e.parentId,
+    parentId: e.parentId ?? null,
     name: e.name,
     kind: e.kind,
     size: e.size,
@@ -52,27 +53,18 @@ function entryToClient(e: Entry): ClientEntry {
   };
 }
 
-/**
- * Walk the snapshot from the roots down and collect every entry. For
- * Phase 8 this ships the whole tree in the initial snapshot frame —
- * test trees are small enough that the JSON overhead is irrelevant.
- * Phase 12 will bound the walk by viewport + expansion.
- */
-function collectAllEntries(snap: MirrorSnapshot): ClientEntry[] {
-  const out: ClientEntry[] = [];
-  const visited = new Set<number>();
-  const stack: number[] = snap.roots().map((r) => r.id);
-  while (stack.length > 0) {
-    const id = stack.pop()!;
-    if (visited.has(id)) continue;
-    visited.add(id);
-    const e = snap.getById(id);
-    if (!e) continue;
-    out.push(entryToClient(e));
-    const kids = snap.childrenOf(id);
-    for (const kid of kids) stack.push(kid);
-  }
-  return out;
+/** Stable IDE-style child order used as compact structural metadata. */
+function sortedChildIds(snap: MirrorSnapshot, parentId: number): number[] {
+  return [...snap.childrenOf(parentId)].sort((a, b) => {
+    const ea = snap.getById(a);
+    const eb = snap.getById(b);
+    const ka = ea && (ea.kind === 1 || ea.symlinkTargetIsDir === true) ? 0 : 1;
+    const kb = eb && (eb.kind === 1 || eb.symlinkTargetIsDir === true) ? 0 : 1;
+    if (ka !== kb) return ka - kb;
+    const na = ea?.name ?? '';
+    const nb = eb?.name ?? '';
+    return na === nb ? a - b : na < nb ? -1 : 1;
+  });
 }
 
 /**
@@ -85,6 +77,10 @@ interface Session {
   expanded: Set<number>;
   /** Current viewport window the client has requested. */
   viewport: { offset: number; limit: number; overscan: number };
+  /** Ids covered by the last viewport patch sent to this client. */
+  viewportIds: Set<number>;
+  /** Fallback row budget used when expansion precedes the first viewport. */
+  prefetchRows: number;
   /**
    * Entry ids this session has already been told about. Phase 7.5 uses
    * this to filter deltas down to the rows the client actually knows —
@@ -317,6 +313,8 @@ class FileExplorerHostImpl implements FileExplorerHost {
       port,
       expanded: new Set<number>(),
       viewport: { offset: 0, limit: 0, overscan: 0 },
+      viewportIds: new Set<number>(),
+      prefetchRows: 100,
       knownIds: new Set<number>(),
       nextReqId: 1,
       handshook: false,
@@ -558,19 +556,15 @@ class FileExplorerHostImpl implements FileExplorerHost {
       }
       const childSetChanged = new Set(delta.childSetChanged);
       for (const rootId of coarse) childSetChanged.add(rootId);
+      const childLists: Record<string, number[]> = {};
       for (const parentId of childSetChanged) {
         const pc = snap.directChildCount(parentId);
         if (pc !== null) outDirectChildCounts[String(parentId)] = pc;
         if (!session.expanded.has(parentId)) continue;
-        for (const kidId of snap.childrenOf(parentId)) {
-          if (session.knownIds.has(kidId) || emitted.has(kidId)) continue;
-          const entry = snap.getById(kidId);
-          if (!entry) continue;
-          outEntries.push(entryToClient(entry));
-          emitted.add(kidId);
+        const kids = sortedChildIds(snap, parentId);
+        childLists[String(parentId)] = kids;
+        for (const kidId of kids) {
           session.knownIds.add(kidId);
-          const cc = snap.directChildCount(kidId);
-          if (cc !== null) outDirectChildCounts[String(kidId)] = cc;
         }
       }
 
@@ -593,13 +587,33 @@ class FileExplorerHostImpl implements FileExplorerHost {
         }
       }
 
+      const shouldRefreshViewport =
+        !changeSetEmpty ||
+        coarse.length > 0 ||
+        subtreeDirty.length > 0 ||
+        subtreeResynced.length > 0 ||
+        rootsChangedForSession;
+      const viewportPatch = shouldRefreshViewport ? this.collectViewportPatch(session, snap) : null;
+      if (viewportPatch !== null) {
+        for (const entry of viewportPatch.entries) {
+          if (emitted.has(entry.id)) continue;
+          outEntries.push(entry);
+          emitted.add(entry.id);
+        }
+        Object.assign(outDirectChildCounts, viewportPatch.directChildCounts);
+      }
+
       this.send(
         session,
         frame('delta', {
           version: delta.version,
           changedIds: liveChangedIds,
-          entriesJson: outEntries.length > 0 ? JSON.stringify(outEntries) : undefined,
+          ...(outEntries.length > 0
+            ? { viewportPatch: encodeClientEntries(outEntries) }
+            : {}),
           childSetChanged: [...childSetChanged],
+          childLists,
+          ...(viewportPatch !== null ? { viewportIds: viewportPatch.viewportIds } : {}),
           removedIds,
           directChildCounts: outDirectChildCounts,
           newVisibleCount: 0,
@@ -634,7 +648,7 @@ class FileExplorerHostImpl implements FileExplorerHost {
     }
     switch (f.type) {
       case 'handshake':
-        this.handleHandshake(session);
+        this.handleHandshake(session, f.body as { options?: { prefetchRows?: number } });
         return;
       case 'setExpanded':
         this.handleSetExpanded(session, f.body as { add?: number[]; remove?: number[] });
@@ -719,18 +733,21 @@ class FileExplorerHostImpl implements FileExplorerHost {
     this.ensureTick();
   }
 
-  private handleHandshake(session: Session): void {
+  private handleHandshake(session: Session, body: { options?: { prefetchRows?: number } }): void {
     session.handshook = true;
+    const requestedPrefetch = body.options?.prefetchRows;
+    session.prefetchRows =
+      requestedPrefetch !== undefined && Number.isFinite(requestedPrefetch)
+        ? Math.min(0xffff_ffff, Math.max(0, Math.trunc(requestedPrefetch)))
+        : 100;
     const snap = this.explorer.getSnapshot();
     const roots = snap.roots().map((e) => e.id);
-    // Walk the whole tree so the client mirror starts hydrated. For
-    // Phase 8 this is adequate — test trees have <100 entries. Phase
-    // 12 bounds the walk by viewport (SPEC §4.9.1).
-    const allEntries = collectAllEntries(snap);
-    // Emit a directChildCount entry for every id we're shipping — the
-    // twisty caret renders against this map on the client.
+    const rootEntries = roots
+      .map((id) => snap.getById(id))
+      .filter((entry): entry is Entry => entry !== null)
+      .map(entryToClient);
     const directChildCounts: Record<string, number> = {};
-    for (const e of allEntries) {
+    for (const e of rootEntries) {
       const c = snap.directChildCount(e.id);
       if (c !== null) directChildCounts[String(e.id)] = c;
       session.knownIds.add(e.id);
@@ -745,14 +762,11 @@ class FileExplorerHostImpl implements FileExplorerHost {
       frame('snapshot', {
         version: snap.treeVersion,
         roots,
-        // mirror/viewport ArrayBuffer fields were reserved for bincode
-        // bulk payloads (Phase 12). Electron's utility↔renderer structured
-        // clone drops messages that contain empty ArrayBuffers silently,
-        // which hangs handshakes over MessagePortMain. Keep the field off
-        // until a real payload is ready (then gate on length > 0).
-        entriesJson: allEntries.length > 0 ? JSON.stringify(allEntries) : undefined,
+        // Empty ArrayBuffers are omitted because Electron's utility↔renderer
+        // structured clone may drop messages that contain them.
+        ...(rootEntries.length > 0 ? { mirror: encodeClientEntries(rootEntries) } : {}),
         directChildCounts,
-        visibleCount: allEntries.length,
+        visibleCount: rootEntries.length,
       }),
     );
   }
@@ -761,10 +775,17 @@ class FileExplorerHostImpl implements FileExplorerHost {
     for (const id of body.add ?? []) session.expanded.add(id);
     for (const id of body.remove ?? []) session.expanded.delete(id);
 
-    // Ship child entries the client doesn't yet know about for each
-    // newly-expanded folder. Phase 8 sends the whole tree at handshake
-    // time so these are typically already covered — but newly-arrived
-    // children (post-handshake walker discoveries) still need to land.
+    // Headless clients may expand before publishing a viewport. Give that
+    // first expansion a bounded useful window rather than returning only
+    // structural placeholders; UI clients replace it with their exact range.
+    if (session.viewport.limit === 0 && (body.add?.length ?? 0) > 0) {
+      session.viewport = { offset: 0, limit: session.prefetchRows, overscan: 0 };
+    }
+
+    // Ship authoritative child ordering for each newly-expanded folder,
+    // then hydrate only full entry records that intersect the viewport.
+    // Newly-arrived children are covered by the same ordered-id plus
+    // viewport-patch contract during normal delta fan-out.
     const snap = this.explorer.getSnapshot();
 
     // Phase B2 — auto-walk newly-expanded folders whose children aren't
@@ -806,33 +827,39 @@ class FileExplorerHostImpl implements FileExplorerHost {
       }
     }
 
-    const addedEntries: ClientEntry[] = [];
+    const childLists: Record<string, number[]> = {};
     const newDirectChildCounts: Record<string, number> = {};
     const childSetIds: number[] = [];
     for (const id of body.add ?? []) {
-      const kids = snap.childrenOf(id);
-      if (kids.length > 0) childSetIds.push(id);
+      const kids = sortedChildIds(snap, id);
+      const childCount = snap.directChildCount(id);
+      if (kids.length > 0 || childCount === 0) {
+        childSetIds.push(id);
+        childLists[String(id)] = kids;
+      }
+      if (childCount !== null) newDirectChildCounts[String(id)] = childCount;
       for (const kidId of kids) {
-        if (session.knownIds.has(kidId)) continue;
-        const entry = snap.getById(kidId);
-        if (!entry) continue;
-        addedEntries.push(entryToClient(entry));
         session.knownIds.add(kidId);
-        const c = snap.directChildCount(kidId);
-        if (c !== null) newDirectChildCounts[String(kidId)] = c;
       }
     }
+
+    const viewportPatch = this.collectViewportPatch(session, snap);
+    Object.assign(newDirectChildCounts, viewportPatch.directChildCounts);
 
     this.send(
       session,
       frame('delta', {
         version: this.explorer.getTreeVersion(),
         changedIds: [],
-        entriesJson: addedEntries.length > 0 ? JSON.stringify(addedEntries) : undefined,
+        ...(viewportPatch.entries.length > 0
+          ? { viewportPatch: encodeClientEntries(viewportPatch.entries) }
+          : {}),
         childSetChanged: childSetIds,
+        childLists,
+        viewportIds: viewportPatch.viewportIds,
         removedIds: [],
         directChildCounts: newDirectChildCounts,
-        newVisibleCount: 0,
+        newVisibleCount: snap.visibleRowCount(session.expanded).known,
         coarseSubtrees: [],
         subtreeDirty: [],
         subtreeResynced: [],
@@ -844,13 +871,68 @@ class FileExplorerHostImpl implements FileExplorerHost {
     session: Session,
     body: { offset: number; limit: number; overscan?: number },
   ): void {
-    session.viewport = {
-      offset: body.offset,
-      limit: body.limit,
-      overscan: body.overscan ?? 0,
-    };
-    // No response — viewport is fire-and-forget. Wave 3 pushes a
-    // viewport-patch delta if the window moved enough to matter.
+    const normalize = (value: number): number =>
+      Number.isFinite(value) ? Math.min(0xffff_ffff, Math.max(0, Math.trunc(value))) : 0;
+    const offset = normalize(body.offset);
+    const limit = normalize(body.limit);
+    const overscan = normalize(body.overscan ?? 0);
+    session.viewport = { offset, limit, overscan };
+
+    const snap = this.explorer.getSnapshot();
+    const viewportPatch = this.collectViewportPatch(session, snap);
+
+    this.send(
+      session,
+      frame('delta', {
+        version: snap.treeVersion,
+        changedIds: [],
+        ...(viewportPatch.entries.length > 0
+          ? { viewportPatch: encodeClientEntries(viewportPatch.entries) }
+          : {}),
+        viewportIds: viewportPatch.viewportIds,
+        childSetChanged: [],
+        removedIds: [],
+        directChildCounts: viewportPatch.directChildCounts,
+        newVisibleCount: snap.visibleRowCount(session.expanded).known,
+        coarseSubtrees: [],
+        subtreeDirty: [],
+        subtreeResynced: [],
+      }),
+    );
+  }
+
+  private collectViewportPatch(
+    session: Session,
+    snap: MirrorSnapshot,
+  ): {
+    entries: ClientEntry[];
+    directChildCounts: Record<string, number>;
+    viewportIds: number[];
+  } {
+    const { offset, limit, overscan } = session.viewport;
+    const before = Math.min(offset, overscan);
+    const viewportOffset = offset - before;
+    const viewportLimit = Math.min(0xffff_ffff, limit + before + overscan);
+    const rows = snap.visibleRows({
+      expanded: session.expanded,
+      offset: viewportOffset,
+      limit: viewportLimit,
+    });
+    const entries: ClientEntry[] = [];
+    const directChildCounts: Record<string, number> = {};
+    const viewportIds: number[] = [];
+    for (const row of rows) {
+      const entry = snap.getById(row.id);
+      if (!entry) continue;
+      viewportIds.push(entry.id);
+      session.knownIds.add(entry.id);
+      if (session.viewportIds.has(entry.id)) continue;
+      entries.push(entryToClient(entry));
+      const childCount = snap.directChildCount(entry.id);
+      if (childCount !== null) directChildCounts[String(entry.id)] = childCount;
+    }
+    session.viewportIds = new Set(viewportIds);
+    return { entries, directChildCounts, viewportIds };
   }
 
   private handleMutate(

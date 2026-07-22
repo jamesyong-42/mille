@@ -98,9 +98,11 @@ function sortChildrenByName(ids: number[], byId: Map<number, ClientEntry>): numb
  */
 export function createSortedChildrenLookup(
   byId: Map<number, ClientEntry>,
+  orderedParents: ReadonlySet<number> = new Set(),
 ): (parentId: number, ids: number[]) => readonly number[] {
   const cache = new Map<number, readonly number[]>();
   return (parentId, ids) => {
+    if (orderedParents.has(parentId)) return ids;
     const cached = cache.get(parentId);
     if (cached !== undefined) return cached;
     const sorted = sortChildrenByName(ids, byId);
@@ -151,7 +153,7 @@ export class ClientMirrorSnapshot {
 
   constructor(state: MirrorWorking) {
     this.state = state;
-    this.sortedChildrenFor = createSortedChildrenLookup(state.byId);
+    this.sortedChildrenFor = createSortedChildrenLookup(state.byId, state.orderedChildren);
     // Freeze the wrapper so consumers can't swap the state reference
     // or attach extra properties. The inner maps are not frozen
     // because Map/Set have no Object.freeze-friendly equivalent, but
@@ -162,6 +164,10 @@ export class ClientMirrorSnapshot {
 
   get treeVersion(): number {
     return this.state.treeVersion;
+  }
+
+  get projectionVersion(): number {
+    return this.state.projectionVersion;
   }
 
   get decorationVersion(): number {

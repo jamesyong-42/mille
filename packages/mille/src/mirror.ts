@@ -8,11 +8,14 @@
 // Per SPEC §4.9.1 the client mirror tracks:
 //   - byId                — every entry the client has been told about
 //   - children            — known child lists for expanded folders
+//   - orderedChildren     — parents whose child ids are host-authoritative
 //   - directChildCounts   — immediate child counts for every folder
 //                           (populated even for un-expanded ones so the
 //                           twisty caret renders correctly)
 //   - pendingExpansions   — folders the client has asked to expand but
 //                           whose children haven't arrived yet
+//   - expanded            — folders currently expanded by this client
+//   - viewportIds         — authoritative ids in the mounted host viewport
 //   - roots               — workspace roots in display order
 //   - treeVersion         — the host's authoritative tree-version
 //   - decorationVersion   — companion for Phase 9
@@ -35,8 +38,8 @@ export interface DecorationOnWireLocal {
 
 /**
  * Mirror-local copy of an Entry record. Shape matches api.d.ts Entry
- * but with `undefined`-holes replaced by explicit `null` since the
- * wire representation (JSON for Phase 8) cannot round-trip `undefined`.
+ * but with `undefined`-holes replaced by explicit `null` so both the binary
+ * viewport codec and the legacy JSON fallback have one stable shape.
  */
 export interface ClientEntry {
   id: number;
@@ -64,14 +67,22 @@ export interface MirrorWorking {
   byId: Map<number, ClientEntry>;
   /** Known-to-the-client child lists for expanded folders. */
   children: Map<number, number[]>;
+  /** Parents whose child arrays are already in authoritative display order. */
+  orderedChildren: Set<number>;
   /** Direct-child counts for every folder (even un-expanded ones). */
   directChildCounts: Map<number, number>;
   /** Folders the client has asked to expand but whose children haven't arrived yet. */
   pendingExpansions: Set<number>;
+  /** Folders currently expanded by this client. */
+  expanded: Set<number>;
+  /** Entry ids in the latest authoritative host viewport patch. */
+  viewportIds: Set<number>;
   /** Roots in display order. */
   roots: number[];
   /** Current tree version. */
   treeVersion: number;
+  /** Advances when cached rows hydrate without an authoritative tree change. */
+  projectionVersion: number;
   /** Current decoration version (Phase 9). */
   decorationVersion: number;
   /**
@@ -100,10 +111,14 @@ export function createMirror(): MirrorWorking {
   return {
     byId: new Map(),
     children: new Map(),
+    orderedChildren: new Set(),
     directChildCounts: new Map(),
     pendingExpansions: new Set(),
+    expanded: new Set(),
+    viewportIds: new Set(),
     roots: [],
     treeVersion: 0,
+    projectionVersion: 0,
     decorationVersion: 0,
     decorations: new Map(),
     volatileSubtrees: new Set(),
@@ -122,10 +137,14 @@ export function cloneMirror(m: MirrorWorking): MirrorWorking {
   return {
     byId: new Map(m.byId),
     children: new Map(m.children),
+    orderedChildren: new Set(m.orderedChildren),
     directChildCounts: new Map(m.directChildCounts),
     pendingExpansions: new Set(m.pendingExpansions),
+    expanded: new Set(m.expanded),
+    viewportIds: new Set(m.viewportIds),
     roots: [...m.roots],
     treeVersion: m.treeVersion,
+    projectionVersion: m.projectionVersion,
     decorationVersion: m.decorationVersion,
     decorations: new Map(m.decorations),
     volatileSubtrees: new Set(m.volatileSubtrees),

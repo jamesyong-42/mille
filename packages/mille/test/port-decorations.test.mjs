@@ -21,10 +21,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { MessageChannel } from 'node:worker_threads';
 
-import {
-  createFileExplorerHost,
-  connectFileExplorer,
-} from '../dist/index.js';
+import { createFileExplorerHost, connectFileExplorer } from '../dist/index.js';
 
 function tempRoot() {
   return mkdtempSync(join(tmpdir(), 'mille-port-dec-'));
@@ -88,16 +85,20 @@ async function twoClientSetup() {
   const clientA = await connectFileExplorer(ch1.port2);
   const clientB = await connectFileExplorer(ch2.port2);
 
-  // Find the id of file-a.txt from the host's authoritative snapshot;
-  // both clients mirror the full tree at handshake time, so the id is
-  // shared.
+  // Find the id from the host, then hydrate it through bounded expansion on
+  // both clients before registering providers.
   const hostSnap = host.local.getSnapshot();
   const rootId = hostSnap.roots()[0].id;
   const kidIds = hostSnap.childrenOf(rootId);
-  const fileId = kidIds.find(
-    (id) => hostSnap.getById(id)?.name === 'file-a.txt',
-  );
+  const fileId = kidIds.find((id) => hostSnap.getById(id)?.name === 'file-a.txt');
   assert.ok(fileId !== undefined, 'test fixture: file-a.txt present');
+  clientA.setExpanded({ add: [rootId] });
+  clientB.setExpanded({ add: [rootId] });
+  await waitFor(() =>
+    clientA.getSnapshot().getById(fileId) !== null && clientB.getSnapshot().getById(fileId) !== null
+      ? true
+      : null,
+  );
 
   return {
     host,
@@ -106,9 +107,21 @@ async function twoClientSetup() {
     rootId,
     fileId,
     async teardown() {
-      try { await clientA.dispose(); } catch { /* ignore */ }
-      try { await clientB.dispose(); } catch { /* ignore */ }
-      try { await host.dispose(); } catch { /* ignore */ }
+      try {
+        await clientA.dispose();
+      } catch {
+        /* ignore */
+      }
+      try {
+        await clientB.dispose();
+      } catch {
+        /* ignore */
+      }
+      try {
+        await host.dispose();
+      } catch {
+        /* ignore */
+      }
       rmSync(dir, { recursive: true, force: true });
     },
   };
@@ -117,10 +130,7 @@ async function twoClientSetup() {
 test('provider register fans a decoration out to every client', async () => {
   const s = await twoClientSetup();
   try {
-    const p = makeProvider(
-      'scm',
-      new Map([[s.fileId, { badge: 'M', color: 'yellow' }]]),
-    );
+    const p = makeProvider('scm', new Map([[s.fileId, { badge: 'M', color: 'yellow' }]]));
     const reg = s.clientA.registerDecorationProvider(p);
 
     // Wait for the delta to fan out; 16ms tick × a couple of hops.
@@ -146,16 +156,14 @@ test('provider register fans a decoration out to every client', async () => {
   }
 });
 
-test("onDidChange(ids) update propagates to every client", async () => {
+test('onDidChange(ids) update propagates to every client', async () => {
   const s = await twoClientSetup();
   try {
     const entries = new Map([[s.fileId, { badge: 'M' }]]);
     const p = makeProvider('scm', entries);
     const reg = s.clientA.registerDecorationProvider(p);
 
-    await waitFor(
-      () => s.clientB.getSnapshot().getDecorations(s.fileId).length > 0,
-    );
+    await waitFor(() => s.clientB.getSnapshot().getDecorations(s.fileId).length > 0);
 
     // Flip the letter.
     entries.set(s.fileId, { badge: 'A' });
@@ -181,17 +189,11 @@ test('disposing the provider clears decorations everywhere', async () => {
   try {
     const p = makeProvider('scm', new Map([[s.fileId, { badge: 'M' }]]));
     const reg = s.clientA.registerDecorationProvider(p);
-    await waitFor(
-      () => s.clientB.getSnapshot().getDecorations(s.fileId).length > 0,
-    );
+    await waitFor(() => s.clientB.getSnapshot().getDecorations(s.fileId).length > 0);
 
     reg.dispose();
-    await waitFor(
-      () => s.clientB.getSnapshot().getDecorations(s.fileId).length === 0,
-    );
-    await waitFor(
-      () => s.clientA.getSnapshot().getDecorations(s.fileId).length === 0,
-    );
+    await waitFor(() => s.clientB.getSnapshot().getDecorations(s.fileId).length === 0);
+    await waitFor(() => s.clientA.getSnapshot().getDecorations(s.fileId).length === 0);
 
     assert.deepEqual(s.clientA.getSnapshot().getDecorations(s.fileId), []);
     assert.deepEqual(s.clientB.getSnapshot().getDecorations(s.fileId), []);
@@ -203,10 +205,7 @@ test('disposing the provider clears decorations everywhere', async () => {
 test('two providers on the same id merge — both decorations observable', async () => {
   const s = await twoClientSetup();
   try {
-    const git = makeProvider(
-      'scm',
-      new Map([[s.fileId, { badge: 'M', color: 'yellow' }]]),
-    );
+    const git = makeProvider('scm', new Map([[s.fileId, { badge: 'M', color: 'yellow' }]]));
     const rules = makeProvider(
       'agent-rules',
       new Map([[s.fileId, { badge: '\u{1F916}', tooltip: 'agent rule' }]]),

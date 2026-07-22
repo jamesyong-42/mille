@@ -862,6 +862,11 @@ export class MirrorSnapshot {
     return this.decorations?.version ?? this.inner.decorationVersion;
   }
 
+  /** Local snapshots hydrate atomically, so their projection tracks the tree. */
+  get projectionVersion(): number {
+    return this.treeVersion;
+  }
+
   roots(): readonly Entry[] {
     return this.inner.roots();
   }

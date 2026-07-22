@@ -274,6 +274,15 @@ test('scrolling the tree shifts the rendered virtual items', async () => {
   assert.equal(viewport.limit, afterScroll.length);
   assert.equal(viewport.overscan, 0, 'the published window already includes UI overscan');
 
+  const viewportCallsBeforeDelta = fx.calls.setViewport.length;
+  await act(async () => {
+    fx.emitDelta(createFakeSnapshot({ rows, treeVersion: 2 }));
+  });
+  assert.ok(
+    fx.calls.setViewport.length > viewportCallsBeforeDelta,
+    'structural versions must refresh the host viewport at a stable scroll offset',
+  );
+
   await act(async () => { root.unmount(); });
   container.remove();
 });

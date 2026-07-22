@@ -182,6 +182,7 @@ export function areFileTreeRowPropsEqual(
     prev.decorations === next.decorations &&
     prev.renameTargetId === next.renameTargetId &&
     prev.renameError === next.renameError &&
+    prev.renameErrorRevision === next.renameErrorRevision &&
     prev.disableContextMenu === next.disableContextMenu &&
     prev.contextMenuContent === next.contextMenuContent &&
     // Phase 11 — DnD visual state. Without these, `data-mille-dragging`

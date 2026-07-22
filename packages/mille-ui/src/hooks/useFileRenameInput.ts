@@ -50,6 +50,8 @@ export interface UseFileRenameInputOptions {
    * local validator's output, if any).
    */
   readonly errorTooltip?: string | null;
+  /** Changes for repeated engine failures whose message text is identical. */
+  readonly errorRevision?: number;
   /**
    * Whether losing focus (blur) triggers a commit when the value
    * changed, or always cancels. Default `true` — matches VS Code.
@@ -130,6 +132,7 @@ export function useFileRenameInput(
     onCancel,
     validator,
     errorTooltip = null,
+    errorRevision = 0,
     commitOnBlur = true,
   } = options;
 
@@ -179,19 +182,25 @@ export function useFileRenameInput(
   }
 
   // Reset the "suppressed" flag when a brand-new external error arrives.
-  const prevExternalRef = useRef<string | null>(errorTooltip ?? null);
+  const prevExternalRef = useRef({
+    text: errorTooltip ?? null,
+    revision: errorRevision,
+  });
   useEffect(() => {
     const prev = prevExternalRef.current;
-    const next = errorTooltip ?? null;
-    if (next !== prev) {
+    const next = { text: errorTooltip ?? null, revision: errorRevision };
+    if (next.text !== prev.text || next.revision !== prev.revision) {
       prevExternalRef.current = next;
       setExternalErrorSuppressed(false);
+      // The async attempt has settled; allow retrying the same draft.
+      committedRef.current = false;
     }
-  }, [errorTooltip]);
+  }, [errorTooltip, errorRevision]);
 
   const onChange = useCallback((e: ReactChangeEvent<HTMLInputElement>) => {
     setValue(e.target.value);
     setExternalErrorSuppressed(true);
+    committedRef.current = false;
   }, []);
 
   const doCommit = useCallback(

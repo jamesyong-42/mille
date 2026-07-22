@@ -346,6 +346,171 @@ test('Engine EEXIST rejection keeps input open + shows the error tooltip', async
   void origRename;
 });
 
+test('unrelated structural churn preserves the rename input, draft, and focus', async () => {
+  const fx = createFakeEngine();
+  const rows = sampleRows();
+  fx.emitDelta(createFakeSnapshot({ rows, treeVersion: 1 }));
+
+  const { container, root } = mount();
+  await mountTree(container, root, fx);
+  const tree = treeSelector(container);
+  const rowEls = container.querySelectorAll('[role="treeitem"]');
+  await act(async () => { clickRow(rowEls[1]); });
+  await act(async () => { fireKey(tree, 'F2'); });
+
+  const inputBefore = renameInput(container);
+  assert.ok(inputBefore);
+  await act(async () => {
+    setReactInputValue(inputBefore, 'unfinished-draft.ts');
+  });
+
+  await act(async () => {
+    fx.emitDelta(
+      createFakeSnapshot({
+        rows: [
+          ...rows,
+          makeRow({ id: 5, parentId: 1, name: 'unrelated.txt', depth: 1, kind: 0 }),
+        ],
+        treeVersion: 2,
+      }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  });
+
+  const inputAfter = renameInput(container);
+  assert.equal(inputAfter, inputBefore, 'the active input DOM node remains mounted');
+  assert.equal(inputAfter?.value, 'unfinished-draft.ts');
+  assert.equal(hdDocument.activeElement, inputBefore, 'rename focus survives churn');
+
+  await act(async () => { root.unmount(); });
+  container.remove();
+});
+
+test('deleting the rename target cancels state so a reused id does not reopen it', async () => {
+  const fx = createFakeEngine();
+  const rows = sampleRows();
+  fx.emitDelta(createFakeSnapshot({ rows, treeVersion: 1 }));
+
+  const { container, root } = mount();
+  await mountTree(container, root, fx);
+  const tree = treeSelector(container);
+  const rowEls = container.querySelectorAll('[role="treeitem"]');
+  await act(async () => { clickRow(rowEls[1]); });
+  await act(async () => { fireKey(tree, 'F2'); });
+  assert.ok(renameInput(container));
+
+  const withoutTarget = rows.filter((row) => row.id !== 2);
+  await act(async () => {
+    fx.emitDelta(createFakeSnapshot({ rows: withoutTarget, treeVersion: 2 }));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  });
+  assert.equal(renameInput(container), null);
+
+  await act(async () => {
+    fx.emitDelta(createFakeSnapshot({ rows, treeVersion: 3 }));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  });
+  assert.equal(renameInput(container), null, 'a recycled entry id must not resurrect rename mode');
+
+  await act(async () => { root.unmount(); });
+  container.remove();
+});
+
+test('a stale rename failure remains editable and can retry without remounting', async () => {
+  const fx = createFakeEngine();
+  fx.emitDelta(createFakeSnapshot({ rows: sampleRows(), treeVersion: 1 }));
+  let attempts = 0;
+  fx.rename = async (id, newName) => {
+    fx.calls.rename.push({ id, newName });
+    attempts += 1;
+    if (attempts <= 2) {
+      const err = new Error('The file changed outside Mille; retry the rename');
+      err.code = 'ENOENT';
+      throw err;
+    }
+    return makeRow({ id, parentId: 1, name: newName, depth: 1, kind: 0 });
+  };
+
+  const { container, root } = mount();
+  await mountTree(container, root, fx);
+  const tree = treeSelector(container);
+  const rowEls = container.querySelectorAll('[role="treeitem"]');
+  await act(async () => { clickRow(rowEls[1]); });
+  await act(async () => { fireKey(tree, 'F2'); });
+  const inputBefore = renameInput(container);
+  assert.ok(inputBefore);
+  await act(async () => { setReactInputValue(inputBefore, 'retry.ts'); });
+
+  await act(async () => {
+    fireKey(inputBefore, 'Enter');
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+  assert.equal(attempts, 1);
+  assert.ok(renameTooltip(container));
+  assert.equal(renameInput(container), inputBefore, 'failure must not remount the editor');
+
+  await act(async () => {
+    fireKey(inputBefore, 'Enter');
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+  assert.equal(attempts, 2, 'the same draft can be retried after a stale failure');
+  assert.equal(renameInput(container), inputBefore);
+
+  await act(async () => {
+    fireKey(inputBefore, 'Enter');
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+  assert.equal(attempts, 3, 'an identical repeated error must not latch the editor');
+  assert.equal(renameInput(container), null, 'successful retry closes rename mode');
+
+  await act(async () => { root.unmount(); });
+  container.remove();
+});
+
+test('a late rename result cannot close a newer rename session', async () => {
+  const fx = createFakeEngine();
+  fx.emitDelta(createFakeSnapshot({ rows: sampleRows(), treeVersion: 1 }));
+  let resolveFirst;
+  fx.rename = (id, newName) => {
+    fx.calls.rename.push({ id, newName });
+    return new Promise((resolve) => {
+      resolveFirst = resolve;
+    });
+  };
+
+  const { container, root } = mount();
+  await mountTree(container, root, fx);
+  const tree = treeSelector(container);
+  const rowEls = container.querySelectorAll('[role="treeitem"]');
+  await act(async () => { clickRow(rowEls[1]); });
+  await act(async () => { fireKey(tree, 'F2'); });
+  const firstInput = renameInput(container);
+  assert.ok(firstInput);
+  await act(async () => { setReactInputValue(firstInput, 'pending.ts'); });
+  await act(async () => { fireKey(firstInput, 'Enter'); });
+  assert.equal(fx.calls.rename.length, 1);
+
+  await act(async () => { clickRow(rowEls[2]); });
+  await act(async () => { fireKey(tree, 'F2'); });
+  const secondInput = renameInput(container);
+  assert.ok(secondInput);
+  assert.notEqual(secondInput, firstInput);
+  assert.equal(secondInput.value, 'world.md');
+
+  await act(async () => {
+    resolveFirst(makeRow({ id: 2, parentId: 1, name: 'pending.ts', depth: 1, kind: 0 }));
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+  assert.equal(renameInput(container), secondInput, 'old completion must not close the new editor');
+
+  await act(async () => { root.unmount(); });
+  container.remove();
+});
+
 test('Invalid characters in the new name block commit + show local tooltip', async () => {
   const fx = createFakeEngine();
   fx.emitDelta(createFakeSnapshot({ rows: sampleRows(), treeVersion: 1 }));

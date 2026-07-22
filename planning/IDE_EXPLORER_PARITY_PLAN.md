@@ -297,6 +297,16 @@ to avoid a transient empty-focus frame. The 500,000-row CI invariant bench now
 asserts both 0.5 px viewport stability and focused-selection preservation while
 1,000 rows are inserted above the active row.
 
+Rename-recovery result (2026-07-21): unrelated structural versions retain the
+exact inline-input DOM node, draft value, and browser focus. Once an observed
+target disappears, rename mode is cancelled before paint so a recycled entry ID
+cannot resurrect the draft. Every failed engine attempt carries a revision,
+making identical `EEXIST`/`ENOENT` failures genuinely retryable without
+remounting the editor. Monotonic operation tokens prevent a late async success
+or failure from closing a newer rename session. The 500,000-row gate appends
+1,000 unrelated rows while editing and reports preserved input identity, draft,
+and focus in 118.80 ms with zero animation markers.
+
 ### Exit criteria
 
 - Real-browser churn scenarios stay within the ratified frame and latency

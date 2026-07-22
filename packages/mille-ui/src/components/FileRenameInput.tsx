@@ -30,6 +30,8 @@ export interface FileRenameInputProps {
    * local validator's output, if any).
    */
   errorTooltip?: string | null;
+  /** Internal revision for retrying repeated engine errors. */
+  readonly errorRevision?: number;
   /**
    * Whether losing focus (blur) triggers a commit when the value
    * changed, or always cancels. Default `true` — matches VS Code.
@@ -89,6 +91,9 @@ function FileRenameInputImpl(props: FileRenameInputProps): ReactElement {
     ...(props.validator ? { validator: props.validator } : null),
     ...(props.errorTooltip !== undefined
       ? { errorTooltip: props.errorTooltip }
+      : null),
+    ...(props.errorRevision !== undefined
+      ? { errorRevision: props.errorRevision }
       : null),
     ...(props.commitOnBlur !== undefined
       ? { commitOnBlur: props.commitOnBlur }

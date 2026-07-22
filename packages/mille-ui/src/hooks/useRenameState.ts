@@ -20,7 +20,7 @@
 // Controlled mode: caller supplies `controlled: { value, onChange }`.
 // Uncontrolled: hook keeps state via `useControlledState`.
 
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { Entry, EntryId } from '@vibecook/mille';
 import { useControlledState } from './useControlledState.js';
 
@@ -94,6 +94,8 @@ export interface UseRenameStateOptions {
 export interface RenameStateHandle {
   readonly renameTargetId: EntryId | null;
   readonly lastError: RenameFileSystemError | null;
+  /** Increments for every failed commit, including repeated identical errors. */
+  readonly errorRevision: number;
   startRename(id: EntryId): void;
   commit(newName: string): Promise<void>;
   cancel(): void;
@@ -157,24 +159,58 @@ export function useRenameState(options: UseRenameStateOptions): RenameStateHandl
     ...(controlled ? { onChange: controlled.onChange } : {}),
   });
 
-  const [lastError, setLastError] = useState<RenameFileSystemError | null>(null);
+  const [errorState, setErrorState] = useState<{
+    readonly error: RenameFileSystemError | null;
+    readonly revision: number;
+  }>(() => ({ error: null, revision: 0 }));
 
-  // Track the "in flight" target to avoid races if a second commit
-  // starts while the first is pending (very unlikely, but cheap).
-  const inflightRef = useRef<EntryId | null>(null);
+  // A monotonic token prevents a late async result from closing a newer
+  // rename session, including a new session that happens to reuse the id.
+  const operationTokenRef = useRef(0);
+  const targetRef = useRef(renameTargetId);
+  targetRef.current = renameTargetId;
+  const observedTargetRef = useRef<EntryId | null>(null);
+
+  const clearError = useCallback(() => {
+    setErrorState((current) =>
+      current.error === null ? current : { ...current, error: null },
+    );
+  }, []);
 
   const startRename = useCallback(
     (id: EntryId) => {
-      setLastError(null);
+      operationTokenRef.current += 1;
+      clearError();
       setRenameTargetId(id);
     },
-    [setRenameTargetId],
+    [clearError, setRenameTargetId],
   );
 
   const cancel = useCallback(() => {
-    setLastError(null);
+    operationTokenRef.current += 1;
+    observedTargetRef.current = null;
+    clearError();
     setRenameTargetId(null);
-  }, [setRenameTargetId]);
+  }, [clearError, setRenameTargetId]);
+
+  // Once a target has existed in the snapshot, its disappearance ends the
+  // inline session. This avoids resurrecting a stale draft if an entry id is
+  // later recycled, while still allowing a controlled target before hydration.
+  useLayoutEffect(() => {
+    if (renameTargetId === null) {
+      observedTargetRef.current = null;
+      return;
+    }
+    if (snapshot.getById(renameTargetId) !== null) {
+      observedTargetRef.current = renameTargetId;
+      return;
+    }
+    if (observedTargetRef.current !== renameTargetId) return;
+    operationTokenRef.current += 1;
+    observedTargetRef.current = null;
+    clearError();
+    setRenameTargetId(null);
+  }, [snapshot, renameTargetId, clearError, setRenameTargetId]);
 
   const validate = useCallback(
     (newName: string): string | null => {
@@ -236,43 +272,68 @@ export function useRenameState(options: UseRenameStateOptions): RenameStateHandl
           code: 'EINVAL',
           message: validationErr,
         };
-        setLastError(err);
+        setErrorState((current) => ({
+          error: err,
+          revision: current.revision + 1,
+        }));
         onError?.(err);
         return;
       }
-      inflightRef.current = id;
+      const operationToken = operationTokenRef.current + 1;
+      operationTokenRef.current = operationToken;
       try {
         const entry = await fx.rename(id, newName);
-        if (inflightRef.current !== id) return;
-        inflightRef.current = null;
-        setLastError(null);
+        if (
+          operationTokenRef.current !== operationToken ||
+          targetRef.current !== id
+        ) {
+          return;
+        }
+        clearError();
+        observedTargetRef.current = null;
         setRenameTargetId(null);
         onCommit?.({ id, newName, entry });
       } catch (e) {
-        if (inflightRef.current !== id) return;
-        inflightRef.current = null;
+        if (
+          operationTokenRef.current !== operationToken ||
+          targetRef.current !== id
+        ) {
+          return;
+        }
         const fse = asFileSystemError(e) ?? {
           code: 'EUNKNOWN',
           message: e instanceof Error ? e.message : String(e),
         };
-        setLastError(fse);
+        setErrorState((current) => ({
+          error: fse,
+          revision: current.revision + 1,
+        }));
         onError?.(fse);
         // Intentionally DO NOT clear `renameTargetId` — the input stays
         // open so the user can retry or hit Esc.
       }
     },
-    [fx, renameTargetId, validate, onCommit, onError, setRenameTargetId],
+    [
+      fx,
+      renameTargetId,
+      validate,
+      onCommit,
+      onError,
+      clearError,
+      setRenameTargetId,
+    ],
   );
 
   return useMemo<RenameStateHandle>(
     () => ({
       renameTargetId,
-      lastError,
+      lastError: errorState.error,
+      errorRevision: errorState.revision,
       startRename,
       commit,
       cancel,
       validate,
     }),
-    [renameTargetId, lastError, startRename, commit, cancel, validate],
+    [renameTargetId, errorState, startRename, commit, cancel, validate],
   );
 }

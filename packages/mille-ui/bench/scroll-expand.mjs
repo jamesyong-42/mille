@@ -195,6 +195,35 @@ function mountContainer() {
   return { container, root: createRoot(container) };
 }
 
+function dispatchClick(element) {
+  element.dispatchEvent(
+    new hdWindow.MouseEvent('click', { bubbles: true, cancelable: true }),
+  );
+}
+
+function dispatchKey(element, key) {
+  element.dispatchEvent(
+    new hdWindow.KeyboardEvent('keydown', {
+      key,
+      bubbles: true,
+      cancelable: true,
+    }),
+  );
+}
+
+function setReactInputValue(input, value) {
+  const descriptor = Object.getOwnPropertyDescriptor(
+    Object.getPrototypeOf(input),
+    'value',
+  );
+  if (descriptor && typeof descriptor.set === 'function') {
+    descriptor.set.call(input, value);
+  } else {
+    input.value = value;
+  }
+  input.dispatchEvent(new hdWindow.Event('input', { bubbles: true }));
+}
+
 async function measureAsync(label, fn) {
   const t0 = performance.now();
   await fn();
@@ -382,6 +411,66 @@ async function runAnimationStorm(rows) {
   return { ...result, rendered, animatedRows, suppressedBy };
 }
 
+async function runRenameChurn(rows) {
+  const fx = createFakeEngine();
+  fx.emitDelta(createFakeSnapshot({ rows, treeVersion: 1 }));
+  const { container, root } = mountContainer();
+  const obs = makeObservers({ height: 600 });
+
+  await act(async () => {
+    root.render(
+      createElement(FileTree, {
+        fx,
+        ariaLabel: 'bench-rename-churn',
+        rowHeight: 22,
+        overscan: 10,
+        __testObserveElementRect: obs.observeElementRect,
+        __testObserveElementOffset: obs.observeElementOffset,
+      }),
+    );
+  });
+  const tree = container.querySelector('[role="tree"]');
+  const target = container.querySelector(`[data-mille-row-id="${rows[5]?.id}"]`);
+  if (!tree || !target) throw new Error('rename churn bench target is not mounted');
+  await act(async () => dispatchClick(target));
+  await act(async () => dispatchKey(tree, 'F2'));
+  const inputBefore = container.querySelector('[data-mille-rename-input]');
+  if (!inputBefore) throw new Error('rename churn bench did not open the editor');
+  const draft = 'unfinished-bench-draft.ts';
+  await act(async () => setReactInputValue(inputBefore, draft));
+
+  const appended = Array.from({ length: 1_000 }, (_, index) =>
+    makeRow({
+      id: 40_000_000 + index,
+      parentId: 1,
+      name: `unrelated-tail-${index}.ts`,
+      depth: 1,
+      kind: 0,
+      hasChildren: false,
+      isExpanded: false,
+    }),
+  );
+  const result = await measureAsync('rename during 1000-row tail churn', async () => {
+    await act(async () => {
+      fx.emitDelta(createFakeSnapshot({ rows: [...rows, ...appended], treeVersion: 2 }));
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    });
+  });
+  const inputAfter = container.querySelector('[data-mille-rename-input]');
+  const interactionPreserved =
+    inputAfter === inputBefore &&
+    inputAfter?.value === draft &&
+    hdDocument.activeElement === inputBefore;
+  const rendered = container.querySelectorAll('[role="treeitem"]').length;
+  const animatedRows = container.querySelectorAll(
+    '[data-mille-entering], [data-mille-repositioning]',
+  ).length;
+
+  await act(async () => root.unmount());
+  container.remove();
+  return { ...result, rendered, animatedRows, interactionPreserved };
+}
+
 async function runAnchoredInsert(rows) {
   const fx = createFakeEngine();
   fx.emitDelta(createFakeSnapshot({ rows, treeVersion: 1 }));
@@ -508,6 +597,8 @@ async function main() {
   results.push(expandResult);
   const stormResult = await runAnimationStorm(rows);
   results.push(stormResult);
+  const renameResult = await runRenameChurn(rows);
+  results.push(renameResult);
   const anchorResult = await runAnchoredInsert(rows);
   results.push(anchorResult);
 
@@ -542,6 +633,12 @@ async function main() {
   }
   if (anchorResult.animatedRows !== 0) {
     throw new Error(`anchored update animated ${anchorResult.animatedRows} rows`);
+  }
+  if (!renameResult.interactionPreserved) {
+    throw new Error('rename input identity, draft, or focus was lost during tail churn');
+  }
+  if (renameResult.animatedRows !== 0) {
+    throw new Error(`unrelated rename churn animated ${renameResult.animatedRows} rows`);
   }
 }
 

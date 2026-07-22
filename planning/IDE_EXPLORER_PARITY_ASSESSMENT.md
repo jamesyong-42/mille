@@ -30,15 +30,15 @@ layers of work:
 The scores below are directional, not a claim of mathematical precision. A
 mature IDE explorer is the 10/10 reference point.
 
-| Area                                 | Score | Current assessment                                                                                                                                                            |
-| ------------------------------------ | ----: | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Filesystem and renderer architecture |   7.5 | Strong native walker, lazy hydration, deltas, bounded client mirror, and virtualized rendering                                                                                |
-| Core tree interaction                |   7.0 | Keyboard navigation, multi-selection, create/rename/delete, clipboard, filtering, context menus, and drag/drop                                                                |
-| Visual behavior                      |   7.2 | Viewport, focus, and selection survive churn; animation work is row-scoped, storm-bounded, and reduced-motion aware, while broader theme/sticky-root browser scenarios remain |
-| Accessibility                        |   6.0 | Good ARIA tree semantics and keyboard tests; no real assistive-technology matrix                                                                                              |
-| Reliability and recovery             |   5.5 | Live watcher tests are green and a deterministic 1,000-operation soak now gates exact convergence; crash/restart and platform stress coverage remain incomplete               |
-| Performance confidence               |   5.8 | Headless and Electron gates enforce correctness, paint, React-duration, and frame budgets with retained build-identified reports; scenario breadth is incomplete              |
-| Explorer workflow breadth            |   3.5 | Important workspace, settings, editor, source-control, history, and remote-filesystem behavior is absent or host-only                                                         |
+| Area                                 | Score | Current assessment                                                                                                                                                        |
+| ------------------------------------ | ----: | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Filesystem and renderer architecture |   7.5 | Strong native walker, lazy hydration, deltas, bounded client mirror, and virtualized rendering                                                                            |
+| Core tree interaction                |   7.2 | Keyboard navigation, multi-selection, resilient inline rename, create/delete, clipboard, filtering, context menus, and drag/drop                                          |
+| Visual behavior                      |   7.4 | Viewport, focus, selection, and rename drafts survive churn; animation is row-scoped, storm-bounded, and reduced-motion aware; broader theme/sticky-root scenarios remain |
+| Accessibility                        |   6.0 | Good ARIA tree semantics and keyboard tests; no real assistive-technology matrix                                                                                          |
+| Reliability and recovery             |   5.5 | Live watcher tests are green and a deterministic 1,000-operation soak now gates exact convergence; crash/restart and platform stress coverage remain incomplete           |
+| Performance confidence               |   5.8 | Headless and Electron gates enforce correctness, paint, React-duration, and frame budgets with retained build-identified reports; scenario breadth is incomplete          |
+| Explorer workflow breadth            |   3.5 | Important workspace, settings, editor, source-control, history, and remote-filesystem behavior is absent or host-only                                                     |
 
 As a reusable tree widget, Mille is approximately **6.5-7/10**. As a complete
 IDE explorer experience, it is approximately **5/10**.

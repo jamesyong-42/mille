@@ -167,6 +167,7 @@ export interface UseFileTreeRowRenameProps {
   readonly onCancel: () => void;
   readonly validator?: (newName: string) => string | null;
   readonly errorTooltip?: string;
+  readonly errorRevision?: number;
 }
 
 /** Prop bundle for the decoration overlay. */
@@ -231,6 +232,7 @@ export function useFileTreeRow(props: FileTreeRowProps): UseFileTreeRowResult {
     onRenameCancel,
     validateRename,
     renameError,
+    renameErrorRevision,
     disableContextMenu,
     registerRowElement,
     disableDragDrop,
@@ -458,6 +460,9 @@ export function useFileTreeRow(props: FileTreeRowProps): UseFileTreeRowResult {
         ...(validateRename ? { validator: validateRename } : null),
         ...(renameError !== undefined && renameError !== null
           ? { errorTooltip: renameError }
+          : null),
+        ...(renameErrorRevision !== undefined
+          ? { errorRevision: renameErrorRevision }
           : null),
       }
     : null;

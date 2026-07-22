@@ -1375,6 +1375,10 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
               renameState.renameTargetId === row.id && renameState.lastError
                 ? renameState.lastError.message
                 : null,
+            renameErrorRevision:
+              renameState.renameTargetId === row.id
+                ? renameState.errorRevision
+                : 0,
             onExpand: () => {
               if (!rowExpanded) toggle(row.id);
             },

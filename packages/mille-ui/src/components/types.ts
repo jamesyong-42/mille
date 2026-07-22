@@ -186,6 +186,8 @@ export interface FileTreeRowProps {
    * on next keystroke.
    */
   readonly renameError?: string | null;
+  /** Increments for repeated rename failures with identical messages. */
+  readonly renameErrorRevision?: number;
 
   // ─── Phase 6 — context menu ──────────────────────────────────────
   /**

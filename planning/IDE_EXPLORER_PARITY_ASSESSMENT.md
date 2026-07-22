@@ -32,12 +32,12 @@ mature IDE explorer is the 10/10 reference point.
 
 | Area                                 | Score | Current assessment                                                                                                                                                        |
 | ------------------------------------ | ----: | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Filesystem and renderer architecture |   8.2 | Strong native walker, roots-only handshake, binary ordered lazy hydration, deltas, bounded viewport-refilling mirror, and virtualized rendering                           |
+| Filesystem and renderer architecture |   8.3 | Strong native walker, roots-only handshake, binary ordered lazy hydration, bounded viewport mirror, and windowed React rendering                                          |
 | Core tree interaction                |   7.2 | Keyboard navigation, multi-selection, resilient inline rename, create/delete, clipboard, filtering, context menus, and drag/drop                                          |
 | Visual behavior                      |   7.4 | Viewport, focus, selection, and rename drafts survive churn; animation is row-scoped, storm-bounded, and reduced-motion aware; broader theme/sticky-root scenarios remain |
 | Accessibility                        |   6.0 | Good ARIA tree semantics and keyboard tests; no real assistive-technology matrix                                                                                          |
 | Reliability and recovery             |   5.5 | Warmed Electron and deterministic soak gates converge; direct native tests expose an unresolved watcher-startup readiness race, and crash/platform stress remains         |
-| Performance confidence               |   6.8 | Binary-wire, bounded-hydration, 500,000-row UI, and Electron gates cover payload, paint, React duration, projection, retention, ordering, and eviction                    |
+| Performance confidence               |   7.1 | Binary-wire, bounded-hydration, windowed 500,000-row UI, and Electron gates cover payload, paint, React duration, projection, retention, ordering, and eviction           |
 | Explorer workflow breadth            |   3.5 | Important workspace, settings, editor, source-control, history, and remote-filesystem behavior is absent or host-only                                                     |
 
 As a reusable tree widget, Mille is approximately **6.5-7/10**. As a complete
@@ -120,17 +120,23 @@ decode+apply p50/p95/max was 0.74/1.06/2.60 ms. A MessageChannel clone+decode
 gate processed 2,000 binary patches in 43.19 ms versus 55.18 ms for JSON, a
 **21.7% improvement**.
 
-The 500,000-row UI bench remained green, including a 50.34 ms decoration-only
-update with zero projection rebuilds and one row render. The binary Electron
-smoke observed 24/24 operations with zero misses, mirror p95 132.5 ms, paint p95
-140.2 ms, and React p95 20.3 ms. Current validation passed 225 core tests with
-one documented skip; three direct native watcher tests missed events during
-startup, while the warmed Electron watcher converged. All 303 UI tests and all
-12 playground tests passed.
+React now materializes only the mounted virtual range during normal rendering:
+the 500,000-row gate measured 38 rows initially, 48 after a 1,000-row scroll,
+and 38 during a 1,000-child expansion. Against the prior baseline, initial
+render improved 30.6%, scroll 23.1%, and expansion 9.7%. Decoration-only work
+remained one row render with zero structural rebuilds, viewport drift remained
+0.00 px, and rename identity/focus survived churn. Full ordering is lazy and
+reserved for discrete global commands and deep viewport anchoring.
+
+The windowed Electron smoke observed 24/24 operations with zero misses, mirror
+p95 121.5 ms, paint p95 137.5 ms, React p95 16.3 ms, and 10.1 ops/s. Current
+validation passed 225 core tests with one documented skip; three direct native
+watcher tests missed events during startup, while the warmed Electron watcher
+converged. All 304 UI tests and all 12 playground tests passed.
 
 Remaining scaling gaps are O(n) ordered-id metadata for an extremely wide
-expanded folder and React still materializing the full visible-row projection
-rather than only the mounted window.
+expanded folder and the deliberately lazy full-order reads used by global
+commands and deep viewport-anchor recovery.
 
 ## What is already strong
 

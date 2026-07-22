@@ -134,7 +134,18 @@ function mount() {
 test('FileTree renders only a small window for a 10k-row snapshot', async () => {
   const fx = createFakeEngine();
   const rows = buildRows(10_000);
-  fx.emitDelta(createFakeSnapshot({ rows, treeVersion: 1 }));
+  const baseSnapshot = createFakeSnapshot({ rows, treeVersion: 1 });
+  const requestedLimits = [];
+  fx.emitDelta({
+    ...baseSnapshot,
+    visibleRows: (options) => {
+      requestedLimits.push(options.limit);
+      return baseSnapshot.visibleRows(options);
+    },
+  });
+  // The fake engine snapshots its input once during emitDelta; measure only
+  // reads performed by FileTree's render path below.
+  requestedLimits.length = 0;
 
   const { container, root } = mount();
   const obs = makeObservers({ height: 400 });
@@ -163,6 +174,11 @@ test('FileTree renders only a small window for a 10k-row snapshot', async () => 
   assert.ok(
     treeitems.length < 200,
     `virtualization failed: got ${treeitems.length} of 10000`,
+  );
+  assert.ok(requestedLimits.length > 0, 'the mounted row window should be requested');
+  assert.ok(
+    Math.max(...requestedLimits) <= 50,
+    `render path requested ${Math.max(...requestedLimits)} rows for a ${treeitems.length}-row window`,
   );
 
   // aria-level ≥ 1 for every row.

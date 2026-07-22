@@ -327,7 +327,23 @@ decoded 2,000 patches in 43.19 ms versus 55.18 ms for JSON (**21.7% faster**).
 The Electron watch gate proved the ArrayBuffer path across the real
 UtilityProcess/renderer boundary with 24/24 operations and zero misses. O(n) id
 metadata for extremely wide expanded folders and avoiding the full visible-row
-React projection remain open Phase 2.4 work.
+React projection remained open Phase 2.4 work.
+
+Fifth windowed-projection result (2026-07-22): the React render path now asks
+the snapshot only for the mounted virtual range. Complete ordering remains lazy
+and is paid only by discrete commands such as typeahead, range selection,
+Select All, reveal, or the deep viewport-anchor fallback. The 500,000-row gate
+hard-limits initial render, scroll, and expansion to at most 100 materialized
+rows; measured windows were 38, 48, and 38 rows respectively instead of
+500,000. Against the immediately preceding baseline, initial render improved
+165.79→114.98 ms (**30.6%**), 1,000-row scroll improved 117.20→90.10 ms
+(**23.1%**), and 1,000-child expansion improved 161.03→145.36 ms (**9.7%**).
+Viewport drift remained 0.00 px, rename identity/focus survived churn, and all
+304 UI tests passed. The real Electron gate observed 24/24 operations with zero
+misses, mirror p95 121.5 ms, paint p95 137.5 ms, React p95 16.3 ms, and 10.1
+ops/s. O(n) ordered-id metadata for extremely wide folders and the intentionally
+lazy full-order path used by global commands/deep anchoring remain Phase 2.4
+follow-up work.
 
 #### 2.5 Define state under deletion and errors
 

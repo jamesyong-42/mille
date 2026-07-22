@@ -42,7 +42,6 @@ import {
   resolveViewportAnchor,
 } from '../hooks/viewportAnchor.js';
 import { useFileTreeSelection } from '../hooks/useFileTreeSelection.js';
-import { reconcileTreeInteraction } from '../hooks/interactionReconciliation.js';
 import {
   planLayoutAnimation,
   type LayoutAnimationPlan,
@@ -271,9 +270,6 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
   useLayoutEffect(() => {
     projectionCacheRef.current = projection;
   }, [projection]);
-  useEffect(() => {
-    __testOnProjectionMaterialized?.(projection.rows.length);
-  }, [projection, __testOnProjectionMaterialized]);
 
   const visibleCount = projection.visibleCount;
   const count = visibleCount.known;
@@ -281,46 +277,11 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
 
   const rootsCount = snapshot.roots().length;
 
-  // Materialize the flat visible-row list once per render. `count` is
-  // the authoritative size; we pull the rows in a single slice because
-  // the keyboard handler (range select, typeahead) needs random access.
-  const visibleRows = projection.rows;
-
-  const interactionProjectionRef = useRef({
-    treeVersion: snapshot.treeVersion,
-    rows: visibleRows,
-  });
-  useLayoutEffect(() => {
-    const previous = interactionProjectionRef.current;
-    if (previous.treeVersion === snapshot.treeVersion) return;
-    interactionProjectionRef.current = {
-      treeVersion: snapshot.treeVersion,
-      rows: visibleRows,
-    };
-    const reconciled = reconcileTreeInteraction(
-      previous.rows,
-      visibleRows,
-      selection.selectedIds,
-      selection.focusedId,
-      selection.anchorId,
-    );
-    if (reconciled.selectedIds !== selection.selectedIds) {
-      selection.setSelection(reconciled.selectedIds);
-    }
-    if (reconciled.focusedId !== selection.focusedId) {
-      selection.setFocused(reconciled.focusedId);
-    }
-    if (reconciled.anchorId !== selection.anchorId) {
-      selection.setAnchor(reconciled.anchorId);
-    }
-  }, [snapshot.treeVersion, visibleRows, selection]);
-
-  // Virtualizer keys come from the projection above. Older code asked the
-  // snapshot for a one-row slice per virtual item, multiplying traversal and
-  // child sorting work during every commit.
+  // The virtualizer needs only the authoritative count. Once it publishes its
+  // mounted indexes, read exactly that structural window from the snapshot.
   const { virtualItems, totalSize, scrollOffset, scrollToIndex } =
     useVirtualizerForSnapshot({
-      visibleRows,
+      count,
       rowHeight,
       overscan,
       scrollerRef,
@@ -339,6 +300,79 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
       : (virtualItems[virtualItems.length - 1]?.index ?? mountedViewportOffset) -
         mountedViewportOffset +
         1;
+  const visibleRows = projection.readRows(
+    mountedViewportOffset,
+    mountedViewportLimit,
+  );
+  const readAllVisibleRows = useCallback(
+    (): readonly VisibleRow[] => projection.readAllRows(),
+    [projection],
+  );
+  const rowAtIndex = useCallback(
+    (index: number): VisibleRow | undefined =>
+      visibleRows[index - mountedViewportOffset],
+    [visibleRows, mountedViewportOffset],
+  );
+  useEffect(() => {
+    __testOnProjectionMaterialized?.(visibleRows.length);
+  }, [visibleRows, __testOnProjectionMaterialized]);
+
+  // Reconcile the mounted interaction neighborhood only. Offscreen selections
+  // stay intact (their mirror records may be evicted); a deleted mounted focus
+  // repairs to the nearest row occupying its old local position.
+  const interactionProjectionRef = useRef({
+    treeVersion: snapshot.treeVersion,
+    offset: mountedViewportOffset,
+    rows: visibleRows,
+  });
+  useLayoutEffect(() => {
+    const previous = interactionProjectionRef.current;
+    interactionProjectionRef.current = {
+      treeVersion: snapshot.treeVersion,
+      offset: mountedViewportOffset,
+      rows: visibleRows,
+    };
+    if (previous.treeVersion === snapshot.treeVersion) return;
+    const previousIds = new Set(previous.rows.map((row) => row.id));
+    const currentIds = new Set(visibleRows.map((row) => row.id));
+    const survives = (id: EntryId): boolean =>
+      currentIds.has(id) || !previousIds.has(id) || snapshot.getById(id) !== null;
+    let selectionChanged = false;
+    const survivingSelection = new Set<EntryId>();
+    for (const id of selection.selectedIds) {
+      if (survives(id)) survivingSelection.add(id);
+      else selectionChanged = true;
+    }
+    const previousFocusedId = selection.focusedId;
+    let focusedId = previousFocusedId;
+    if (focusedId !== null && !survives(focusedId)) {
+      const previousIndex = previous.rows.findIndex((row) => row.id === focusedId);
+      const fallback = visibleRows[Math.min(Math.max(previousIndex, 0), visibleRows.length - 1)];
+      focusedId = fallback?.id ?? null;
+      if (
+        previousFocusedId !== null &&
+        selection.selectedIds.has(previousFocusedId) &&
+        survivingSelection.size === 0 &&
+        focusedId !== null
+      ) {
+        survivingSelection.add(focusedId);
+        selectionChanged = true;
+      }
+    }
+    const anchorId =
+      selection.anchorId === null || survives(selection.anchorId)
+        ? selection.anchorId
+        : focusedId;
+    if (selectionChanged) selection.setSelection(survivingSelection);
+    if (focusedId !== selection.focusedId) selection.setFocused(focusedId);
+    if (anchorId !== selection.anchorId) selection.setAnchor(anchorId);
+  }, [
+    snapshot,
+    snapshot.treeVersion,
+    mountedViewportOffset,
+    visibleRows,
+    selection,
+  ]);
 
   useEffect(() => {
     fx.setViewport?.({
@@ -356,20 +390,26 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
 
   const previousProjectionRef = useRef({
     treeVersion: snapshot.treeVersion,
-    rows: visibleRows,
+    projection,
     rowHeight,
     scrollOffset: viewportScrollOffset,
   });
   const viewportAnchorResolution = useMemo(() => {
     const previous = previousProjectionRef.current;
-    if (previous.treeVersion === snapshot.treeVersion || previous.rowHeight !== rowHeight) {
+    if (
+      previous.treeVersion === snapshot.treeVersion ||
+      previous.rowHeight !== rowHeight ||
+      viewportScrollOffset <= 0
+    ) {
       return null;
     }
-    const anchor = captureViewportAnchor(previous.rows, previous.scrollOffset, rowHeight);
+    const previousRows = previous.projection.readAllRows();
+    const nextRows = projection.readAllRows();
+    const anchor = captureViewportAnchor(previousRows, previous.scrollOffset, rowHeight);
     return anchor
-      ? resolveViewportAnchor(anchor, previous.rows, visibleRows, rowHeight)
+      ? resolveViewportAnchor(anchor, previousRows, nextRows, rowHeight)
       : null;
-  }, [snapshot.treeVersion, visibleRows, rowHeight, viewportScrollOffset]);
+  }, [snapshot.treeVersion, projection, rowHeight, viewportScrollOffset]);
   const viewportAnchorAdjustment =
     viewportAnchorResolution &&
     Math.abs(viewportAnchorResolution.scrollOffsetPx - viewportScrollOffset) > 0.5
@@ -383,7 +423,7 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
     // treeVersion against the previous projection a second time.
     previousProjectionRef.current = {
       treeVersion: snapshot.treeVersion,
-      rows: visibleRows,
+      projection,
       rowHeight,
       scrollOffset: viewportAnchorAdjustment?.scrollOffsetPx ?? viewportScrollOffset,
     };
@@ -396,7 +436,7 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
     }
   }, [
     snapshot.treeVersion,
-    visibleRows,
+    projection,
     rowHeight,
     viewportScrollOffset,
     viewportAnchorAdjustment,
@@ -415,11 +455,11 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
   const renderedPositions = useMemo<readonly RenderedRowPosition[]>(() => {
     const positions: RenderedRowPosition[] = [];
     for (const item of virtualItems) {
-      const row = visibleRows[item.index];
+      const row = rowAtIndex(item.index);
       if (row) positions.push({ id: row.id, offsetPx: item.start });
     }
     return positions;
-  }, [virtualItems, visibleRows]);
+  }, [virtualItems, rowAtIndex]);
   const nextLayoutAnimation = useMemo<LayoutAnimationPlan>(() => {
     if (!treeVersionChanged) return layoutAnimation;
     return planLayoutAnimation(previousRenderedPositionsRef.current, renderedPositions, {
@@ -492,51 +532,55 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
 
   const rowsLookup = useMemo<KeyboardRowLookup>(
     () => ({
-      visibleRows,
+      get visibleRows() {
+        return readAllVisibleRows();
+      },
       getRowById: (id) => {
-        for (const r of visibleRows) {
+        for (const r of readAllVisibleRows()) {
           if (r.id === id) return r;
         }
         return null;
       },
     }),
-    [visibleRows],
+    [readAllVisibleRows],
   );
 
   const viewportActions = useMemo<ViewportKeyboardActions>(
     () => ({
       pageUp: (fromId) => {
+        const rows = readAllVisibleRows();
         const el = scrollerRef.current;
         const viewportPx = el ? el.clientHeight || 0 : 0;
         const rowsPerPage = viewportPx > 0
           ? Math.max(1, Math.floor(viewportPx / rowHeight))
           : 10;
-        if (visibleRows.length === 0) return null;
+        if (rows.length === 0) return null;
         const fromIdx = fromId !== null
-          ? visibleRows.findIndex((r) => r.id === fromId)
+          ? rows.findIndex((r) => r.id === fromId)
           : -1;
         const base = fromIdx >= 0 ? fromIdx : 0;
         const targetIdx = Math.max(0, base - rowsPerPage);
-        const target = visibleRows[targetIdx];
+        const target = rows[targetIdx];
         return target ? target.id : null;
       },
       pageDown: (fromId) => {
+        const rows = readAllVisibleRows();
         const el = scrollerRef.current;
         const viewportPx = el ? el.clientHeight || 0 : 0;
         const rowsPerPage = viewportPx > 0
           ? Math.max(1, Math.floor(viewportPx / rowHeight))
           : 10;
-        if (visibleRows.length === 0) return null;
+        if (rows.length === 0) return null;
         const fromIdx = fromId !== null
-          ? visibleRows.findIndex((r) => r.id === fromId)
+          ? rows.findIndex((r) => r.id === fromId)
           : -1;
         const base = fromIdx >= 0 ? fromIdx : 0;
-        const targetIdx = Math.min(visibleRows.length - 1, base + rowsPerPage);
-        const target = visibleRows[targetIdx];
+        const targetIdx = Math.min(rows.length - 1, base + rowsPerPage);
+        const target = rows[targetIdx];
         return target ? target.id : null;
       },
     }),
-    [visibleRows, rowHeight],
+    [readAllVisibleRows, rowHeight],
   );
 
   // ─── Phase 5: create-new-entry flow ─────────────────────────────────
@@ -874,15 +918,16 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
       // itself, not a descendant row (rows fire onFocus separately).
       if (e.target !== e.currentTarget) return;
       if (selection.focusedId !== null) return;
+      const rows = readAllVisibleRows();
       const restoreId = lastFocusedRef.current;
-      const first = visibleRows[0];
-      if (restoreId !== null && visibleRows.some((r) => r.id === restoreId)) {
+      const first = rows[0];
+      if (restoreId !== null && rows.some((r) => r.id === restoreId)) {
         selection.setFocused(restoreId);
       } else if (first) {
         selection.setFocused(first.id);
       }
     },
-    [selection, visibleRows],
+    [selection, readAllVisibleRows],
   );
 
   const onRowFocus = useCallback(
@@ -942,7 +987,7 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
       // setState calls via `addExpanded`), but we can look up by
       // walking `visibleRows` as-is; if the row isn't there yet, fall
       // back to zero.
-      const idx = visibleRows.findIndex((r) => r.id === id);
+      const idx = readAllVisibleRows().findIndex((r) => r.id === id);
       if (idx >= 0) {
         scrollToIndex(idx, { align: 'start' });
         selection.setFocused(id);
@@ -953,7 +998,7 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
       }
       return true;
     },
-    [snapshot, ancestorsOf, addExpanded, visibleRows, scrollToIndex, selection],
+    [snapshot, ancestorsOf, addExpanded, readAllVisibleRows, scrollToIndex, selection],
   );
 
   // `fx.getByUri` is async; when the engine exposes it we use it to
@@ -1009,12 +1054,11 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
         if (typeof snapAny.childrenOf === 'function') {
           return snapAny.childrenOf(parentId);
         }
-        // Fallback: scan the full row list for entries whose parentId
-        // matches. `visibleRows` is bounded by what's currently
-        // expanded; unexpanded subtrees won't be represented. Callers
+        // Fallback: scan the lazily materialized visible order for entries
+        // whose parentId matches. Unexpanded subtrees won't be represented. Callers
         // needing deeper resolution should expand first.
         const out: Entry[] = [];
-        for (const row of visibleRows) {
+        for (const row of readAllVisibleRows()) {
           if (row.parentId === parentId) out.push(row as unknown as Entry);
         }
         return out;
@@ -1082,7 +1126,7 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
       }
       return cursor.id;
     },
-    [fx, snapshot, visibleRows],
+    [fx, snapshot, readAllVisibleRows],
   );
 
   const revealPath = useCallback(
@@ -1141,7 +1185,7 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
         // row exists, focus it so arrow keys work immediately. Without
         // any rows we call `.focus()` on the container anyway — if the
         // caller stapled a `tabIndex` this still lands meaningfully.
-        const first = visibleRows[0];
+        const first = projection.readRows(0, 1)[0];
         if (first !== undefined) {
           selection.setFocused(first.id);
           const scrollEl = scrollerRef.current;
@@ -1169,7 +1213,7 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
       clearExpanded,
       setManyExpanded,
       focusFilter,
-      visibleRows,
+      projection,
     ],
   );
 
@@ -1329,7 +1373,7 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
     >
       <div style={innerStyle}>
         {virtualItems.map((vItem) => {
-          const row = visibleRows[vItem.index];
+          const row = rowAtIndex(vItem.index);
           if (!row) return null;
 
           const rowExpanded = expanded.has(row.id);
@@ -1427,7 +1471,7 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
                 multiSelect && (e.shiftKey || e.metaKey || e.ctrlKey);
               if (multiSelect && e.shiftKey) {
                 const anchor = selection.anchorId ?? selection.focusedId ?? row.id;
-                const allIds: EntryId[] = visibleRows.map((r) => r.id);
+                const allIds: EntryId[] = readAllVisibleRows().map((r) => r.id);
                 selection.selectRange(anchor, row.id, allIds);
               } else if (multiSelect && (e.metaKey || e.ctrlKey)) {
                 selection.toggle(row.id);

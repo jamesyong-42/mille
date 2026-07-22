@@ -31,7 +31,7 @@ pre-expanded folders, mounts `<FileTree>` against a fake engine
 
 | Scenario | What happens |
 |---|---|
-| **initial render** | First paint with the full 500k snapshot. Virtualizer windows down to ~40 treeitems. |
+| **initial render** | First paint with the 500k snapshot. Both row materialization and DOM stay windowed to ~40 treeitems. |
 | **scroll shift** | Moves `scrollTop` by 1000 × rowHeight and times the next commit. |
 | **expand 1000 children** | Emits a delta that inserts 1000 rows under the root folder. |
 | **decoration-only viewport update** | Updates one visible badge without rematerializing the 500k structural projection; requires exactly one row render. |
@@ -44,7 +44,8 @@ viewport-anchor, interaction-state, and animation-budget failures exit non-zero.
 Decoration-only work additionally fails if it rebuilds the structural projection
 or renders anything other than the changed row. Scroll fails unless the mounted
 virtual range is published through `setViewport`, the prerequisite for future
-host-side viewport retention.
+host-side viewport retention. Initial render, scroll, and expansion additionally
+fail if React materializes more than 100 rows for their mounted windows.
 
 ## Why happy-dom
 

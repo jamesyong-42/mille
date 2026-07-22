@@ -1,6 +1,5 @@
 // useVirtualizerForSnapshot — thin wrapper around `@tanstack/react-virtual`
-// that adapts FileTree's materialized visible projection to the virtualizer's
-// row-count / key model.
+// that adapts FileTree's visible row count to the virtualizer.
 //
 // Fixed-height mode in v0.1; the `rowHeight` option can be a number (fixed)
 // or a function. Measured mode (variable height) lands alongside the
@@ -11,7 +10,6 @@
 
 import type { RefObject } from 'react';
 import { useVirtualizer, type VirtualItem } from '@tanstack/react-virtual';
-import type { VisibleRow } from '@vibecook/mille';
 import type {
   VirtualizerOffsetObserver,
   VirtualizerRectObserver,
@@ -20,8 +18,8 @@ import type {
 export type { VirtualizerOffsetObserver, VirtualizerRectObserver };
 
 export interface UseVirtualizerForSnapshotOptions {
-  /** Complete visible projection, materialized once by FileTree. */
-  readonly visibleRows: readonly VisibleRow[];
+  /** Authoritative total visible row count. */
+  readonly count: number;
   readonly rowHeight: number;
   readonly overscan: number;
   readonly scrollerRef: RefObject<HTMLElement | null>;
@@ -52,7 +50,7 @@ export function useVirtualizerForSnapshot(
   options: UseVirtualizerForSnapshotOptions,
 ): UseVirtualizerForSnapshotResult {
   const {
-    visibleRows,
+    count,
     rowHeight,
     overscan,
     scrollerRef,
@@ -60,19 +58,14 @@ export function useVirtualizerForSnapshot(
     observeElementOffset,
   } = options;
 
-  const count = visibleRows.length;
-
   const virtualizer = useVirtualizer<HTMLElement, Element>({
     count,
     getScrollElement: () => scrollerRef.current,
     estimateSize: () => rowHeight,
     overscan,
-    getItemKey: (index: number): string | number => {
-      // FileTree already materializes the complete projection for keyboard
-      // navigation. Reuse it here instead of traversing the snapshot once per
-      // virtual item merely to recover a key.
-      return visibleRows[index]?.id ?? index;
-    },
+    // React rows retain entry-id keys. The virtualizer itself can use stable
+    // logical indexes without forcing a row lookup before its window exists.
+    getItemKey: (index: number): number => index,
     ...(observeElementRect ? { observeElementRect } : null),
     ...(observeElementOffset ? { observeElementOffset } : null),
   });

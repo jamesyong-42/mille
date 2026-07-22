@@ -251,6 +251,7 @@ async function runInitialRender(rows) {
 
   const { container, root } = mountContainer();
   const obs = makeObservers({ height: 600 });
+  let maxMaterializedRows = 0;
 
   const result = await measureAsync('initial render (500k rows, 1000 expanded)', async () => {
     await act(async () => {
@@ -262,6 +263,9 @@ async function runInitialRender(rows) {
           overscan: 10,
           __testObserveElementRect: obs.observeElementRect,
           __testObserveElementOffset: obs.observeElementOffset,
+          __testOnProjectionMaterialized: (count) => {
+            maxMaterializedRows = Math.max(maxMaterializedRows, count);
+          },
         }),
       );
     });
@@ -272,7 +276,7 @@ async function runInitialRender(rows) {
     root.unmount();
   });
   container.remove();
-  return { ...result, rendered: treeitems };
+  return { ...result, rendered: treeitems, maxMaterializedRows };
 }
 
 async function runScrollShift(rows) {
@@ -281,6 +285,7 @@ async function runScrollShift(rows) {
 
   const { container, root } = mountContainer();
   const obs = makeObservers({ height: 600 });
+  let maxMaterializedRows = 0;
 
   await act(async () => {
     root.render(
@@ -291,9 +296,13 @@ async function runScrollShift(rows) {
         overscan: 10,
         __testObserveElementRect: obs.observeElementRect,
         __testObserveElementOffset: obs.observeElementOffset,
+        __testOnProjectionMaterialized: (count) => {
+          maxMaterializedRows = Math.max(maxMaterializedRows, count);
+        },
       }),
     );
   });
+  maxMaterializedRows = 0;
 
   // Shift scroll by 1000 rows × 22 px = 22000 px.
   const result = await measureAsync('scroll shift (1000 rows forward)', async () => {
@@ -310,7 +319,7 @@ async function runScrollShift(rows) {
     root.unmount();
   });
   container.remove();
-  return { ...result, rendered: treeitems, viewportPublished };
+  return { ...result, rendered: treeitems, viewportPublished, maxMaterializedRows };
 }
 
 async function runExpandChildren(rows) {
@@ -319,6 +328,7 @@ async function runExpandChildren(rows) {
 
   const { container, root } = mountContainer();
   const obs = makeObservers({ height: 600 });
+  let maxMaterializedRows = 0;
 
   await act(async () => {
     root.render(
@@ -329,9 +339,13 @@ async function runExpandChildren(rows) {
         overscan: 10,
         __testObserveElementRect: obs.observeElementRect,
         __testObserveElementOffset: obs.observeElementOffset,
+        __testOnProjectionMaterialized: (count) => {
+          maxMaterializedRows = Math.max(maxMaterializedRows, count);
+        },
       }),
     );
   });
+  maxMaterializedRows = 0;
 
   // Build an expanded-children set: inject 1000 new rows as direct
   // children of the root folder.
@@ -374,7 +388,13 @@ async function runExpandChildren(rows) {
     root.unmount();
   });
   container.remove();
-  return { ...result, rendered: treeitems, animatedRows, animationActive };
+  return {
+    ...result,
+    rendered: treeitems,
+    animatedRows,
+    animationActive,
+    maxMaterializedRows,
+  };
 }
 
 async function runAnimationStorm(rows) {
@@ -651,13 +671,14 @@ function printTable(rows) {
   const w6 = 9;
   const w7 = 11;
   const w8 = 11;
-  const header = `| ${'scenario'.padEnd(w1)} | ${'ms'.padStart(w2)} | ${'rendered'.padStart(w3)} | ${'drift px'.padStart(w4)} | ${'interaction'.padStart(w5)} | ${'animated'.padStart(w6)} | ${'projections'.padStart(w7)} | ${'row renders'.padStart(w8)} |`;
-  const sep = `|${'-'.repeat(w1 + 2)}|${'-'.repeat(w2 + 2)}|${'-'.repeat(w3 + 2)}|${'-'.repeat(w4 + 2)}|${'-'.repeat(w5 + 2)}|${'-'.repeat(w6 + 2)}|${'-'.repeat(w7 + 2)}|${'-'.repeat(w8 + 2)}|`;
+  const w9 = 12;
+  const header = `| ${'scenario'.padEnd(w1)} | ${'ms'.padStart(w2)} | ${'rendered'.padStart(w3)} | ${'drift px'.padStart(w4)} | ${'interaction'.padStart(w5)} | ${'animated'.padStart(w6)} | ${'projections'.padStart(w7)} | ${'row renders'.padStart(w8)} | ${'materialized'.padStart(w9)} |`;
+  const sep = `|${'-'.repeat(w1 + 2)}|${'-'.repeat(w2 + 2)}|${'-'.repeat(w3 + 2)}|${'-'.repeat(w4 + 2)}|${'-'.repeat(w5 + 2)}|${'-'.repeat(w6 + 2)}|${'-'.repeat(w7 + 2)}|${'-'.repeat(w8 + 2)}|${'-'.repeat(w9 + 2)}|`;
   console.log(header);
   console.log(sep);
   for (const r of rows) {
     console.log(
-      `| ${r.label.padEnd(w1)} | ${r.ms.toFixed(2).padStart(w2)} | ${String(r.rendered).padStart(w3)} | ${(r.driftPx === undefined ? '—' : r.driftPx.toFixed(2)).padStart(w4)} | ${(r.interactionPreserved === undefined ? '—' : r.interactionPreserved ? 'preserved' : 'lost').padStart(w5)} | ${(r.animatedRows === undefined ? '—' : String(r.animatedRows)).padStart(w6)} | ${(r.projectionReads === undefined ? '—' : String(r.projectionReads)).padStart(w7)} | ${(r.changedRowRenders === undefined ? '—' : String(r.changedRowRenders)).padStart(w8)} |`,
+      `| ${r.label.padEnd(w1)} | ${r.ms.toFixed(2).padStart(w2)} | ${String(r.rendered).padStart(w3)} | ${(r.driftPx === undefined ? '—' : r.driftPx.toFixed(2)).padStart(w4)} | ${(r.interactionPreserved === undefined ? '—' : r.interactionPreserved ? 'preserved' : 'lost').padStart(w5)} | ${(r.animatedRows === undefined ? '—' : String(r.animatedRows)).padStart(w6)} | ${(r.projectionReads === undefined ? '—' : String(r.projectionReads)).padStart(w7)} | ${(r.changedRowRenders === undefined ? '—' : String(r.changedRowRenders)).padStart(w8)} | ${(r.maxMaterializedRows === undefined ? '—' : String(r.maxMaterializedRows)).padStart(w9)} |`,
     );
   }
 }
@@ -740,6 +761,13 @@ async function main() {
   const scrollResult = results[1];
   if (!scrollResult?.viewportPublished) {
     throw new Error('scrolled virtual window was not published through setViewport');
+  }
+  for (const result of [results[0], scrollResult, expandResult]) {
+    if ((result?.maxMaterializedRows ?? Number.POSITIVE_INFINITY) > 100) {
+      throw new Error(
+        `${result?.label ?? 'windowed scenario'} materialized ${result?.maxMaterializedRows} rows`,
+      );
+    }
   }
 }
 

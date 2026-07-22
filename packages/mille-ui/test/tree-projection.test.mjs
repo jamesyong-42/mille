@@ -14,9 +14,10 @@ function makeSnapshot(treeVersion, counters, projectionVersion = treeVersion) {
       counters.count += 1;
       return { known: rows.length, pendingExpansions: new Set() };
     },
-    visibleRows: () => {
+    visibleRows: ({ offset, limit }) => {
       counters.rows += 1;
-      return rows;
+      counters.maxLimit = Math.max(counters.maxLimit, limit);
+      return rows.slice(offset, offset + limit);
     },
     getById: () => null,
     directChildCount: () => null,
@@ -25,8 +26,8 @@ function makeSnapshot(treeVersion, counters, projectionVersion = treeVersion) {
   };
 }
 
-test('decoration-only snapshots reuse the complete structural projection', () => {
-  const counters = { count: 0, rows: 0 };
+test('decoration-only snapshots reuse the windowed structural projection', () => {
+  const counters = { count: 0, rows: 0, maxLimit: 0 };
   const expanded = new Set([1]);
   const first = readTreeProjection(makeSnapshot(7, counters), expanded, null);
   const decorationOnly = readTreeProjection(
@@ -36,11 +37,11 @@ test('decoration-only snapshots reuse the complete structural projection', () =>
   );
 
   assert.equal(decorationOnly, first);
-  assert.deepEqual(counters, { count: 1, rows: 1 });
+  assert.deepEqual(counters, { count: 1, rows: 0, maxLimit: 0 });
 });
 
-test('tree-version and expansion changes each rematerialize exactly once', () => {
-  const counters = { count: 0, rows: 0 };
+test('tree-version and expansion changes refresh counts without reading rows', () => {
+  const counters = { count: 0, rows: 0, maxLimit: 0 };
   const expanded = new Set([1]);
   const first = readTreeProjection(makeSnapshot(7, counters), expanded, null);
   const nextTree = readTreeProjection(makeSnapshot(8, counters), expanded, first);
@@ -52,15 +53,26 @@ test('tree-version and expansion changes each rematerialize exactly once', () =>
 
   assert.notEqual(nextTree, first);
   assert.notEqual(nextExpansion, nextTree);
-  assert.deepEqual(counters, { count: 3, rows: 3 });
+  assert.deepEqual(counters, { count: 3, rows: 0, maxLimit: 0 });
 });
 
 test('viewport hydration rematerializes without advancing treeVersion', () => {
-  const counters = { count: 0, rows: 0 };
+  const counters = { count: 0, rows: 0, maxLimit: 0 };
   const expanded = new Set();
   const first = readTreeProjection(makeSnapshot(7, counters, 10), expanded, null);
   const hydrated = readTreeProjection(makeSnapshot(7, counters, 11), expanded, first);
 
   assert.notEqual(hydrated, first);
-  assert.deepEqual(counters, { count: 2, rows: 2 });
+  assert.deepEqual(counters, { count: 2, rows: 0, maxLimit: 0 });
+});
+
+test('row windows are bounded and the complete projection stays lazy', () => {
+  const counters = { count: 0, rows: 0, maxLimit: 0 };
+  const projection = readTreeProjection(makeSnapshot(7, counters), new Set(), null);
+
+  assert.deepEqual(projection.readRows(0, 1).map((row) => row.id), [1]);
+  assert.equal(counters.rows, 1);
+  assert.equal(counters.maxLimit, 1);
+  assert.deepEqual(projection.readAllRows().map((row) => row.id), [1]);
+  assert.equal(counters.rows, 2, 'full projection materializes only on explicit demand');
 });

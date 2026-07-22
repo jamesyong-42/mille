@@ -36,6 +36,12 @@ export interface UseTypeaheadOptions {
   readonly windowMs?: number;
 }
 
+export interface TypeaheadRowSource {
+  readonly rowCount: number;
+  readRows(offset: number, limit: number): readonly TypeaheadVisibleRow[];
+  findRowIndex(id: EntryId): number;
+}
+
 export interface TypeaheadHandle {
   /**
    * Push a keystroke and return the next matching row id, or `null` if
@@ -45,6 +51,15 @@ export interface TypeaheadHandle {
   push(
     char: string,
     visibleRows: readonly TypeaheadVisibleRow[],
+    fromId: EntryId | null,
+  ): EntryId | null;
+  /**
+   * Windowed equivalent of `push`. It preserves ordered wraparound matching
+   * without allocating the complete visible-row list.
+   */
+  pushWindowed(
+    char: string,
+    source: TypeaheadRowSource,
     fromId: EntryId | null,
   ): EntryId | null;
   /** Clear the buffer immediately. Called from Esc etc. */
@@ -66,29 +81,34 @@ export function useTypeahead(options: UseTypeaheadOptions = {}): TypeaheadHandle
     }
   }, []);
 
-  const push = useCallback(
-    (
-      char: string,
-      visibleRows: readonly TypeaheadVisibleRow[],
-      fromId: EntryId | null,
-    ): EntryId | null => {
+  const pushCharacter = useCallback(
+    (char: string): string | null => {
       // Only accept single-character printable keys.
       if (typeof char !== 'string' || char.length !== 1) return null;
       // Filter out whitespace / control chars; keep any Unicode letter/digit.
       // We intentionally allow punctuation (e.g. "-", ".") — file names.
       if (char === ' ' || char === '\t' || char === '\n' || char === '\r') return null;
 
-      // Restart the idle timer.
-      if (timerRef.current !== null) {
-        clearTimeout(timerRef.current);
-      }
+      if (timerRef.current !== null) clearTimeout(timerRef.current);
       timerRef.current = setTimeout(() => {
         bufferRef.current = '';
         timerRef.current = null;
       }, windowMs);
 
-      bufferRef.current = bufferRef.current + char;
-      const buf = bufferRef.current.toLowerCase();
+      bufferRef.current += char;
+      return bufferRef.current.toLowerCase();
+    },
+    [windowMs],
+  );
+
+  const push = useCallback(
+    (
+      char: string,
+      visibleRows: readonly TypeaheadVisibleRow[],
+      fromId: EntryId | null,
+    ): EntryId | null => {
+      const buf = pushCharacter(char);
+      if (buf === null) return null;
 
       if (visibleRows.length === 0) return null;
 
@@ -117,7 +137,40 @@ export function useTypeahead(options: UseTypeaheadOptions = {}): TypeaheadHandle
       }
       return null;
     },
-    [windowMs],
+    [pushCharacter],
+  );
+
+  const pushWindowed = useCallback(
+    (
+      char: string,
+      source: TypeaheadRowSource,
+      fromId: EntryId | null,
+    ): EntryId | null => {
+      const buf = pushCharacter(char);
+      if (buf === null) return null;
+      const rowCount = Math.max(0, Math.trunc(source.rowCount));
+      if (rowCount === 0) return null;
+
+      const fromIndex = fromId === null ? -1 : source.findRowIndex(fromId);
+      const startIndex = buf.length === 1
+        ? (fromIndex >= 0 ? fromIndex + 1 : 0)
+        : (fromIndex >= 0 ? fromIndex : 0);
+      const chunkSize = 256;
+      let cursor = startIndex % rowCount;
+      let remaining = rowCount;
+
+      while (remaining > 0) {
+        const limit = Math.min(chunkSize, remaining, rowCount - cursor);
+        const window = source.readRows(cursor, limit);
+        for (const row of window) {
+          if (row.name.toLowerCase().startsWith(buf)) return row.id;
+        }
+        remaining -= limit;
+        cursor = (cursor + limit) % rowCount;
+      }
+      return null;
+    },
+    [pushCharacter],
   );
 
   // Clean the timer on unmount to avoid leaking across mounts in tests.
@@ -132,6 +185,7 @@ export function useTypeahead(options: UseTypeaheadOptions = {}): TypeaheadHandle
 
   return {
     push,
+    pushWindowed,
     reset,
     get buffer() {
       return bufferRef.current;

@@ -381,12 +381,24 @@ export function useFileTreeKeyboard(
       // is printable, let typeahead try a name-match.
       if (intent === null) {
         if (!isTypeaheadKey(event)) return;
-        const visible = rows.visibleRows;
-        const nextId = typeahead.push(
-          event.key,
-          toTypeaheadRows(visible),
-          selection.focusedId,
-        );
+        const windowedRead = rows.readRows;
+        const windowedFind = rows.findRowIndex;
+        const nextId =
+          rows.rowCount !== undefined && windowedRead && windowedFind
+            ? typeahead.pushWindowed(
+                event.key,
+                {
+                  rowCount: rows.rowCount,
+                  readRows: windowedRead,
+                  findRowIndex: (id) => windowedFind(id),
+                },
+                selection.focusedId,
+              )
+            : typeahead.push(
+                event.key,
+                toTypeaheadRows(rows.visibleRows),
+                selection.focusedId,
+              );
         if (nextId !== null) {
           event.preventDefault();
           selection.selectOne(nextId);

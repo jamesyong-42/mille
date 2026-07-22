@@ -384,6 +384,22 @@ median; focus moved to the exact next id in every run. All 309 UI tests and all
 typeahead, Select All, deliberately long range selection, reveal/path fallback,
 and rare recovery when a focused id is far outside the mounted neighborhood.
 
+Eighth windowed-typeahead result (2026-07-22): prefix navigation retains its
+500 ms rolling buffer, case-insensitive matching, next-match behavior, and
+ordered wraparound without first allocating the entire visible projection. A
+new backward-compatible row-source API scans in 256-row windows; callers using
+the original array API keep the prior contract. The deep 10,000-row regression
+first failed because a nearby match requested 9,999 rows at once. On the
+500,000-row gate, a nearby match now reads 550 rows total (including focus lookup
+and the 38-row rerender), while a deliberate full-wrap miss reads 500,256 rows
+but never more than 256 in one request and preserves focus. Across five runs,
+near-match latency was 11.42-25.90 ms (13.57 ms median) and full-wrap miss
+latency was 29.86-33.57 ms (31.32 ms median). All 310 UI tests and all 12
+playground harness tests passed. Typeahead no longer requires a full-order
+allocation, but worst-case misses remain O(n); Select All, long ranges,
+reveal/path fallback, rare off-viewport recovery, and wide-folder ordered-id
+metadata remain Phase 2.4 work.
+
 #### 2.5 Define state under deletion and errors
 
 - Move focus to the nearest logical sibling or parent when the focused row is

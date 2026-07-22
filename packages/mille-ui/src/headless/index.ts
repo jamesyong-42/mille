@@ -62,6 +62,7 @@ export {
 export {
   useTypeahead,
   type TypeaheadHandle,
+  type TypeaheadRowSource,
   type TypeaheadVisibleRow,
   type UseTypeaheadOptions,
 } from '../hooks/useTypeahead.js';

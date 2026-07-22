@@ -631,6 +631,79 @@ async function runKeyboardNavigation(rows) {
   };
 }
 
+async function runTypeahead(rows, { key, label, expectMatch }) {
+  const fx = createFakeEngine();
+  let maxProjectionReadRows = 0;
+  let projectionRowsRead = 0;
+  const snapshot = createFakeSnapshot({ rows, treeVersion: 1 });
+  fx.emitDelta({
+    ...snapshot,
+    visibleRows: (options) => {
+      if (options.limit !== Number.MAX_SAFE_INTEGER) {
+        maxProjectionReadRows = Math.max(maxProjectionReadRows, options.limit);
+        projectionRowsRead += options.limit;
+      }
+      return snapshot.visibleRows(options);
+    },
+  });
+  const { container, root } = mountContainer();
+  const obs = makeObservers({ height: 600 });
+
+  await act(async () => {
+    root.render(
+      createElement(FileTree, {
+        fx,
+        ariaLabel: `bench-${label}`,
+        rowHeight: 22,
+        overscan: 10,
+        __testObserveElementRect: obs.observeElementRect,
+        __testObserveElementOffset: obs.observeElementOffset,
+      }),
+    );
+  });
+  const tree = container.querySelector('[role="tree"]');
+  const originIndex = 5;
+  const origin = container.querySelector(
+    `[data-mille-row-id="${rows[originIndex]?.id}"]`,
+  );
+  if (!tree || !origin) throw new Error('typeahead bench origin is not mounted');
+  await act(async () => dispatchClick(origin));
+  maxProjectionReadRows = 0;
+  projectionRowsRead = 0;
+
+  let expected = rows[originIndex]?.id ?? null;
+  if (expectMatch) {
+    expected = null;
+    for (let offset = 1; offset <= rows.length; offset += 1) {
+      const row = rows[(originIndex + offset) % rows.length];
+      if (row?.name.toLowerCase().startsWith(key.toLowerCase())) {
+        expected = row.id;
+        break;
+      }
+    }
+  }
+  const result = await measureAsync(label, async () => {
+    await act(async () => dispatchKey(tree, key));
+  });
+  const focusedId = Number(
+    container
+      .querySelector('[data-mille-focused="true"]')
+      ?.getAttribute('data-mille-row-id'),
+  );
+  const interactionPreserved = focusedId === expected;
+  const rendered = container.querySelectorAll('[role="treeitem"]').length;
+
+  await act(async () => root.unmount());
+  container.remove();
+  return {
+    ...result,
+    rendered,
+    interactionPreserved,
+    maxMaterializedRows: maxProjectionReadRows,
+    projectionRowsRead,
+  };
+}
+
 async function runAnchoredInsert(rows) {
   const fx = createFakeEngine();
   let maxProjectionReadRows = 0;
@@ -786,6 +859,18 @@ async function main() {
   results.push(renameResult);
   const keyboardResult = await runKeyboardNavigation(rows);
   results.push(keyboardResult);
+  const typeaheadNearResult = await runTypeahead(rows, {
+    key: 'n',
+    label: 'typeahead near match (500k rows)',
+    expectMatch: true,
+  });
+  results.push(typeaheadNearResult);
+  const typeaheadMissResult = await runTypeahead(rows, {
+    key: '§',
+    label: 'typeahead full-wrap miss (500k rows)',
+    expectMatch: false,
+  });
+  results.push(typeaheadMissResult);
   const anchorResult = await runAnchoredInsert(rows);
   results.push(anchorResult);
 
@@ -803,6 +888,9 @@ async function main() {
   );
   console.log(
     `      Keyboard projection reads: ${keyboardResult.projectionRowsRead.toLocaleString()} rows total, ${keyboardResult.maxMaterializedRows} max per read.`,
+  );
+  console.log(
+    `      Typeahead projection reads: near=${typeaheadNearResult.projectionRowsRead.toLocaleString()}, miss=${typeaheadMissResult.projectionRowsRead.toLocaleString()} rows; ${Math.max(typeaheadNearResult.maxMaterializedRows, typeaheadMissResult.maxMaterializedRows)} max per read.`,
   );
   if (anchorResult.driftPx > 0.5) {
     throw new Error(`viewport anchor drift ${anchorResult.driftPx.toFixed(2)} px exceeds 0.5 px`);
@@ -841,6 +929,29 @@ async function main() {
   ) {
     throw new Error(
       `keyboard navigation read max=${keyboardResult.maxMaterializedRows}, total=${keyboardResult.projectionRowsRead} rows`,
+    );
+  }
+  if (!typeaheadNearResult.interactionPreserved) {
+    throw new Error('near typeahead did not focus the next matching row');
+  }
+  if (!typeaheadMissResult.interactionPreserved) {
+    throw new Error('typeahead miss changed the focused row');
+  }
+  if (
+    typeaheadNearResult.maxMaterializedRows > 256 ||
+    typeaheadNearResult.projectionRowsRead > 1_024
+  ) {
+    throw new Error(
+      `near typeahead read max=${typeaheadNearResult.maxMaterializedRows}, total=${typeaheadNearResult.projectionRowsRead} rows`,
+    );
+  }
+  if (
+    typeaheadMissResult.maxMaterializedRows > 256 ||
+    typeaheadMissResult.projectionRowsRead < rows.length ||
+    typeaheadMissResult.projectionRowsRead > rows.length + 512
+  ) {
+    throw new Error(
+      `full-wrap typeahead read max=${typeaheadMissResult.maxMaterializedRows}, total=${typeaheadMissResult.projectionRowsRead} rows`,
     );
   }
   if (!decorationResult.decorationVisible) {

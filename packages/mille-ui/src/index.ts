@@ -54,6 +54,7 @@ export type {
   KeyboardClipboardActions,
   ViewportKeyboardActions,
   TypeaheadHandle,
+  TypeaheadRowSource,
   TypeaheadVisibleRow,
   UseTypeaheadOptions,
   UseControlledStateOptions,

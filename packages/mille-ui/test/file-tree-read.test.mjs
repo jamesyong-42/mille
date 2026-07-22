@@ -566,6 +566,26 @@ test('local keyboard navigation reads a bounded row neighborhood', async () => {
   assert.ok(Math.max(...requestedLimits) <= 256);
   assert.ok(requestedLimits.reduce((total, limit) => total + limit, 0) <= 512);
 
+  requestedLimits.length = 0;
+  await act(async () => {
+    tree.dispatchEvent(
+      new hdWindow.KeyboardEvent('keydown', {
+        key: 'e',
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+  });
+  assert.equal(observedFocusedId, targetId + 12);
+  assert.ok(
+    Math.max(...requestedLimits) <= 256,
+    `typeahead requested ${Math.max(...requestedLimits)} rows at once`,
+  );
+  assert.ok(
+    requestedLimits.reduce((total, limit) => total + limit, 0) <= 1_024,
+    `typeahead requested ${requestedLimits.reduce((total, limit) => total + limit, 0)} rows total for a near match`,
+  );
+
   await act(async () => { root.unmount(); });
   container.remove();
 });

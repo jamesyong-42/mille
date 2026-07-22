@@ -274,6 +274,35 @@ test('Typeahead jumps focus to the next matching row (case-insensitive startsWit
   container.remove();
 });
 
+test('Typeahead wraps from the end of the visible order', async () => {
+  const fx = createFakeEngine();
+  fx.emitDelta(createFakeSnapshot({ rows: sampleRows(5), treeVersion: 1 }));
+  const { container, root } = mount();
+  const obs = makeObservers();
+
+  await act(async () => {
+    root.render(
+      createElement(FileTree, {
+        fx,
+        ariaLabel: 'Typeahead wrap',
+        rowHeight: 22,
+        overscan: 50,
+        __testObserveElementRect: obs.observeElementRect,
+        __testObserveElementOffset: obs.observeElementOffset,
+      }),
+    );
+  });
+
+  const tree = treeSelector(container);
+  const beta = container.querySelector('[data-mille-row-id="5"]');
+  await act(async () => { clickRow(beta); });
+  await act(async () => { fireKey(tree, 'b'); });
+  assert.equal(focusedId(container), 2);
+
+  await act(async () => { root.unmount(); });
+  container.remove();
+});
+
 test('Enter on a file dispatches file.open through the command registry', async () => {
   const fx = createFakeEngine();
   const rows = [

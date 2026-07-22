@@ -157,9 +157,19 @@ viewport, and caps every request at 256 rows. Five ArrowDown runs ranged from
 The deep-viewport test also covers PageDown around row 5,000. Current validation
 is 309/309 UI tests and 12/12 playground harness tests.
 
+Typeahead now consumes the same projection through 256-row windows while
+preserving case-insensitive next-match and wraparound behavior. A nearby match
+in the 500,000-row gate reads 550 rows total; a deliberate miss reads all
+500,256 lookup/scan rows but never allocates more than 256 at once and leaves
+focus unchanged. Five-run medians were 13.57 ms for the nearby match and 31.32
+ms for the full-wrap miss. This removes the full-order allocation, not the
+worst-case O(n) scan. Current validation is 310/310 UI tests and 12/12
+playground harness tests.
+
 Remaining scaling gaps are O(n) ordered-id metadata for an extremely wide
-expanded folder and deliberately lazy full-order reads for typeahead, Select
-All, long ranges, reveal/path fallback, and rare off-viewport recovery.
+expanded folder; full-order reads for Select All, long ranges, reveal/path
+fallback, and rare off-viewport recovery; and the O(n) worst-case typeahead
+scan.
 
 ## What is already strong
 

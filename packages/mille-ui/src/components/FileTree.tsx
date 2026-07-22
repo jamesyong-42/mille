@@ -50,6 +50,10 @@ import {
 } from '../hooks/layoutAnimation.js';
 import { usePrefersReducedMotion } from '../hooks/usePrefersReducedMotion.js';
 import {
+  readTreeProjection,
+  type TreeProjection,
+} from '../hooks/treeProjection.js';
+import {
   useFileTreeKeyboard,
   type KeyboardExpansionActions,
   type KeyboardRowLookup,
@@ -161,6 +165,7 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
     __testSearchDebounceMs,
     __testObserveElementRect,
     __testObserveElementOffset,
+    __testOnProjectionMaterialized,
   } = props;
 
   const ctx = useFileTreeContext();
@@ -257,10 +262,20 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
   // back through the provider's `useSyncExternalStore`.
   useSetExpandedBridge(fx, expanded);
 
-  const visibleCount = useMemo(
-    () => snapshot.visibleRowCount(expanded),
-    [snapshot, expanded],
+  const projectionCacheRef = useRef<TreeProjection | null>(null);
+  const projection = readTreeProjection(
+    snapshot,
+    expanded,
+    projectionCacheRef.current,
   );
+  useLayoutEffect(() => {
+    projectionCacheRef.current = projection;
+  }, [projection]);
+  useEffect(() => {
+    __testOnProjectionMaterialized?.(projection.rows.length);
+  }, [projection, __testOnProjectionMaterialized]);
+
+  const visibleCount = projection.visibleCount;
   const count = visibleCount.known;
   const pendingSet = visibleCount.pendingExpansions;
 
@@ -269,10 +284,7 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
   // Materialize the flat visible-row list once per render. `count` is
   // the authoritative size; we pull the rows in a single slice because
   // the keyboard handler (range select, typeahead) needs random access.
-  const visibleRows = useMemo<readonly VisibleRow[]>(() => {
-    if (count === 0) return [];
-    return snapshot.visibleRows({ expanded, offset: 0, limit: count });
-  }, [snapshot, expanded, count]);
+  const visibleRows = projection.rows;
 
   const interactionProjectionRef = useRef({
     treeVersion: snapshot.treeVersion,
@@ -320,6 +332,22 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
         : null),
     });
   const viewportScrollOffset = scrollerRef.current?.scrollTop ?? scrollOffset;
+  const mountedViewportOffset = virtualItems[0]?.index ?? 0;
+  const mountedViewportLimit =
+    virtualItems.length === 0
+      ? 0
+      : (virtualItems[virtualItems.length - 1]?.index ?? mountedViewportOffset) -
+        mountedViewportOffset +
+        1;
+
+  useEffect(() => {
+    fx.setViewport?.({
+      offset: mountedViewportOffset,
+      limit: mountedViewportLimit,
+      // The virtual item range already includes UI overscan.
+      overscan: 0,
+    });
+  }, [fx, mountedViewportOffset, mountedViewportLimit]);
 
   const previousProjectionRef = useRef({
     treeVersion: snapshot.treeVersion,

@@ -26,7 +26,7 @@ pnpm --filter @vibecook/mille-ui build
 
 The harness builds a synthetic 500,000-row snapshot with 1,000
 pre-expanded folders, mounts `<FileTree>` against a fake engine
-(`createFakeEngine()`), and times six operations with
+(`createFakeEngine()`), and times seven operations with
 `performance.now()`:
 
 | Scenario | What happens |
@@ -34,12 +34,17 @@ pre-expanded folders, mounts `<FileTree>` against a fake engine
 | **initial render** | First paint with the full 500k snapshot. Virtualizer windows down to ~40 treeitems. |
 | **scroll shift** | Moves `scrollTop` by 1000 × rowHeight and times the next commit. |
 | **expand 1000 children** | Emits a delta that inserts 1000 rows under the root folder. |
+| **decoration-only viewport update** | Updates one visible badge without rematerializing the 500k structural projection; requires exactly one row render. |
 | **budget 1000-row visible storm** | Uses a tall virtual window to prove a commit affecting more than the 64-row animation budget produces zero transition markers. |
 | **rename during 1000-row tail churn** | Keeps the exact input node, draft text, and focus while unrelated rows arrive outside the viewport. |
 | **insert 1000 above viewport** | Preserves the top row's pixel offset, focus, and selection; fails above 0.5 px drift or on interaction-state loss. |
 
 Output is a small markdown table. Timing numbers are reporters; virtualization,
 viewport-anchor, interaction-state, and animation-budget failures exit non-zero.
+Decoration-only work additionally fails if it rebuilds the structural projection
+or renders anything other than the changed row. Scroll fails unless the mounted
+virtual range is published through `setViewport`, the prerequisite for future
+host-side viewport retention.
 
 ## Why happy-dom
 

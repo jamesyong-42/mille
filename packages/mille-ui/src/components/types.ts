@@ -56,6 +56,12 @@ export interface FileTreeEngine {
     readonly add?: readonly EntryId[];
     readonly remove?: readonly EntryId[];
   }): void;
+  /** Optional host hint describing the currently mounted virtual window. */
+  setViewport?(options: {
+    readonly offset: number;
+    readonly limit: number;
+    readonly overscan?: number;
+  }): void;
 }
 
 /**
@@ -491,4 +497,6 @@ export interface FileTreeProps {
   readonly __testObserveElementRect?: VirtualizerRectObserver;
   /** Testing-only counterpart for scroll offset. See above. */
   readonly __testObserveElementOffset?: VirtualizerOffsetObserver;
+  /** Testing-only structural projection materialization observer. */
+  readonly __testOnProjectionMaterialized?: (rowCount: number) => void;
 }

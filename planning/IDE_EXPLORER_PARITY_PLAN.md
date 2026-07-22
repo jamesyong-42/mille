@@ -280,6 +280,20 @@ chevron transitions under `prefers-reduced-motion`.
 - Pin viewport entries in the mirror and measure eviction/re-fetch behavior.
 - Make icon and decoration resolution cache behavior visible in profiles.
 
+First projection/allocation result (2026-07-21): decoration-only snapshots now
+reuse the structural projection whenever `treeVersion` and expansion identity
+are unchanged. This removes both the O(n) visible-row count and the full row
+allocation from badge/status updates. The fake engine also publishes decoration
+versions as persistent overlays instead of rebuilding its structural maps,
+keeping the harness representative of the production mirror. On the 500,000-row
+fixture, a one-row decoration update moved from 113.16 ms to 51.23 ms (about 55%
+faster), with CI-enforced counts of zero projection materializations, exactly one
+row render, and zero animation markers. The virtualizer now publishes its exact
+mounted range through `setViewport`; scroll tests and the 500,000-row gate assert
+that UI-to-host contract. The current host records the hint, but viewport-aware
+mirror pinning, eviction/re-fetch measurement, and patch delivery remain open
+Phase 2.4 work.
+
 #### 2.5 Define state under deletion and errors
 
 - Move focus to the nearest logical sibling or parent when the focused row is

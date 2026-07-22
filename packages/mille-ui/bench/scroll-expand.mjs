@@ -54,10 +54,13 @@ if (typeof globalThis.ResizeObserver === 'undefined') {
 }
 
 // React / package imports must come AFTER the globals are installed.
-const { createElement, act } = await import('react');
+const { createElement, act, memo } = await import('react');
 const { createRoot } = await import('react-dom/client');
 
-const { FileTree } = await import('../dist/index.js');
+const { FileTree, FileTreeRow } = await import('../dist/index.js');
+const { areFileTreeRowPropsEqual } = await import(
+  '../dist/components/FileTreeRow.js'
+);
 const { createFakeEngine, createFakeSnapshot } = await import('../dist/testing.js');
 const { MAX_LAYOUT_ANIMATION_ROWS } = await import('../dist/hooks/layoutAnimation.js');
 
@@ -195,6 +198,15 @@ function mountContainer() {
   return { container, root: createRoot(container) };
 }
 
+function makeCountingRowRenderer() {
+  const counts = new Map();
+  const inner = (props) => {
+    counts.set(props.row.id, (counts.get(props.row.id) ?? 0) + 1);
+    return createElement(FileTreeRow, props);
+  };
+  return { renderer: memo(inner, areFileTreeRowPropsEqual), counts };
+}
+
 function dispatchClick(element) {
   element.dispatchEvent(
     new hdWindow.MouseEvent('click', { bubbles: true, cancelable: true }),
@@ -291,11 +303,14 @@ async function runScrollShift(rows) {
   });
 
   const treeitems = container.querySelectorAll('[role="treeitem"]').length;
+  const viewport = fx.calls.setViewport.at(-1);
+  const viewportPublished =
+    viewport !== undefined && viewport.offset > 0 && viewport.limit === treeitems;
   await act(async () => {
     root.unmount();
   });
   container.remove();
-  return { ...result, rendered: treeitems };
+  return { ...result, rendered: treeitems, viewportPublished };
 }
 
 async function runExpandChildren(rows) {
@@ -409,6 +424,71 @@ async function runAnimationStorm(rows) {
   await act(async () => root.unmount());
   container.remove();
   return { ...result, rendered, animatedRows, suppressedBy };
+}
+
+async function runDecorationChurn(rows) {
+  const fx = createFakeEngine();
+  fx.emitDelta(createFakeSnapshot({ rows, treeVersion: 1 }));
+  const { container, root } = mountContainer();
+  const obs = makeObservers({ height: 600 });
+  let projectionMaterializations = 0;
+  const { renderer: rowRenderer, counts: rowRenderCounts } =
+    makeCountingRowRenderer();
+
+  await act(async () => {
+    root.render(
+      createElement(FileTree, {
+        fx,
+        ariaLabel: 'bench-decoration-churn',
+        rowHeight: 22,
+        overscan: 10,
+        rowRenderer,
+        __testObserveElementRect: obs.observeElementRect,
+        __testObserveElementOffset: obs.observeElementOffset,
+        __testOnProjectionMaterialized: () => {
+          projectionMaterializations += 1;
+        },
+      }),
+    );
+  });
+  const baselineMaterializations = projectionMaterializations;
+  const baselineRowRenders = Array.from(rowRenderCounts.values()).reduce(
+    (total, count) => total + count,
+    0,
+  );
+  const targetId = rows[5]?.id;
+  if (targetId === undefined) throw new Error('decoration churn target is missing');
+
+  fx.setDecorations(targetId, [{ badge: 'M' }]);
+  const result = await measureAsync('decoration-only viewport update', async () => {
+    await act(async () => {
+      fx.bumpDecorationVersion([targetId]);
+    });
+  });
+  const target = container.querySelector(`[data-mille-row-id="${targetId}"]`);
+  const decorationVisible =
+    target?.querySelector('[data-mille-decoration-badge="M"]') !== null;
+  const rendered = container.querySelectorAll('[role="treeitem"]').length;
+  const projectionReads = projectionMaterializations - baselineMaterializations;
+  const changedRowRenders =
+    Array.from(rowRenderCounts.values()).reduce(
+      (total, count) => total + count,
+      0,
+    ) - baselineRowRenders;
+  const animatedRows = container.querySelectorAll(
+    '[data-mille-entering], [data-mille-repositioning]',
+  ).length;
+
+  await act(async () => root.unmount());
+  container.remove();
+  return {
+    ...result,
+    rendered,
+    animatedRows,
+    projectionReads,
+    changedRowRenders,
+    decorationVisible,
+  };
 }
 
 async function runRenameChurn(rows) {
@@ -569,13 +649,15 @@ function printTable(rows) {
   const w4 = 10;
   const w5 = 11;
   const w6 = 9;
-  const header = `| ${'scenario'.padEnd(w1)} | ${'ms'.padStart(w2)} | ${'rendered'.padStart(w3)} | ${'drift px'.padStart(w4)} | ${'interaction'.padStart(w5)} | ${'animated'.padStart(w6)} |`;
-  const sep = `|${'-'.repeat(w1 + 2)}|${'-'.repeat(w2 + 2)}|${'-'.repeat(w3 + 2)}|${'-'.repeat(w4 + 2)}|${'-'.repeat(w5 + 2)}|${'-'.repeat(w6 + 2)}|`;
+  const w7 = 11;
+  const w8 = 11;
+  const header = `| ${'scenario'.padEnd(w1)} | ${'ms'.padStart(w2)} | ${'rendered'.padStart(w3)} | ${'drift px'.padStart(w4)} | ${'interaction'.padStart(w5)} | ${'animated'.padStart(w6)} | ${'projections'.padStart(w7)} | ${'row renders'.padStart(w8)} |`;
+  const sep = `|${'-'.repeat(w1 + 2)}|${'-'.repeat(w2 + 2)}|${'-'.repeat(w3 + 2)}|${'-'.repeat(w4 + 2)}|${'-'.repeat(w5 + 2)}|${'-'.repeat(w6 + 2)}|${'-'.repeat(w7 + 2)}|${'-'.repeat(w8 + 2)}|`;
   console.log(header);
   console.log(sep);
   for (const r of rows) {
     console.log(
-      `| ${r.label.padEnd(w1)} | ${r.ms.toFixed(2).padStart(w2)} | ${String(r.rendered).padStart(w3)} | ${(r.driftPx === undefined ? '—' : r.driftPx.toFixed(2)).padStart(w4)} | ${(r.interactionPreserved === undefined ? '—' : r.interactionPreserved ? 'preserved' : 'lost').padStart(w5)} | ${(r.animatedRows === undefined ? '—' : String(r.animatedRows)).padStart(w6)} |`,
+      `| ${r.label.padEnd(w1)} | ${r.ms.toFixed(2).padStart(w2)} | ${String(r.rendered).padStart(w3)} | ${(r.driftPx === undefined ? '—' : r.driftPx.toFixed(2)).padStart(w4)} | ${(r.interactionPreserved === undefined ? '—' : r.interactionPreserved ? 'preserved' : 'lost').padStart(w5)} | ${(r.animatedRows === undefined ? '—' : String(r.animatedRows)).padStart(w6)} | ${(r.projectionReads === undefined ? '—' : String(r.projectionReads)).padStart(w7)} | ${(r.changedRowRenders === undefined ? '—' : String(r.changedRowRenders)).padStart(w8)} |`,
     );
   }
 }
@@ -595,6 +677,8 @@ async function main() {
   results.push(await runScrollShift(rows));
   const expandResult = await runExpandChildren(rows);
   results.push(expandResult);
+  const decorationResult = await runDecorationChurn(rows);
+  results.push(decorationResult);
   const stormResult = await runAnimationStorm(rows);
   results.push(stormResult);
   const renameResult = await runRenameChurn(rows);
@@ -634,11 +718,28 @@ async function main() {
   if (anchorResult.animatedRows !== 0) {
     throw new Error(`anchored update animated ${anchorResult.animatedRows} rows`);
   }
+  if (!decorationResult.decorationVisible) {
+    throw new Error('decoration-only update was not visible');
+  }
+  if (decorationResult.projectionReads !== 0) {
+    throw new Error(
+      `decoration-only update rematerialized ${decorationResult.projectionReads} structural projections`,
+    );
+  }
+  if (decorationResult.changedRowRenders !== 1) {
+    throw new Error(
+      `decoration-only update rendered ${decorationResult.changedRowRenders} rows; expected 1`,
+    );
+  }
   if (!renameResult.interactionPreserved) {
     throw new Error('rename input identity, draft, or focus was lost during tail churn');
   }
   if (renameResult.animatedRows !== 0) {
     throw new Error(`unrelated rename churn animated ${renameResult.animatedRows} rows`);
+  }
+  const scrollResult = results[1];
+  if (!scrollResult?.viewportPublished) {
+    throw new Error('scrolled virtual window was not published through setViewport');
   }
 }
 

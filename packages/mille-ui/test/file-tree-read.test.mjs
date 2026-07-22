@@ -268,6 +268,11 @@ test('scrolling the tree shifts the rendered virtual items', async () => {
     firstAfter,
     `expected different first row after scroll, got ${firstInitial} both times`,
   );
+  const viewport = fx.calls.setViewport.at(-1);
+  assert.ok(viewport, 'the mounted virtual window must be published to the host');
+  assert.ok(viewport.offset > 0, `expected a scrolled viewport offset; got ${viewport.offset}`);
+  assert.equal(viewport.limit, afterScroll.length);
+  assert.equal(viewport.overscan, 0, 'the published window already includes UI overscan');
 
   await act(async () => { root.unmount(); });
   container.remove();

@@ -403,6 +403,48 @@ test('decoration-only bump on row A does NOT re-render row B', async () => {
   container.remove();
 });
 
+test('decoration-only bump does not rematerialize the structural projection', async () => {
+  const fx = createFakeEngine();
+  const rows = sampleRows();
+  fx.emitDelta(createFakeSnapshot({ rows, treeVersion: 1 }));
+  let materializations = 0;
+
+  const { container, root } = mount();
+  const obs = makeObservers({ height: 400 });
+  await act(async () => {
+    root.render(
+      createElement(FileTree, {
+        fx,
+        ariaLabel: 'Projection reuse',
+        rowHeight: 22,
+        overscan: 10,
+        __testObserveElementRect: obs.observeElementRect,
+        __testObserveElementOffset: obs.observeElementOffset,
+        __testOnProjectionMaterialized: () => {
+          materializations += 1;
+        },
+      }),
+    );
+  });
+  const baseline = materializations;
+  assert.ok(baseline >= 1);
+
+  await act(async () => {
+    fx.setDecorations(1, [{ badge: 'M' }]);
+    fx.bumpDecorationVersion([1]);
+  });
+
+  assert.equal(materializations, baseline);
+  assert.ok(
+    container
+      .querySelector('[data-mille-row-id="1"]')
+      ?.querySelector('[data-mille-decoration-badge="M"]'),
+  );
+
+  await act(async () => { root.unmount(); });
+  container.remove();
+});
+
 // ─── Test 7: tree-version bump isolates changed rows ──────────────────
 
 test('tree-version bump re-renders only the changed visible row', async () => {

@@ -169,6 +169,10 @@ function freeze<T>(v: T): T {
   return Object.freeze(v) as T;
 }
 
+const EMPTY_DECORATIONS: readonly Decoration[] = freeze(
+  [] as readonly Decoration[],
+);
+
 function nextEntryIdSource(start: number): () => EntryId {
   let n = start;
   return () => {
@@ -201,8 +205,6 @@ export function createFakeSnapshot(init: FakeSnapshotInit = {}): FakeMirrorSnaps
   }
 
   // Empty-array singleton so absent-id lookups never allocate.
-  const EMPTY: readonly Decoration[] = freeze([] as readonly Decoration[]);
-
   const snap: FakeMirrorSnapshot = {
     treeVersion: init.treeVersion ?? 0,
     decorationVersion: init.decorationVersion ?? 0,
@@ -219,7 +221,7 @@ export function createFakeSnapshot(init: FakeSnapshotInit = {}): FakeMirrorSnaps
     getById: (id) => byId.get(id) ?? null,
     directChildCount: (id) => childCounts.get(id) ?? null,
     hasChildren: (id) => (childCounts.get(id) ?? 0) > 0,
-    getDecorations: (id) => decorations.get(id) ?? EMPTY,
+    getDecorations: (id) => decorations.get(id) ?? EMPTY_DECORATIONS,
   };
   return freeze(snap);
 }
@@ -523,13 +525,21 @@ export function createFakeEngine(): FakeEngine {
           }
         }
       }
-      current = createFakeSnapshot({
-        treeVersion: current.treeVersion,
-        decorationVersion: current.decorationVersion + 1,
-        rows: lastRows,
-        roots: lastRoots,
-        pendingExpansions: lastPending,
-        decorations: decorationMap,
+      // Decoration-only publication must be O(changed decorations), not
+      // O(total rows). Reuse the complete structural snapshot and swap only
+      // the decoration reader/version, matching the production mirror contract.
+      const structural = current;
+      current = freeze({
+        treeVersion: structural.treeVersion,
+        decorationVersion: structural.decorationVersion + 1,
+        roots: () => structural.roots(),
+        visibleRows: (options) => structural.visibleRows(options),
+        visibleRowCount: (expanded, includeIgnored) =>
+          structural.visibleRowCount(expanded, includeIgnored),
+        getById: (id) => structural.getById(id),
+        directChildCount: (id) => structural.directChildCount(id),
+        hasChildren: (id) => structural.hasChildren(id),
+        getDecorations: (id) => decorationMap.get(id) ?? EMPTY_DECORATIONS,
       });
       notify();
     },

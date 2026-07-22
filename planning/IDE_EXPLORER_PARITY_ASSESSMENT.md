@@ -34,7 +34,7 @@ mature IDE explorer is the 10/10 reference point.
 | ------------------------------------ | ----: | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Filesystem and renderer architecture |   7.5 | Strong native walker, lazy hydration, deltas, bounded client mirror, and virtualized rendering                                                                   |
 | Core tree interaction                |   7.0 | Keyboard navigation, multi-selection, create/rename/delete, clipboard, filtering, context menus, and drag/drop                                                   |
-| Visual behavior                      |   6.2 | Mutation churn now has a real-Electron paint/frame gate; scroll, focus, selection, theme, and reduced-motion scenarios are still missing                         |
+| Visual behavior                      |   6.6 | Mutation churn has a real-Electron paint/frame gate and fixed-row viewport anchoring; focus, selection, theme, sticky-root, and reduced-motion scenarios remain  |
 | Accessibility                        |   6.0 | Good ARIA tree semantics and keyboard tests; no real assistive-technology matrix                                                                                 |
 | Reliability and recovery             |   5.5 | Live watcher tests are green and a deterministic 1,000-operation soak now gates exact convergence; crash/restart and platform stress coverage remain incomplete  |
 | Performance confidence               |   5.8 | Headless and Electron gates enforce correctness, paint, React-duration, and frame budgets with retained build-identified reports; scenario breadth is incomplete |

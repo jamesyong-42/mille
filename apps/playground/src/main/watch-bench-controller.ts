@@ -76,6 +76,13 @@ export class WatchBenchController {
     worker.on('message', (message: unknown) => {
       if (this.win.isDestroyed()) return;
       const event = message as WatchBenchEvent;
+      if (event.type === 'timeout') {
+        console.error(
+          `[watch-bench] timeout during #${event.operation.id} ${event.operation.kind} after ${event.timeoutMs}ms`,
+        );
+      } else if (event.type === 'fatal') {
+        console.error(`[watch-bench] fatal: ${event.message}`);
+      }
       this.win.webContents.send('watch-bench:event', event);
       const exitCode = benchmarkExitCode(event);
       if (this.config.exitOnComplete && exitCode !== null) {

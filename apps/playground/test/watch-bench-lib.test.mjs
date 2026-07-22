@@ -6,6 +6,8 @@ import test from 'node:test';
 
 import {
   buildOperationPlan,
+  benchmarkReportExitCode,
+  createFatalBenchmarkReport,
   executeOperation,
   parseBuildIdentity,
   seedReferenceTree,
@@ -17,6 +19,7 @@ import {
   createTreeCommit,
   evaluateRenderQuality,
   isCommitEligible,
+  isReferenceTreeReady,
 } from '../scripts/watch-bench-render-lib.mjs';
 
 test('operation plan covers every watcher mutation shape', () => {
@@ -201,4 +204,55 @@ test('automated benchmark exit status follows fatal and quality-gate outcomes', 
     benchmarkExitCode({ type: 'complete', summary: { qualityGate: { passed: false } } }),
     1,
   );
+});
+
+test('renderer readiness requires every seeded reference file and settled expansions', () => {
+  const rows = [
+    { kind: 1, name: 'workspace' },
+    { kind: 1, name: 'reference-0001' },
+    { kind: 0, name: 'reference-000001.txt' },
+    { kind: 0, name: 'reference-000002.txt' },
+    { kind: 0, name: 'unrelated.txt' },
+  ];
+  assert.equal(isReferenceTreeReady(rows, 2, 0), true);
+  assert.equal(isReferenceTreeReady(rows.slice(0, 3), 2, 0), false);
+  assert.equal(isReferenceTreeReady(rows, 2, 1), false);
+  assert.equal(isReferenceTreeReady([{ kind: 1, name: 'workspace' }], 0, 0), true);
+});
+
+test('fatal benchmark reports preserve stage, operation, and partial observations', () => {
+  const fatal = { stage: 'warmup-observe', operation: { id: -2 }, message: 'timed out' };
+  const report = createFatalBenchmarkReport(
+    { generatedAt: 'now', planHash: 'abc' },
+    fatal,
+    [{ id: 7, message: 'missed' }],
+    [{ id: 1, paintLatencyMs: 10 }],
+  );
+  assert.deepEqual(report, {
+    generatedAt: 'now',
+    planHash: 'abc',
+    status: 'fatal',
+    fatal,
+    failed: [{ id: 7, message: 'missed' }],
+    observations: [{ id: 1, paintLatencyMs: 10 }],
+  });
+});
+
+test('persisted report status drives automated launcher exit', () => {
+  assert.equal(benchmarkReportExitCode({ status: 'fatal' }), 1);
+  assert.equal(
+    benchmarkReportExitCode({
+      status: 'complete',
+      summary: { qualityGate: { passed: true } },
+    }),
+    0,
+  );
+  assert.equal(
+    benchmarkReportExitCode({
+      status: 'complete',
+      summary: { qualityGate: { passed: false } },
+    }),
+    1,
+  );
+  assert.equal(benchmarkReportExitCode({ status: 'running' }), null);
 });

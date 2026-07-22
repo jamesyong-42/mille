@@ -1,17 +1,16 @@
 # mille-ui perf bench
 
-A minimal, scripted perf harness for `@vibecook/mille-ui`. Runs under
-Node + happy-dom; **not** a browser. Numbers are indicative only — use
-them to catch order-of-magnitude regressions between phases, not to
-validate against SPEC §12 frame budgets.
-
-The SPEC §12 guardrail (Playwright + real layout + 60 fps frame budget)
-is deferred to v0.2.
+A minimal, scripted perf harness for `@vibecook/mille-ui`. Runs under Node +
+happy-dom; **not** a browser. Timing numbers are indicative only, while the
+viewport-anchor drift assertion is deterministic and exits non-zero. Real paint
+and frame budgets are enforced separately by `pnpm bench:watch`.
 
 ## Run
 
 ```bash
 pnpm --filter @vibecook/mille-ui bench
+# or, from the repository root:
+pnpm bench:ui
 # or, from the package dir:
 node bench/scroll-expand.mjs
 ```
@@ -26,7 +25,7 @@ pnpm --filter @vibecook/mille-ui build
 
 The harness builds a synthetic 500,000-row snapshot with 1,000
 pre-expanded folders, mounts `<FileTree>` against a fake engine
-(`createFakeEngine()`), and times three operations with
+(`createFakeEngine()`), and times four operations with
 `performance.now()`:
 
 | Scenario | What happens |
@@ -34,9 +33,10 @@ pre-expanded folders, mounts `<FileTree>` against a fake engine
 | **initial render** | First paint with the full 500k snapshot. Virtualizer windows down to ~40 treeitems. |
 | **scroll shift** | Moves `scrollTop` by 1000 × rowHeight and times the next commit. |
 | **expand 1000 children** | Emits a delta that inserts 1000 rows under the root folder. |
+| **insert 1000 above viewport** | Preserves the top row's pixel offset and fails above 0.5 px drift. |
 
-Output is a small markdown table to stdout. Exit code is 0 regardless
-of numbers — this is a reporter, not a guard.
+Output is a small markdown table. Timing numbers are reporters; structural and
+viewport-anchor invariant failures exit non-zero.
 
 ## Why happy-dom
 
@@ -46,13 +46,6 @@ scheduling are all absent, so timings reflect React + virtualizer
 bookkeeping only. Expect real-browser numbers to be slower on initial
 paint (real layout) and faster per-frame (batched raf + compositor).
 
-## When to upgrade
-
-A Playwright-driven harness is the right home for SPEC §12 assertions:
-real layout, real frame budget, regression gating. That work is
-tracked under Phase 16.4 and intentionally deferred to v0.2 — shipping
-v0.1 doesn't require it, and standing up Playwright + snapshot storage
-is a larger investment than this close-out can absorb.
-
-Until then, run `pnpm bench` before and after any perf-sensitive
-change and eyeball the diff.
+For real layout and frame scheduling, use the Electron playground benchmark;
+it retains JSON observations and exits non-zero on ratified paint, React, or
+frame-budget regressions.

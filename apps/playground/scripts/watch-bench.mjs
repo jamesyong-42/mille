@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 
-import { mkdtemp, mkdir, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 
-import { seedReferenceTree } from './watch-bench-lib.mjs';
+import { benchmarkReportExitCode, seedReferenceTree } from './watch-bench-lib.mjs';
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const playgroundDir = dirname(scriptDir);
@@ -56,6 +56,7 @@ const reportPath = requestedReportPath
   : join(sandboxBase, 'watch-bench-report.json');
 await mkdir(workspaceRoot);
 await mkdir(dirname(reportPath), { recursive: true });
+await rm(reportPath, { force: true });
 const reference = await seedReferenceTree(workspaceRoot, seedFiles);
 
 const binary = join(
@@ -94,6 +95,7 @@ const child = spawn(binary, ['dev'], {
 });
 
 let stopping = false;
+let reportExitCode = null;
 async function stop(signal) {
   if (stopping) return;
   stopping = true;
@@ -108,6 +110,33 @@ async function stop(signal) {
 process.on('SIGINT', () => void stop('SIGINT'));
 process.on('SIGTERM', () => void stop('SIGTERM'));
 
+let reportPoll = null;
+let readingReport = false;
+if (exitOnComplete) {
+  reportPoll = setInterval(() => {
+    if (readingReport || stopping) return;
+    readingReport = true;
+    void readFile(reportPath, 'utf8')
+      .then((contents) => {
+        const parsed = JSON.parse(contents);
+        const code = benchmarkReportExitCode(parsed);
+        if (code === null) return;
+        reportExitCode = code;
+        if (reportPoll) clearInterval(reportPoll);
+        reportPoll = null;
+        return stop('SIGTERM');
+      })
+      .catch((error) => {
+        if (error?.code !== 'ENOENT' && !(error instanceof SyntaxError)) {
+          console.error('[mille watch bench] failed to read report:', error);
+        }
+      })
+      .finally(() => {
+        readingReport = false;
+      });
+  }, 100);
+}
+
 const exitCode = await new Promise((resolve) => {
   child.on('exit', (code) => resolve(code ?? 0));
   child.on('error', (error) => {
@@ -115,5 +144,6 @@ const exitCode = await new Promise((resolve) => {
     resolve(1);
   });
 });
+if (reportPoll) clearInterval(reportPoll);
 await stop('SIGTERM');
-process.exitCode = exitCode;
+process.exitCode = reportExitCode ?? exitCode;

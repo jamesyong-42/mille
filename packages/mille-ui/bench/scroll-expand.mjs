@@ -16,8 +16,8 @@
 // Usage:
 //   pnpm --filter @vibecook/mille-ui bench
 //
-// Exits 0 on success. Prints a table of timings and row counts. No
-// assertions — this is a reporter, not a guard.
+// Exits non-zero if virtualization or viewport-anchor invariants regress.
+// Timing values remain reporters because happy-dom does not model paint.
 
 import { performance } from 'node:perf_hooks';
 import { Window } from 'happy-dom';
@@ -326,19 +326,89 @@ async function runExpandChildren(rows) {
   return { ...result, rendered: treeitems };
 }
 
+async function runAnchoredInsert(rows) {
+  const fx = createFakeEngine();
+  fx.emitDelta(createFakeSnapshot({ rows, treeVersion: 1 }));
+  const { container, root } = mountContainer();
+  const obs = makeObservers({ height: 600 });
+  const rowHeight = 22;
+
+  await act(async () => {
+    root.render(
+      createElement(FileTree, {
+        fx,
+        ariaLabel: 'bench-anchor',
+        rowHeight,
+        overscan: 10,
+        __testObserveElementRect: obs.observeElementRect,
+        __testObserveElementOffset: obs.observeElementOffset,
+      }),
+    );
+  });
+
+  const tree = container.querySelector('[role="tree"]');
+  if (!tree) throw new Error('anchor bench did not mount a tree');
+  tree.scrollTo = ({ top }) => {
+    tree.scrollTop = top;
+    queueMicrotask(() => obs.setOffset(top));
+  };
+  const anchorIndex = 10_000;
+  const initialOffset = anchorIndex * rowHeight;
+  await act(async () => {
+    tree.scrollTop = initialOffset;
+    obs.setOffset(initialOffset);
+  });
+  const anchorId = rows[anchorIndex]?.id;
+  if (anchorId === undefined) throw new Error('anchor row is missing');
+
+  const insertCount = 1_000;
+  const inserted = Array.from({ length: insertCount }, (_, index) =>
+    makeRow({
+      id: 20_000_000 + index,
+      parentId: 1,
+      name: `insert-above-${index}.ts`,
+      depth: 1,
+      kind: 0,
+      hasChildren: false,
+      isExpanded: false,
+    }),
+  );
+  const nextRows = [rows[0], ...inserted, ...rows.slice(1)];
+  const result = await measureAsync('insert 1000 above viewport', async () => {
+    await act(async () => {
+      fx.emitDelta(createFakeSnapshot({ rows: nextRows, treeVersion: 2 }));
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    });
+  });
+
+  const anchoredRow = container.querySelector(`[data-mille-row-id="${anchorId}"]`);
+  if (!anchoredRow) throw new Error('anchored row left the rendered window');
+  const match = /translateY\(([-\d.]+)px\)/.exec(anchoredRow.style.transform);
+  if (!match) throw new Error(`unexpected anchored transform: ${anchoredRow.style.transform}`);
+  const viewportPosition = Number(match[1]) - tree.scrollTop;
+  const driftPx = Math.abs(viewportPosition);
+  const unanchoredDriftPx = insertCount * rowHeight;
+  const rendered = container.querySelectorAll('[role="treeitem"]').length;
+
+  await act(async () => root.unmount());
+  container.remove();
+  return { ...result, rendered, driftPx, unanchoredDriftPx };
+}
+
 // ─── Runner ───────────────────────────────────────────────────────────
 
 function printTable(rows) {
   const w1 = Math.max(...rows.map((r) => r.label.length));
   const w2 = 10;
   const w3 = 10;
-  const header = `| ${'scenario'.padEnd(w1)} | ${'ms'.padStart(w2)} | ${'rendered'.padStart(w3)} |`;
-  const sep = `|${'-'.repeat(w1 + 2)}|${'-'.repeat(w2 + 2)}|${'-'.repeat(w3 + 2)}|`;
+  const w4 = 10;
+  const header = `| ${'scenario'.padEnd(w1)} | ${'ms'.padStart(w2)} | ${'rendered'.padStart(w3)} | ${'drift px'.padStart(w4)} |`;
+  const sep = `|${'-'.repeat(w1 + 2)}|${'-'.repeat(w2 + 2)}|${'-'.repeat(w3 + 2)}|${'-'.repeat(w4 + 2)}|`;
   console.log(header);
   console.log(sep);
   for (const r of rows) {
     console.log(
-      `| ${r.label.padEnd(w1)} | ${r.ms.toFixed(2).padStart(w2)} | ${String(r.rendered).padStart(w3)} |`,
+      `| ${r.label.padEnd(w1)} | ${r.ms.toFixed(2).padStart(w2)} | ${String(r.rendered).padStart(w3)} | ${(r.driftPx === undefined ? '—' : r.driftPx.toFixed(2)).padStart(w4)} |`,
     );
   }
 }
@@ -357,6 +427,8 @@ async function main() {
   results.push(await runInitialRender(rows));
   results.push(await runScrollShift(rows));
   results.push(await runExpandChildren(rows));
+  const anchorResult = await runAnchoredInsert(rows);
+  results.push(anchorResult);
 
   console.log('Results:');
   printTable(results);
@@ -365,8 +437,11 @@ async function main() {
     'Note: happy-dom is not a real browser — numbers are indicative only.',
   );
   console.log(
-    '      SPEC §12 targets are measured via Playwright in v0.2.',
+    `      Anchor counterfactual without correction: ${anchorResult.unanchoredDriftPx.toFixed(0)} px; measured: ${anchorResult.driftPx.toFixed(2)} px.`,
   );
+  if (anchorResult.driftPx > 0.5) {
+    throw new Error(`viewport anchor drift ${anchorResult.driftPx.toFixed(2)} px exceeds 0.5 px`);
+  }
 }
 
 main().then(

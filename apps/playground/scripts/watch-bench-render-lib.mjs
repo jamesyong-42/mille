@@ -98,3 +98,15 @@ export function benchmarkExitCode(event) {
   if (event?.type === 'complete') return event.summary?.qualityGate?.passed === true ? 0 : 1;
   return null;
 }
+
+export function isReferenceTreeReady(rows, seedFiles, outstandingExpansions) {
+  if (outstandingExpansions > 0) return false;
+  if (seedFiles === 0) return true;
+  let visibleReferenceFiles = 0;
+  for (const row of rows) {
+    if (row.kind === 0 && /^reference-\d{6}\.txt$/.test(row.name)) {
+      visibleReferenceFiles += 1;
+    }
+  }
+  return visibleReferenceFiles === seedFiles;
+}

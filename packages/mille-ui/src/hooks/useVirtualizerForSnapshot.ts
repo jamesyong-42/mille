@@ -43,6 +43,7 @@ export interface UseVirtualizerForSnapshotResult {
   readonly count: number;
   readonly virtualItems: readonly VirtualItem[];
   readonly totalSize: number;
+  readonly scrollOffset: number;
   scrollToIndex(index: number, opts?: { align?: 'start' | 'center' | 'end' | 'auto' }): void;
   measureElement(node: Element | null): void;
 }
@@ -80,6 +81,7 @@ export function useVirtualizerForSnapshot(
     count,
     virtualItems: virtualizer.getVirtualItems(),
     totalSize: virtualizer.getTotalSize(),
+    scrollOffset: virtualizer.scrollOffset ?? 0,
     scrollToIndex: (index, opts) => {
       virtualizer.scrollToIndex(index, opts);
     },

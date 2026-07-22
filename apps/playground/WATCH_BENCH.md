@@ -39,6 +39,12 @@ Each operation waits until its exact expected state is present in the renderer m
 
 Before measurement begins, an unmeasured create/delete pair must traverse the complete pipeline successfully. This warms the OS watcher and proves the roots-only expansion has settled, preventing cold-start setup from contaminating the first latency sample.
 
+For seeded runs, the worker does not start on a fixed timer: every deterministic
+reference file must be visible, all discovered expansion requests must be
+settled, and two renderer frames must pass first. Fatal startup or operation
+errors still write a complete report with the active stage, operation, partial
+observations, plan, environment, and build identity.
+
 ## Options
 
 Pass options after `--`:
@@ -74,7 +80,9 @@ Close the playground or press Ctrl+C in the launching terminal to stop. The benc
 - **Missed** means the exact expected state failed to converge before `--timeout`; it is never silently counted as a slow success.
 
 With `--exit`, correctness and smoothness budgets are process gates: a miss or
-threshold violation exits non-zero. Reports include the complete observations,
+threshold violation exits non-zero. The launcher watches the flushed report and
+terminates both Electron and its development-server wrapper, so successful and
+failed automated runs cannot leave CI hanging. Reports include the complete observations,
 budgets, violations, reference-tree size, serialized operation plan and hash,
 runtime environment, and exact native and UI build identity.
 

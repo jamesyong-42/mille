@@ -264,3 +264,21 @@ export function parseBuildIdentity(value) {
     return null;
   }
 }
+
+export function createFatalBenchmarkReport(base, fatal, failed, observations) {
+  return {
+    ...base,
+    status: 'fatal',
+    fatal,
+    failed: [...failed],
+    observations: [...observations],
+  };
+}
+
+export function benchmarkReportExitCode(report) {
+  if (report?.status === 'fatal') return 1;
+  if (report?.status === 'complete') {
+    return report.summary?.qualityGate?.passed === true ? 0 : 1;
+  }
+  return null;
+}

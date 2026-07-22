@@ -272,3 +272,91 @@ test('scrolling the tree shifts the rendered virtual items', async () => {
   await act(async () => { root.unmount(); });
   container.remove();
 });
+
+test('structural inserts and anchor deletion preserve viewport pixel positions', async () => {
+  const fx = createFakeEngine();
+  const rows = buildRows(1_000, { rootCount: 1 });
+  fx.emitDelta(createFakeSnapshot({ rows, treeVersion: 1 }));
+
+  const { container, root } = mount();
+  const obs = makeObservers({ height: 400 });
+  await act(async () => {
+    root.render(
+      createElement(FileTree, {
+        fx,
+        ariaLabel: 'Anchored',
+        rowHeight: 20,
+        overscan: 5,
+        __testObserveElementRect: obs.observeElementRect,
+        __testObserveElementOffset: obs.observeElementOffset,
+      }),
+    );
+  });
+
+  const tree = container.querySelector('[role="tree"]');
+  assert.ok(tree);
+  const scrollCalls = [];
+  tree.scrollTo = ({ top }) => {
+    scrollCalls.push(top);
+    tree.scrollTop = top;
+    queueMicrotask(() => obs.setOffset(top));
+  };
+
+  await act(async () => {
+    tree.scrollTop = 2_000;
+    obs.setOffset(2_000);
+  });
+  const anchoredId = rows[100].id;
+
+  const inserted = Array.from({ length: 10 }, (_, index) =>
+    makeRow({
+      id: 10_000 + index,
+      parentId: 1,
+      name: `inserted-${index}`,
+      depth: 1,
+      kind: 0,
+      hasChildren: false,
+      isExpanded: false,
+    }),
+  );
+  await act(async () => {
+    fx.emitDelta(createFakeSnapshot({ rows: [...inserted, ...rows], treeVersion: 2 }));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  });
+
+  assert.equal(
+    scrollCalls.at(-1),
+    2_200,
+    `ten inserted rows require a 200 px correction; calls=${JSON.stringify(scrollCalls)}`,
+  );
+  const anchoredRow = container.querySelector(`[data-mille-row-id="${anchoredId}"]`);
+  assert.ok(anchoredRow, 'the same anchored row remains mounted');
+  assert.equal(anchoredRow.style.transform, 'translateY(2200px)');
+  assert.equal(
+    tree.getAttribute('data-mille-layout-animating'),
+    null,
+    'scroll correction must not compete with transform animation',
+  );
+
+  const successorId = rows[101].id;
+  await act(async () => {
+    fx.emitDelta(
+      createFakeSnapshot({
+        rows: [...inserted, ...rows.filter((row) => row.id !== anchoredId)],
+        treeVersion: 3,
+      }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  });
+  assert.equal(
+    scrollCalls.at(-1),
+    2_180,
+    'deleting the anchor preserves its next sibling at the prior 20 px offset',
+  );
+  const successorRow = container.querySelector(`[data-mille-row-id="${successorId}"]`);
+  assert.ok(successorRow, 'the next surviving row becomes the viewport anchor');
+  assert.equal(Number.parseFloat(successorRow.style.transform.slice(11)) - tree.scrollTop, 20);
+
+  await act(async () => { root.unmount(); });
+  container.remove();
+});

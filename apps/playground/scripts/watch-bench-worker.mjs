@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 
 import {
   buildOperationPlan,
+  createFatalBenchmarkReport,
   executeOperation,
   parseBuildIdentity,
   summarizeLatencies,
@@ -24,6 +25,39 @@ const budgets = {
 
 if (!root || !reportPath) {
   throw new Error('watch benchmark worker requires root and report paths');
+}
+
+const plan = buildOperationPlan(operations);
+const planHash = createHash('sha256').update(JSON.stringify(plan)).digest('hex');
+const completed = [];
+const failed = [];
+let activeStage = 'startup';
+let activeOperation = null;
+
+function environment() {
+  return {
+    node: process.version,
+    electron: process.versions.electron ?? null,
+    chrome: process.versions.chrome ?? null,
+    platform: process.platform,
+    arch: process.arch,
+  };
+}
+
+function reportBase() {
+  return {
+    generatedAt: new Date().toISOString(),
+    buildIdentity: parseBuildIdentity(process.env.MILLE_BUILD_IDENTITY_JSON),
+    environment: environment(),
+    root,
+    requestedOperations: operations,
+    reference: { seedFiles },
+    pauseMs,
+    timeoutMs,
+    budgets,
+    planHash,
+    plan,
+  };
 }
 
 const observations = new Map();
@@ -68,11 +102,6 @@ function sleep(ms) {
 }
 
 async function run() {
-  const plan = buildOperationPlan(operations);
-  const planHash = createHash('sha256').update(JSON.stringify(plan)).digest('hex');
-  const completed = [];
-  const failed = [];
-
   // Prove the watcher → host → renderer path is live before starting the
   // clock. FSEvents and the roots-only expansion can both have cold-start
   // latency that should not turn the first measured mutation into a miss.
@@ -96,11 +125,14 @@ async function run() {
     },
   ];
   for (const operation of warmups) {
+    activeOperation = operation;
+    activeStage = 'warmup-execute';
     await executeOperation(root, operation);
     const completedAt = performance.timeOrigin + performance.now();
     const observationPromise = waitForObservation(operation.id);
     post({ type: 'issued', operation, completedAt, warmup: true });
     try {
+      activeStage = 'warmup-observe';
       await observationPromise;
     } catch (error) {
       post({ type: 'timeout', operation, timeoutMs, warmup: true });
@@ -111,11 +143,14 @@ async function run() {
   const startedAt = performance.timeOrigin + performance.now();
 
   for (const operation of plan) {
+    activeOperation = operation;
+    activeStage = 'operation-execute';
     await executeOperation(root, operation);
     const completedAt = performance.timeOrigin + performance.now();
     const observationPromise = waitForObservation(operation.id);
     post({ type: 'issued', operation, completedAt });
     try {
+      activeStage = 'operation-observe';
       completed.push(await observationPromise);
     } catch (error) {
       failed.push({ id: operation.id, kind: operation.kind, message: String(error) });
@@ -143,27 +178,14 @@ async function run() {
     qualityGate: evaluateRenderQuality(summaryWithoutGate, budgets),
   };
   const report = {
-    generatedAt: new Date().toISOString(),
-    buildIdentity: parseBuildIdentity(process.env.MILLE_BUILD_IDENTITY_JSON),
-    environment: {
-      node: process.version,
-      electron: process.versions.electron ?? null,
-      chrome: process.versions.chrome ?? null,
-      platform: process.platform,
-      arch: process.arch,
-    },
-    root,
-    requestedOperations: operations,
-    reference: { seedFiles },
-    pauseMs,
-    timeoutMs,
-    budgets,
-    planHash,
-    plan,
+    ...reportBase(),
+    status: 'complete',
     summary,
     failed,
     observations: completed,
   };
+  activeOperation = null;
+  activeStage = 'report-write';
   await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`);
   console.log(
     `complete: ${summary.count}/${operations} observed, ${summary.failed} missed, ` +
@@ -178,10 +200,26 @@ async function run() {
   post({ type: 'complete', summary, reportPath });
 }
 
-run().catch((error) => {
-  post({
-    type: 'fatal',
-    message: error instanceof Error ? (error.stack ?? error.message) : String(error),
-  });
+run().catch(async (error) => {
+  const message = error instanceof Error ? (error.stack ?? error.message) : String(error);
+  const fatal = {
+    stage: activeStage,
+    operation: activeOperation,
+    message,
+  };
+  try {
+    await writeFile(
+      reportPath,
+      `${JSON.stringify(
+        createFatalBenchmarkReport(reportBase(), fatal, failed, completed),
+        null,
+        2,
+      )}\n`,
+    );
+  } catch (reportError) {
+    console.error(`failed to persist fatal report: ${String(reportError)}`);
+  }
+  console.error(`fatal during ${activeStage}: ${message}`);
+  post({ type: 'fatal', message, reportPath });
   process.exitCode = 1;
 });

@@ -20,6 +20,7 @@ import {
   useDeferredValue,
   useEffect,
   useImperativeHandle,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -36,6 +37,10 @@ import { useFileTreeContext } from '../hooks/useFileTreeContext.js';
 import { useExpandedSet } from '../hooks/useExpandedSet.js';
 import { useSetExpandedBridge } from '../hooks/useSetExpandedBridge.js';
 import { useVirtualizerForSnapshot } from '../hooks/useVirtualizerForSnapshot.js';
+import {
+  captureViewportAnchor,
+  resolveViewportAnchor,
+} from '../hooks/viewportAnchor.js';
 import { useFileTreeSelection } from '../hooks/useFileTreeSelection.js';
 import {
   useFileTreeKeyboard,
@@ -265,18 +270,68 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
   // Virtualizer keys come from the projection above. Older code asked the
   // snapshot for a one-row slice per virtual item, multiplying traversal and
   // child sorting work during every commit.
-  const { virtualItems, totalSize, scrollToIndex } = useVirtualizerForSnapshot({
+  const { virtualItems, totalSize, scrollOffset, scrollToIndex } =
+    useVirtualizerForSnapshot({
+      visibleRows,
+      rowHeight,
+      overscan,
+      scrollerRef,
+      ...(__testObserveElementRect
+        ? { observeElementRect: __testObserveElementRect }
+        : null),
+      ...(__testObserveElementOffset
+        ? { observeElementOffset: __testObserveElementOffset }
+        : null),
+    });
+  const viewportScrollOffset = scrollerRef.current?.scrollTop ?? scrollOffset;
+
+  const previousProjectionRef = useRef({
+    treeVersion: snapshot.treeVersion,
+    rows: visibleRows,
+    rowHeight,
+    scrollOffset: viewportScrollOffset,
+  });
+  const viewportAnchorResolution = useMemo(() => {
+    const previous = previousProjectionRef.current;
+    if (previous.treeVersion === snapshot.treeVersion || previous.rowHeight !== rowHeight) {
+      return null;
+    }
+    const anchor = captureViewportAnchor(previous.rows, previous.scrollOffset, rowHeight);
+    return anchor
+      ? resolveViewportAnchor(anchor, previous.rows, visibleRows, rowHeight)
+      : null;
+  }, [snapshot.treeVersion, visibleRows, rowHeight, viewportScrollOffset]);
+  const viewportAnchorAdjustment =
+    viewportAnchorResolution &&
+    Math.abs(viewportAnchorResolution.scrollOffsetPx - viewportScrollOffset) > 0.5
+      ? viewportAnchorResolution
+      : null;
+  const anchoredTreeVersionRef = useRef<number | null>(null);
+
+  useLayoutEffect(() => {
+    // Publish the new projection before scrolling. Browser scroll observers may
+    // notify synchronously; a nested render must not try to re-anchor the same
+    // treeVersion against the previous projection a second time.
+    previousProjectionRef.current = {
+      treeVersion: snapshot.treeVersion,
+      rows: visibleRows,
+      rowHeight,
+      scrollOffset: viewportAnchorAdjustment?.scrollOffsetPx ?? viewportScrollOffset,
+    };
+    if (viewportAnchorAdjustment) {
+      anchoredTreeVersionRef.current = snapshot.treeVersion;
+      const scroller = scrollerRef.current;
+      if (scroller) {
+        scroller.scrollTo({ top: viewportAnchorAdjustment.scrollOffsetPx });
+      }
+    }
+  }, [
+    snapshot.treeVersion,
     visibleRows,
     rowHeight,
-    overscan,
-    scrollerRef,
-    ...(__testObserveElementRect
-      ? { observeElementRect: __testObserveElementRect }
-      : null),
-    ...(__testObserveElementOffset
-      ? { observeElementOffset: __testObserveElementOffset }
-      : null),
-  });
+    viewportScrollOffset,
+    viewportAnchorAdjustment,
+  ]);
 
   const previousTreeVersionRef = useRef(snapshot.treeVersion);
   const previousVisibleIdsRef = useRef<ReadonlySet<EntryId>>(
@@ -297,7 +352,13 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
     }
     return ids;
   }, [treeVersionChanged, visibleRows]);
-  const layoutAnimationActive = treeVersionChanged || layoutAnimation.active;
+  // A scroll correction and a transform transition would move in opposite
+  // coordinate systems for one frame. Keep the anchored commit visually
+  // stationary; newly inserted rows may animate on later, unanchored commits.
+  const layoutAnimationActive =
+    viewportAnchorAdjustment === null &&
+    anchoredTreeVersionRef.current !== snapshot.treeVersion &&
+    (treeVersionChanged || layoutAnimation.active);
   const enteringIds = treeVersionChanged
     ? newlyEnteringIds
     : layoutAnimation.enteringIds;

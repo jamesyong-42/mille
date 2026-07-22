@@ -1,6 +1,6 @@
 # IDE Explorer Parity Implementation Plan
 
-**Status:** active — Phase 0 complete, Phase 1 in progress
+**Status:** active — Phase 0 complete, Phases 1–2 in progress
 **Created:** 2026-07-21  
 **Baseline assessment:**
 [IDE_EXPLORER_PARITY_ASSESSMENT.md](./IDE_EXPLORER_PARITY_ASSESSMENT.md)
@@ -161,6 +161,15 @@ Implemented in this slice:
 - non-zero automated exits for convergence misses or explicit paint, React,
   and frame-budget violations, with retained CI reports.
 
+Runner hardening result (2026-07-21): seeded runs now wait for the complete
+reference projection and settled expansion discovery across two frames rather
+than a fixed 750 ms delay. Fatal paths preserve stage/operation diagnostics in
+the report. The launcher derives its exit status from that flushed report and
+terminates the Electron development-server wrapper, eliminating successful CI
+hangs. A two-cycle verification completed 24/24 operations with zero misses
+(paint p95 130.2 ms, React-duration p95 18.2 ms), and a deliberate frame-budget
+violation wrote its report and exited 1 automatically.
+
 ### Work
 
 #### 1.1 Make workloads reproducible
@@ -233,6 +242,15 @@ immediate without making the entire tree appear to move.
 - Restore its visual offset after insertions or removals above the viewport.
 - Define behavior when the anchor is deleted or moved into a collapsed subtree.
 - Test sticky roots and multiple workspace roots.
+
+First implementation result (2026-07-21): fixed-height trees now preserve the
+top visible row and its sub-row pixel offset across structural tree versions.
+If that row is deleted, the next surviving row retains its former pixel
+position, falling back backward only when necessary. The 500,000-row invariant
+bench inserts 1,000 rows above the viewport: the uncorrected geometric drift is
+22,000 px and measured corrected drift is 0.00 px, under a CI-enforced 0.5 px
+limit. Transform animation is suppressed for the corrective tree version so it
+cannot fight the scroll adjustment.
 
 #### 2.3 Budget animation
 

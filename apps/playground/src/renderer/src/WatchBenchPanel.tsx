@@ -11,6 +11,7 @@ import type {
 import {
   createRenderObservation,
   isCommitEligible,
+  isReferenceTreeReady,
   latestTreeCommit,
   subscribeTreeCommits,
   type RenderObservation,
@@ -78,6 +79,7 @@ export function WatchBenchPanel({
   const awaitingCommitRef = useRef(new Map<number, AwaitingCommit>());
   const reportingRef = useRef(new Set<number>());
   const readySentRef = useRef(false);
+  const readyScheduledRef = useRef(false);
   const aliveRef = useRef(true);
 
   useEffect(() => {
@@ -112,13 +114,7 @@ export function WatchBenchPanel({
 
     const onTreeCommit = (commit: TreeCommitMetric): void => {
       for (const [id, awaiting] of awaitingCommitRef.current) {
-        if (
-          isCommitEligible(
-            commit,
-            awaiting.pending.completedAt,
-            awaiting.mirrorTreeVersion,
-          )
-        ) {
+        if (isCommitEligible(commit, awaiting.pending.completedAt, awaiting.mirrorTreeVersion)) {
           observeAfterCommit(id, awaiting, commit);
         }
       }
@@ -144,23 +140,32 @@ export function WatchBenchPanel({
         for (const id of directoriesToExpand) expandedRef.current.add(id);
         queueMicrotask(() => treeRef.current?.expand(directoriesToExpand));
       }
-      return { snapshot, rows };
+      return { snapshot, rows, outstandingExpansions: directoriesToExpand.length };
     };
 
     const evaluate = (): void => {
       if (!aliveRef.current || configRef.current === null) return;
-      const { snapshot, rows } = expandAndRead();
+      const { snapshot, rows, outstandingExpansions } = expandAndRead();
       const byName = new Map(rows.filter((row) => !row.pending).map((row) => [row.name, row]));
 
-      if (!readySentRef.current && snapshot.roots().length > 0) {
-        // Empty folders do not produce a child-set delta, so their local
-        // pending-expansion marker may remain set. The expansion request was
-        // queued by expandAndRead; give it one IPC turn before starting the
-        // external operator instead of waiting on a child that cannot arrive.
-        readySentRef.current = true;
-        setTimeout(() => {
-          if (aliveRef.current) window.millePlayground.watchBenchReady();
-        }, 750);
+      if (
+        !readySentRef.current &&
+        !readyScheduledRef.current &&
+        snapshot.roots().length > 0 &&
+        isReferenceTreeReady(rows, configRef.current.seedFiles, outstandingExpansions)
+      ) {
+        // Start only after the complete seeded projection is visible and the
+        // corresponding FileTree state has crossed two frame boundaries.
+        // A fixed delay made cold hosts intermittently start with a partial
+        // expansion, producing false misses and unrepresentative render spikes.
+        readyScheduledRef.current = true;
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            if (!aliveRef.current || readySentRef.current) return;
+            readySentRef.current = true;
+            window.millePlayground.watchBenchReady();
+          });
+        });
       }
 
       for (const [id, pending] of pendingRef.current) {

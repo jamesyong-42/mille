@@ -67,3 +67,8 @@ export function benchmarkExitCode(event: {
   readonly type?: string;
   readonly summary?: { readonly qualityGate?: { readonly passed?: boolean } };
 }): 0 | 1 | null;
+export function isReferenceTreeReady(
+  rows: readonly { readonly kind: number; readonly name: string }[],
+  seedFiles: number,
+  outstandingExpansions: number,
+): boolean;

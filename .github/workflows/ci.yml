@@ -88,6 +88,9 @@ jobs:
       - name: Test
         run: pnpm -r --if-present test
 
+      - name: FileTree structural invariant bench
+        run: pnpm bench:ui
+
       - name: Repeat live watcher regressions
         shell: bash
         run: |

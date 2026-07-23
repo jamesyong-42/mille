@@ -495,8 +495,13 @@ export class PortFileExplorer {
     return this.call('peekUndo', []);
   }
 
-  async undo(): Promise<unknown> {
-    return this.call('undo', []);
+  async lastMutation(): Promise<unknown> {
+    return this.call('lastMutation', []);
+  }
+
+  /** Undo is a mutation: serialized and flushed to all mirrors before resolve. */
+  undo(): Promise<unknown> {
+    return this.mutate('undo', {});
   }
 
   async readFile(id: number): Promise<Uint8Array> {

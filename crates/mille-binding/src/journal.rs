@@ -1,12 +1,11 @@
 //! In-memory undo journal for explorer mutations (Phase 4.4).
 //!
 //! Tracks create / rename / move / soft-delete operations so `undo()` can
-//! reverse the most recent undoable action. Permanent deletes are recorded
-//! as non-undoable descriptors for diagnostics only (they do not occupy the
-//! undo stack).
+//! reverse the most recent **undoable** action. Permanent deletes and other
+//! non-undoable mutations are recorded in `last_mutation` for reporting.
 
 use std::collections::VecDeque;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use mille_core::EntryId;
@@ -15,10 +14,19 @@ use napi_derive::napi;
 const DEFAULT_CAPACITY: usize = 64;
 
 #[derive(Clone, Debug)]
+pub(crate) struct CreateIdentity {
+    pub entry_id: EntryId,
+    pub path: PathBuf,
+    pub size: u64,
+    pub mtime_ms: i64,
+    pub ctime_ms: i64,
+    pub kind: u8, // 0 file, 1 dir
+}
+
+#[derive(Clone, Debug)]
 pub(crate) enum JournalKind {
     Create {
-        entry_id: EntryId,
-        path: PathBuf,
+        identity: CreateIdentity,
     },
     Rename {
         entry_id: EntryId,
@@ -30,7 +38,7 @@ pub(crate) enum JournalKind {
         old_path: PathBuf,
         new_path: PathBuf,
     },
-    /// Soft-delete into workspace `.mille-trash` — fully restorable.
+    /// Soft-delete into managed recycle directory outside the workspace.
     SoftDelete {
         original_path: PathBuf,
         recycle_path: PathBuf,
@@ -38,6 +46,9 @@ pub(crate) enum JournalKind {
         name: String,
         was_dir: bool,
         recursive: bool,
+        size: u64,
+        mtime_ms: i64,
+        ctime_ms: i64,
     },
 }
 
@@ -49,6 +60,7 @@ pub(crate) struct JournalEntry {
     pub timestamp_ms: u64,
 }
 
+#[derive(Clone)]
 #[napi(object)]
 pub struct UndoDescriptorJs {
     pub id: i64,
@@ -71,16 +83,22 @@ pub struct UndoResultJs {
 
 pub(crate) struct OperationJournal {
     stack: VecDeque<JournalEntry>,
+    /// Most recent mutation (undoable or not) for reporting.
+    last_mutation: Option<UndoDescriptorJs>,
     next_id: u64,
     capacity: usize,
+    /// Soft-delete recycle roots still owned by journaled entries.
+    recycle_paths: VecDeque<PathBuf>,
 }
 
 impl OperationJournal {
     pub fn new() -> Self {
         Self {
             stack: VecDeque::new(),
+            last_mutation: None,
             next_id: 1,
             capacity: DEFAULT_CAPACITY,
+            recycle_paths: VecDeque::new(),
         }
     }
 
@@ -97,29 +115,57 @@ impl OperationJournal {
             .unwrap_or(0)
     }
 
-    fn push(&mut self, kind: JournalKind, label: String) -> u64 {
+    fn push_undoable(&mut self, kind: JournalKind, label: String) -> u64 {
         let id = self.next_id();
-        self.stack.push_back(JournalEntry {
+        let entry = JournalEntry {
             id,
-            kind,
-            label,
+            kind: kind.clone(),
+            label: label.clone(),
             timestamp_ms: Self::now_ms(),
-        });
+        };
+        if let JournalKind::SoftDelete { recycle_path, .. } = &kind {
+            self.recycle_paths.push_back(recycle_path.clone());
+        }
+        let desc = entry.descriptor();
+        self.last_mutation = Some(desc);
+        self.stack.push_back(entry);
         while self.stack.len() > self.capacity {
-            self.stack.pop_front();
+            if let Some(evicted) = self.stack.pop_front() {
+                Self::cleanup_evicted(&evicted);
+            }
         }
         id
     }
 
-    pub fn push_create(&mut self, entry_id: EntryId, path: PathBuf) -> u64 {
-        let name = path
+    fn cleanup_evicted(entry: &JournalEntry) {
+        if let JournalKind::SoftDelete { recycle_path, .. } = &entry.kind {
+            // Best-effort: remove the recycled payload when journal capacity drops it.
+            let _ = std::fs::remove_dir_all(recycle_path);
+            if let Some(parent) = recycle_path.parent() {
+                let _ = std::fs::remove_dir(parent);
+            }
+        }
+    }
+
+    pub fn record_non_undoable(&mut self, kind: &str, label: String, reason: &str) {
+        let id = self.next_id();
+        self.last_mutation = Some(UndoDescriptorJs {
+            id: id as i64,
+            kind: kind.into(),
+            label,
+            undoable: false,
+            reason: Some(reason.to_string()),
+            timestamp_ms: Self::now_ms() as i64,
+        });
+    }
+
+    pub fn push_create(&mut self, identity: CreateIdentity) -> u64 {
+        let name = identity
+            .path
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| path.to_string_lossy().into_owned());
-        self.push(
-            JournalKind::Create { entry_id, path },
-            format!("Create {name}"),
-        )
+            .unwrap_or_else(|| identity.path.to_string_lossy().into_owned());
+        self.push_undoable(JournalKind::Create { identity }, format!("Create {name}"))
     }
 
     pub fn push_rename(&mut self, entry_id: EntryId, old_path: PathBuf, new_path: PathBuf) -> u64 {
@@ -131,7 +177,7 @@ impl OperationJournal {
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
-        self.push(
+        self.push_undoable(
             JournalKind::Rename {
                 entry_id,
                 old_path,
@@ -146,7 +192,7 @@ impl OperationJournal {
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
-        self.push(
+        self.push_undoable(
             JournalKind::Move {
                 entry_id,
                 old_path,
@@ -164,9 +210,12 @@ impl OperationJournal {
         name: String,
         was_dir: bool,
         recursive: bool,
+        size: u64,
+        mtime_ms: i64,
+        ctime_ms: i64,
     ) -> u64 {
         let label = format!("Delete {name}");
-        self.push(
+        self.push_undoable(
             JournalKind::SoftDelete {
                 original_path,
                 recycle_path,
@@ -174,6 +223,9 @@ impl OperationJournal {
                 name,
                 was_dir,
                 recursive,
+                size,
+                mtime_ms,
+                ctime_ms,
             },
             label,
         )
@@ -187,12 +239,17 @@ impl OperationJournal {
         self.stack.back()
     }
 
+    /// Peek without removing — for apply-then-pop undo.
+    pub fn peek_owned(&self) -> Option<JournalEntry> {
+        self.stack.back().cloned()
+    }
+
     pub fn pop(&mut self) -> Option<JournalEntry> {
         self.stack.pop_back()
     }
 
-    pub fn clear(&mut self) {
-        self.stack.clear();
+    pub fn last_mutation(&self) -> Option<UndoDescriptorJs> {
+        self.last_mutation.clone()
     }
 }
 
@@ -215,5 +272,33 @@ impl JournalEntry {
     }
 }
 
-/// Workspace-relative soft-trash root directory name.
-pub(crate) const MILLE_TRASH_DIR: &str = ".mille-trash";
+/// Deterministic recycle root outside any workspace: `$TMPDIR/mille-recycle/<hash>/`.
+pub(crate) fn managed_recycle_base(workspace_root: &Path) -> PathBuf {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut hasher = DefaultHasher::new();
+    workspace_root.hash(&mut hasher);
+    let hash = hasher.finish();
+    std::env::temp_dir()
+        .join("mille-recycle")
+        .join(format!("{hash:016x}"))
+}
+
+/// Ensure `path` is under `base` after canonicalizing both when possible.
+pub(crate) fn path_is_under(path: &Path, base: &Path) -> bool {
+    if path == base || path.starts_with(base) {
+        return true;
+    }
+    match (std::fs::canonicalize(path), std::fs::canonicalize(base)) {
+        (Ok(p), Ok(b)) => p == b || p.starts_with(b),
+        (Err(_), Ok(b)) => path
+            .parent()
+            .and_then(|parent| std::fs::canonicalize(parent).ok())
+            .map(|parent| {
+                let candidate = parent.join(path.file_name().unwrap_or_default());
+                candidate == b || candidate.starts_with(&b)
+            })
+            .unwrap_or(false),
+        _ => false,
+    }
+}

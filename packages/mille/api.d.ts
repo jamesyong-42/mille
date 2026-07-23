@@ -671,6 +671,11 @@ export declare class FileExplorer implements Disposable {
   canUndo(): boolean;
   /** Describe the next undoable operation without applying it. */
   peekUndo(): UndoDescriptor | null;
+  /**
+   * Most recent mutation, including non-undoable permanent deletes /
+   * overwrite-moves (`undoable: false` with `reason`).
+   */
+  lastMutation(): UndoDescriptor | null;
   /** Reverse the most recent undoable create / rename / move / soft-delete. */
   undo(): Promise<UndoResult>;
   copy(

@@ -1116,9 +1116,15 @@ First recovery/undo result (2026-07-23): `delete` defaults to soft-trash into
 workspace `.mille-trash/<stamp>/` (undoable restore). `{ trash: false }` is a
 permanent delete and is not journaled. An in-memory operation journal records
 create, rename, move, and soft-delete with `canUndo()`, `peekUndo()`, and
-`undo()`. The `Trash` capability bit is advertised. Four integration tests
-cover soft-delete restore, permanent non-undo, LIFO create/rename/move undo,
-and capability advertising.
+`undo()`. The `Trash` capability bit is advertised.
+
+Phase 4.4 hardening (2026-07-23): create/rename refuse collisions without
+clobbering; undo-create verifies store identity + size fingerprint; overwrite
+moves and permanent deletes are explicitly non-undoable via `lastMutation()`;
+soft-trash lives outside the workspace under `$TMPDIR/mille-recycle/`; failed
+undo does not pop the journal; merge-move cancel reconciles both trees; port
+`undo` is a mutation (queued + flushed). Regression suite in
+`undo-journal.test.mjs`.
 
 ### Exit criteria
 

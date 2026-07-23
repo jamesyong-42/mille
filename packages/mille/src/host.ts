@@ -1120,6 +1120,8 @@ class FileExplorerHostImpl implements FileExplorerHost {
           args.options as TransferOptions | undefined,
         );
       }
+      case 'undo':
+        return this.explorer.undo();
       case 'readFile': {
         const buf = await this.explorer.readFile(args.id as EntryId);
         // Convert Uint8Array to a plain array so structured clone ships
@@ -1223,8 +1225,8 @@ class FileExplorerHostImpl implements FileExplorerHost {
         return this.explorer.canUndo();
       case 'peekUndo':
         return this.explorer.peekUndo();
-      case 'undo':
-        return this.explorer.undo();
+      case 'lastMutation':
+        return this.explorer.lastMutation();
       case 'resync': {
         const [id, recursive] = args;
         if (

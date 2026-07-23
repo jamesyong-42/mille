@@ -116,6 +116,22 @@ function normalizeUndoKind(value: unknown): UndoKind | null {
   return null;
 }
 
+function normalizeUndoDescriptor(raw: unknown): UndoDescriptor | null {
+  if (raw === null || raw === undefined || typeof raw !== 'object') return null;
+  const obj = raw as Record<string, unknown>;
+  const kind = normalizeUndoKind(obj.kind);
+  if (kind === null) return null;
+  const reason = obj.reason;
+  return {
+    id: Number(obj.id),
+    kind,
+    label: String(obj.label ?? ''),
+    undoable: Boolean(obj.undoable),
+    ...(typeof reason === 'string' && reason.length > 0 ? { reason } : null),
+    timestampMs: Number(obj.timestampMs ?? obj.timestamp_ms ?? 0),
+  };
+}
+
 export type DestinationProbeStatus = 'free' | 'exists' | 'case_conflict';
 
 export interface DestinationProbe {
@@ -281,6 +297,14 @@ type NativeFx = {
   delete(id: number, options?: { trash?: boolean; recursive?: boolean }): Promise<void>;
   canUndo(): boolean;
   peekUndo(): {
+    id: number;
+    kind: string;
+    label: string;
+    undoable: boolean;
+    reason?: string;
+    timestampMs: number;
+  } | null;
+  lastMutation(): {
     id: number;
     kind: string;
     label: string;
@@ -975,19 +999,12 @@ export class FileExplorer {
 
   peekUndo(): UndoDescriptor | null {
     if (typeof this.nativeFx.peekUndo !== 'function') return null;
-    const raw = this.nativeFx.peekUndo() as Record<string, unknown> | null;
-    if (raw === null || raw === undefined || typeof raw !== 'object') return null;
-    const kind = normalizeUndoKind(raw.kind);
-    if (kind === null) return null;
-    const reason = raw.reason;
-    return {
-      id: Number(raw.id),
-      kind,
-      label: String(raw.label ?? ''),
-      undoable: Boolean(raw.undoable),
-      ...(typeof reason === 'string' && reason.length > 0 ? { reason } : null),
-      timestampMs: Number(raw.timestampMs ?? raw.timestamp_ms ?? 0),
-    };
+    return normalizeUndoDescriptor(this.nativeFx.peekUndo());
+  }
+
+  lastMutation(): UndoDescriptor | null {
+    if (typeof this.nativeFx.lastMutation !== 'function') return null;
+    return normalizeUndoDescriptor(this.nativeFx.lastMutation());
   }
 
   async undo(): Promise<UndoResult> {

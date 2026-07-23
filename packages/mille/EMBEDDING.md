@@ -1099,28 +1099,32 @@ cancelled overwrite restores/keeps the original destination. Hosts using
 
 ### Trash and undo
 
-`delete(id)` defaults to **`trash: true`**: the entry is soft-deleted into
-`<workspaceRoot>/.mille-trash/<stamp>/` so it can be restored. Pass
-`{ trash: false }` for a permanent delete (not undoable).
+`delete(id)` defaults to **`trash: true`**: the entry is soft-deleted into a
+**managed recycle directory outside the workspace**
+(`$TMPDIR/mille-recycle/<workspace-hash>/…`) so restore cannot be hijacked by
+in-tree symlinks and never pollutes the file tree. Pass `{ trash: false }` for
+a permanent delete.
 
 ```ts
-await fx.delete(fileId); // soft-delete (default)
+await fx.delete(fileId); // soft-delete (default, undoable)
 await fx.delete(fileId, { trash: false }); // permanent
 
-fx.canUndo(); // boolean
-fx.peekUndo(); // { id, kind, label, undoable, timestampMs } | null
+fx.canUndo(); // boolean — undoable stack only
+fx.peekUndo(); // next undoable op, or null
+fx.lastMutation(); // most recent op, including non-undoable with reason
 await fx.undo(); // reverse create / rename / move / soft-delete
 ```
 
 | Operation | Undo behavior |
 | --- | --- |
-| `create` | Permanently removes the created path |
-| `rename` / `move` | Renames/moves back when both paths are still valid |
-| soft `delete` (`trash: true`) | Restores from `.mille-trash` |
-| permanent `delete` | Not journaled; `canUndo` unchanged |
+| `create` | Removes the path only if store identity + size still match |
+| `rename` / same-root `move` | Moves back when identity and free destination allow |
+| overwrite `move` | **Not undoable** — reported via `lastMutation().reason` |
+| soft `delete` | Restores from managed recycle |
+| permanent `delete` | **Not undoable** — `lastMutation()` explains why |
 
-The explorer advertises the `Trash` capability bit. Soft-trash folders are
-hidden by normal hidden-file rules (leading `.`).
+`create` / `rename` refuse to clobber existing destinations (`EEXIST`). Failed
+`undo` leaves the journal entry so the user can fix conflicts and retry.
 Same-volume directory moves preserve the complete known subtree identity;
 cross-device moves return `EUNSUPPORTED` without partial store mutation until
 the Phase 4 copy/delete fallback lands. Progress, cancellation, and undo

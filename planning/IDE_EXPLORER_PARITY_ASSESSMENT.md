@@ -38,7 +38,7 @@ mature IDE explorer is the 10/10 reference point.
 | Accessibility                        |   6.0 | Good ARIA tree semantics and keyboard tests; no real assistive-technology matrix                                                                                                                                          |
 | Reliability and recovery             |   5.5 | Deterministic soak gates converge, but repeated Electron watcher stalls and direct native startup misses remain unresolved; crash/platform stress also remains                                                            |
 | Performance confidence               |   7.8 | Million-sibling structure, binary-wire, bounded-hydration, windowed 500,000-row UI, Criterion, and Electron gates cover payload, paint, projection, navigation, and retention                                             |
-| Explorer workflow breadth            |   4.9 | Versioned settings, native sort/visibility/exclusion/compaction/nesting, durable navigation, active-file following, typed opens, path/OS actions, refresh/collapse, and scoped-search handoff exist; broader workflows remain shallow |
+| Explorer workflow breadth            |   5.3 | Versioned settings, navigation, active-file following, path/OS actions, refresh/collapse, scoped-search handoff, real external import, and expanded collision policy exist; progress/undo and broader IDE workflows remain shallow |
 
 As a reusable tree widget, Mille is approximately **6.5-7/10**. As a complete
 IDE explorer experience, it is approximately **5/10**.
@@ -382,9 +382,10 @@ end-user behavior:
   are not integrated explorer experiences;
 - the command registry is extensible, but the built-in context menu is much
   smaller than a mature IDE's;
-- drag-in imports absolute paths through `copyFromPath` with real content and
-  per-item error reporting; collision prompting, progress, cancellation, and
-  undo remain Phase 4 follow-ups.
+- drag-in imports absolute paths through `copyFromPath` with real content,
+  per-item error reporting, and engine collision policies
+  (error/rename/overwrite/skip/merge) plus DnD `onCollision` apply-to-all;
+  progress, cancellation, and undo remain Phase 4 follow-ups.
 
 ### 4. Explorer settings and state persistence are incomplete
 

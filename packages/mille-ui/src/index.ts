@@ -155,6 +155,9 @@ export {
 } from './components/index.js';
 export type {
   AriaRowProps,
+  CollisionPolicy,
+  CollisionPromptRequest,
+  CollisionPromptResult,
   DragDropOptions,
   DisclosureChevronProps,
   FileTreeEngine,

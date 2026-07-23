@@ -1045,8 +1045,8 @@ missing sources, and port fan-out; the UI DnD and fake-engine suites assert the
 new path. `pnpm bench:copy-from-path` gates single-file and 256-file directory
 import latency. On release macOS arm64 the gate measured file import at 0.544
 ms median / 0.704 ms p95 and a 256-file directory at 70.312 / 85.483 ms against
-50/200 ms ceilings. Remaining Phase 4 work is collision prompting (4.2),
-progress/cancellation (4.3), and trash/undo recovery (4.4).
+50/200 ms ceilings. Phase 4.2 collision policy is complete; remaining Phase 4
+work is progress/cancellation (4.3) and trash/undo recovery (4.4).
 
 #### 4.2 Add collision policy
 

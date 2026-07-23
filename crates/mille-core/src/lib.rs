@@ -77,6 +77,9 @@ pub use search::{search, SearchHit, SearchOptions, SearchScore};
 pub mod compact;
 pub use compact::{compact_chain_for, is_compacted_intermediate};
 
+pub mod file_nesting;
+pub use file_nesting::{FileNestingPolicy, FileNestingRule};
+
 // TODO: Phase 1 — FxError + ErrorCode mapping
 pub mod error;
 pub use error::{ErrorCode, FxError};

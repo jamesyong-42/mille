@@ -10,12 +10,14 @@
 // ancestor-walks in EntryStore insert/remove. A full Zed-style SumTree port
 // is deferred to Phase 12 behind the same public query API.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
+use parking_lot::Mutex;
 use smallvec::SmallVec;
 
 use crate::entry::{Entry, EntryId, EntryKind};
+use crate::file_nesting::FileNestingPolicy;
 
 /// Max ancestor hops in any summary update — defends against malformed
 /// parent_id cycles (self-reference, etc.). Real trees are ~10-15 deep.
@@ -48,7 +50,6 @@ fn is_os_or_vcs_noise(name: &str) -> bool {
     matches!(name, ".DS_Store" | "Thumbs.db" | "desktop.ini" | ".git")
 }
 
-#[derive(Clone)]
 pub struct StoreSnapshot {
     pub(crate) entries: BTreeMap<EntryId, Arc<Entry>>,
     pub(crate) children: BTreeMap<EntryId, SmallVec<[EntryId; 8]>>,
@@ -62,6 +63,29 @@ pub struct StoreSnapshot {
     pub(crate) descendant_total_sizes: BTreeMap<EntryId, u64>,
     pub(crate) visibility: VisibilityPolicy,
     pub(crate) compact_folders: bool,
+    pub(crate) file_nesting: FileNestingPolicy,
+    nesting_cache: Mutex<HashMap<(EntryId, bool), Arc<NestingPlan>>>,
+}
+
+impl Clone for StoreSnapshot {
+    fn clone(&self) -> Self {
+        Self {
+            entries: self.entries.clone(),
+            children: self.children.clone(),
+            roots: self.roots.clone(),
+            tree_version: self.tree_version,
+            direct_child_counts: self.direct_child_counts.clone(),
+            descendant_visible_counts: self.descendant_visible_counts.clone(),
+            descendant_total_sizes: self.descendant_total_sizes.clone(),
+            visibility: self.visibility,
+            compact_folders: self.compact_folders,
+            file_nesting: self.file_nesting.clone(),
+            // Every published structural mutation clones the snapshot. A new
+            // snapshot must plan against its new sibling names/membership;
+            // retained older snapshots keep their own valid memoized plans.
+            nesting_cache: Mutex::new(HashMap::new()),
+        }
+    }
 }
 
 impl Default for StoreSnapshot {
@@ -76,6 +100,8 @@ impl Default for StoreSnapshot {
             descendant_total_sizes: BTreeMap::new(),
             visibility: VisibilityPolicy::default(),
             compact_folders: false,
+            file_nesting: FileNestingPolicy::default(),
+            nesting_cache: Mutex::new(HashMap::new()),
         }
     }
 }
@@ -92,10 +118,15 @@ impl StoreSnapshot {
         }
     }
 
-    pub fn empty_with_projection(visibility: VisibilityPolicy, compact_folders: bool) -> Self {
+    pub fn empty_with_projection(
+        visibility: VisibilityPolicy,
+        compact_folders: bool,
+        file_nesting: FileNestingPolicy,
+    ) -> Self {
         Self {
             visibility,
             compact_folders,
+            file_nesting,
             ..Self::default()
         }
     }
@@ -106,6 +137,10 @@ impl StoreSnapshot {
 
     pub fn compact_folders(&self) -> bool {
         self.compact_folders
+    }
+
+    pub fn file_nesting_enabled(&self) -> bool {
+        !self.file_nesting.is_empty()
     }
 
     pub(crate) fn entry_counts_visible(&self, entry: &Entry) -> bool {
@@ -137,6 +172,10 @@ impl StoreSnapshot {
     }
 
     pub fn has_children(&self, id: EntryId) -> bool {
+        if !self.file_nesting.is_empty() {
+            let mut projection = ProjectionContext::new(self, false);
+            return projection.has_children(id);
+        }
         if let Some(kids) = self.children.get(&id) {
             return kids.iter().any(|child_id| {
                 self.entries
@@ -150,19 +189,6 @@ impl StoreSnapshot {
         match self.entries.get(&id) {
             Some(e) => e.kind == EntryKind::Directory || e.symlink_target_is_dir == Some(true),
             None => false,
-        }
-    }
-
-    fn has_visible_children(&self, id: EntryId, include_ignored: bool) -> bool {
-        match self.children.get(&id) {
-            Some(kids) => kids.iter().any(|child_id| {
-                self.entries
-                    .get(child_id)
-                    .is_some_and(|entry| include_ignored || self.entry_counts_visible(entry))
-            }),
-            None => self.entries.get(&id).is_some_and(|entry| {
-                entry.kind == EntryKind::Directory || entry.symlink_target_is_dir == Some(true)
-            }),
         }
     }
 
@@ -185,6 +211,32 @@ impl StoreSnapshot {
 
         let mut leaf = id;
         let mut segments = vec![start.name.clone()];
+        // A projected child-list carries the compact chain's stable leaf id.
+        // Reconstruct leading segments when a later query starts from that
+        // leaf (rather than from the raw chain head).
+        let mut cursor = id;
+        for _ in 0..256 {
+            let Some(parent_id) = self.entries.get(&cursor).and_then(|entry| entry.parent_id)
+            else {
+                break;
+            };
+            let Some(parent) = self.entries.get(&parent_id) else {
+                break;
+            };
+            if parent.parent_id.is_none() || parent.kind != EntryKind::Directory {
+                break;
+            }
+            let mut visible = self.children_of(parent_id).iter().filter(|child_id| {
+                self.entries
+                    .get(child_id)
+                    .is_some_and(|entry| include_ignored || self.entry_counts_visible(entry))
+            });
+            if visible.next().copied() != Some(cursor) || visible.next().is_some() {
+                break;
+            }
+            segments.insert(0, parent.name.clone());
+            cursor = parent_id;
+        }
         for _ in 0..256 {
             let Some(children) = self.children.get(&leaf) else {
                 break;
@@ -209,7 +261,7 @@ impl StoreSnapshot {
             segments.push(child.name.clone());
             leaf = only_child;
         }
-        if leaf == id {
+        if leaf == id && segments.len() == 1 {
             (id, None)
         } else {
             (leaf, Some(segments))
@@ -217,16 +269,22 @@ impl StoreSnapshot {
     }
 
     pub fn projected_children_of(&self, id: EntryId, include_ignored: bool) -> Vec<EntryId> {
-        self.children_of(id)
-            .iter()
-            .filter_map(|child_id| {
-                let entry = self.entries.get(child_id)?;
-                if !include_ignored && !self.entry_counts_visible(entry) {
-                    return None;
-                }
-                Some(self.projected_entry(*child_id, include_ignored).0)
-            })
-            .collect()
+        ProjectionContext::new(self, include_ignored).children_of(id)
+    }
+
+    pub fn projected_child_count(&self, id: EntryId, include_ignored: bool) -> Option<u32> {
+        let mut projection = ProjectionContext::new(self, include_ignored);
+        let children = projection.children_of(id);
+        if !children.is_empty() {
+            return Some(children.len().min(u32::MAX as usize) as u32);
+        }
+        let entry = self.entries.get(&id)?;
+        if self.children.contains_key(&id) {
+            return Some(0);
+        }
+        (entry.kind == EntryKind::Directory || entry.symlink_target_is_dir == Some(true))
+            .then(|| self.direct_child_count(id))
+            .flatten()
     }
 
     /// Iterate over every (id, entry) pair in the snapshot. Primarily for
@@ -248,6 +306,179 @@ impl StoreSnapshot {
     /// Returns 0 for unknown ids.
     pub fn subtree_total_size(&self, id: EntryId) -> u64 {
         self.descendant_total_sizes.get(&id).copied().unwrap_or(0)
+    }
+}
+
+#[derive(Default)]
+struct NestingPlan {
+    roots: Vec<EntryId>,
+    nested: BTreeMap<EntryId, Vec<EntryId>>,
+}
+
+struct ProjectionContext<'a> {
+    snapshot: &'a StoreSnapshot,
+    include_ignored: bool,
+    nesting_plans: HashMap<EntryId, Arc<NestingPlan>>,
+}
+
+impl<'a> ProjectionContext<'a> {
+    fn new(snapshot: &'a StoreSnapshot, include_ignored: bool) -> Self {
+        Self {
+            snapshot,
+            include_ignored,
+            nesting_plans: HashMap::new(),
+        }
+    }
+
+    fn ensure_plan(&mut self, parent_id: EntryId) {
+        if self.nesting_plans.contains_key(&parent_id) {
+            return;
+        }
+        if let Some(plan) = self
+            .snapshot
+            .nesting_cache
+            .lock()
+            .get(&(parent_id, self.include_ignored))
+            .cloned()
+        {
+            self.nesting_plans.insert(parent_id, plan);
+            return;
+        }
+        let visible: Vec<EntryId> = self
+            .snapshot
+            .children_of(parent_id)
+            .iter()
+            .copied()
+            .filter(|id| {
+                self.snapshot.entries.get(id).is_some_and(|entry| {
+                    self.include_ignored || self.snapshot.entry_counts_visible(entry)
+                })
+            })
+            .collect();
+        if self.snapshot.file_nesting.is_empty() {
+            let plan = Arc::new(NestingPlan {
+                roots: visible,
+                nested: BTreeMap::new(),
+            });
+            self.snapshot
+                .nesting_cache
+                .lock()
+                .insert((parent_id, self.include_ignored), plan.clone());
+            self.nesting_plans.insert(parent_id, plan);
+            return;
+        }
+
+        let files: Vec<EntryId> = visible
+            .iter()
+            .copied()
+            .filter(|id| {
+                self.snapshot
+                    .entries
+                    .get(id)
+                    .is_some_and(|entry| entry.kind == EntryKind::File)
+            })
+            .collect();
+        let mut names: HashMap<String, Vec<EntryId>> = HashMap::with_capacity(files.len());
+        for id in &files {
+            let entry = &self.snapshot.entries[id];
+            names
+                .entry(self.snapshot.file_nesting.name_key(&entry.name))
+                .or_default()
+                .push(*id);
+        }
+
+        let mut claimed = HashSet::new();
+        let mut parents = HashSet::new();
+        let mut nested = BTreeMap::new();
+        let file_rank: HashMap<EntryId, usize> = files
+            .iter()
+            .enumerate()
+            .map(|(rank, id)| (*id, rank))
+            .collect();
+        for parent_id_candidate in files.iter().copied() {
+            if claimed.contains(&parent_id_candidate) {
+                continue;
+            }
+            let parent = &self.snapshot.entries[&parent_id_candidate];
+            let mut children = Vec::new();
+            for rule in self.snapshot.file_nesting.rules() {
+                let Some(capture) =
+                    rule.capture(&parent.name, self.snapshot.file_nesting.case_sensitive())
+                else {
+                    continue;
+                };
+                for child_name in rule.child_names(&capture) {
+                    let key = self.snapshot.file_nesting.name_key(&child_name);
+                    let Some(matches) = names.get(&key) else {
+                        continue;
+                    };
+                    for child_id in matches {
+                        if *child_id == parent_id_candidate
+                            || claimed.contains(child_id)
+                            || parents.contains(child_id)
+                        {
+                            continue;
+                        }
+                        claimed.insert(*child_id);
+                        children.push(*child_id);
+                    }
+                }
+            }
+            if !children.is_empty() {
+                children.sort_by_key(|id| file_rank.get(id).copied().unwrap_or(usize::MAX));
+                parents.insert(parent_id_candidate);
+                nested.insert(parent_id_candidate, children);
+            }
+        }
+        let roots = visible
+            .into_iter()
+            .filter(|id| !claimed.contains(id))
+            .collect();
+        let plan = Arc::new(NestingPlan { roots, nested });
+        self.snapshot
+            .nesting_cache
+            .lock()
+            .insert((parent_id, self.include_ignored), plan.clone());
+        self.nesting_plans.insert(parent_id, plan);
+    }
+
+    fn children_of(&mut self, id: EntryId) -> Vec<EntryId> {
+        let Some(entry) = self.snapshot.entries.get(&id) else {
+            return Vec::new();
+        };
+        if entry.kind == EntryKind::File {
+            let Some(parent_id) = entry.parent_id else {
+                return Vec::new();
+            };
+            self.ensure_plan(parent_id);
+            return self.nesting_plans[&parent_id]
+                .nested
+                .get(&id)
+                .cloned()
+                .unwrap_or_default();
+        }
+
+        self.ensure_plan(id);
+        self.nesting_plans[&id]
+            .roots
+            .iter()
+            .map(|child_id| {
+                self.snapshot
+                    .projected_entry(*child_id, self.include_ignored)
+                    .0
+            })
+            .collect()
+    }
+
+    fn has_children(&mut self, id: EntryId) -> bool {
+        let children = self.children_of(id);
+        if !children.is_empty() {
+            return true;
+        }
+        self.snapshot.entries.get(&id).is_some_and(|entry| {
+            !self.snapshot.children.contains_key(&id)
+                && (entry.kind == EntryKind::Directory || entry.symlink_target_is_dir == Some(true))
+        })
     }
 }
 
@@ -296,9 +527,17 @@ impl StoreSnapshot {
     ) -> VisibleRowCount {
         let mut known: u32 = 0;
         let mut pending: SmallVec<[EntryId; 8]> = SmallVec::new();
+        let mut projection = ProjectionContext::new(self, include_ignored);
 
         for &root in self.roots.iter() {
-            self.count_subtree(root, expanded, include_ignored, &mut known, &mut pending);
+            self.count_subtree(
+                root,
+                expanded,
+                include_ignored,
+                &mut known,
+                &mut pending,
+                &mut projection,
+            );
         }
 
         VisibleRowCount {
@@ -316,6 +555,7 @@ impl StoreSnapshot {
         include_ignored: bool,
         known: &mut u32,
         pending: &mut SmallVec<[EntryId; 8]>,
+        projection: &mut ProjectionContext<'_>,
     ) {
         let mut stack: Vec<EntryId> = Vec::new();
         stack.push(root);
@@ -331,21 +571,19 @@ impl StoreSnapshot {
                 // Only descend when the parent itself would render — otherwise
                 // children would appear as orphan rows with no parent above.
                 if expanded.contains(&projected_id) {
-                    match self.children.get(&projected_id) {
-                        Some(kids) if !kids.is_empty() => {
-                            // Push reversed so DFS emits children left-to-right.
-                            for &child in kids.iter().rev() {
-                                stack.push(child);
-                            }
+                    let children = projection.children_of(projected_id);
+                    if !children.is_empty() {
+                        for child in children.into_iter().rev() {
+                            stack.push(child);
                         }
-                        Some(_) => {
-                            // Known-empty dir — nothing to add, nothing pending.
-                        }
-                        None => {
-                            // Expanded but children-map missing: worker hasn't
-                            // delivered them yet. Report to caller.
-                            pending.push(projected_id);
-                        }
+                    } else if self.entries.get(&projected_id).is_some_and(|entry| {
+                        !self.children.contains_key(&projected_id)
+                            && (entry.kind == EntryKind::Directory
+                                || entry.symlink_target_is_dir == Some(true))
+                    }) {
+                        // Expanded but children-map missing: worker hasn't
+                        // delivered them yet. Report to caller.
+                        pending.push(projected_id);
                     }
                 }
             }
@@ -364,6 +602,7 @@ impl StoreSnapshot {
     ) -> Option<u32> {
         let mut index: u32 = 0;
         let mut stack: Vec<EntryId> = Vec::new();
+        let mut projection = ProjectionContext::new(self, include_ignored);
         for &root in self.roots.iter().rev() {
             stack.push(root);
         }
@@ -382,10 +621,8 @@ impl StoreSnapshot {
             }
             index = index.saturating_add(1);
             if expanded.contains(&projected_id) {
-                if let Some(kids) = self.children.get(&projected_id) {
-                    for &child in kids.iter().rev() {
-                        stack.push(child);
-                    }
+                for child in projection.children_of(projected_id).into_iter().rev() {
+                    stack.push(child);
                 }
             }
         }
@@ -413,6 +650,7 @@ impl StoreSnapshot {
         let mut before_start: Option<EntryId> = None;
         let mut reached_start = from_id.is_none();
         let mut stack: Vec<EntryId> = self.roots.iter().rev().copied().collect();
+        let mut projection = ProjectionContext::new(self, include_ignored);
 
         while let Some(id) = stack.pop() {
             let Some(entry) = self.entries.get(&id) else {
@@ -448,10 +686,8 @@ impl StoreSnapshot {
             }
 
             if expanded.contains(&projected_id) {
-                if let Some(kids) = self.children.get(&projected_id) {
-                    for &child in kids.iter().rev() {
-                        stack.push(child);
-                    }
+                for child in projection.children_of(projected_id).into_iter().rev() {
+                    stack.push(child);
                 }
             }
         }
@@ -473,6 +709,7 @@ impl StoreSnapshot {
         let mut out: Vec<EntryId> = Vec::new();
         let mut skipped: u32 = 0;
         let mut stack: Vec<EntryId> = Vec::new();
+        let mut projection = ProjectionContext::new(self, query.include_ignored);
         for &root in self.roots.iter().rev() {
             stack.push(root);
         }
@@ -493,10 +730,8 @@ impl StoreSnapshot {
                     }
                 }
                 if query.expanded.contains(&projected_id) {
-                    if let Some(kids) = self.children.get(&projected_id) {
-                        for &child in kids.iter().rev() {
-                            stack.push(child);
-                        }
+                    for child in projection.children_of(projected_id).into_iter().rev() {
+                        stack.push(child);
                     }
                 }
             }
@@ -517,6 +752,7 @@ impl StoreSnapshot {
         let mut out: Vec<VisibleRowOut> = Vec::new();
         let mut skipped: u32 = 0;
         let mut stack: Vec<(EntryId, u16)> = Vec::new();
+        let mut projection = ProjectionContext::new(self, query.include_ignored);
         for &root in self.roots.iter().rev() {
             stack.push((root, 0));
         }
@@ -531,8 +767,7 @@ impl StoreSnapshot {
                 if skipped < query.offset {
                     skipped += 1;
                 } else {
-                    let has_children =
-                        self.has_visible_children(projected_id, query.include_ignored);
+                    let has_children = projection.has_children(projected_id);
                     out.push(VisibleRowOut {
                         id: projected_id,
                         depth,
@@ -547,11 +782,9 @@ impl StoreSnapshot {
                 // Only descend when the parent itself would render — otherwise
                 // children would appear as orphan rows at the wrong depth.
                 if query.expanded.contains(&projected_id) {
-                    if let Some(kids) = self.children.get(&projected_id) {
-                        let child_depth = depth.saturating_add(1);
-                        for &child in kids.iter().rev() {
-                            stack.push((child, child_depth));
-                        }
+                    let child_depth = depth.saturating_add(1);
+                    for child in projection.children_of(projected_id).into_iter().rev() {
+                        stack.push((child, child_depth));
                     }
                 }
             }
@@ -998,6 +1231,295 @@ mod tests {
     }
 
     #[test]
+    fn file_nesting_projects_real_ids_across_all_navigation_queries() {
+        let nesting = FileNestingPolicy::new(
+            [
+                ("*.ts".into(), vec!["${capture}.test.ts".into()]),
+                ("*.js".into(), vec!["${capture}.js.map".into()]),
+            ],
+            true,
+        );
+        let mut snap =
+            StoreSnapshot::empty_with_projection(VisibilityPolicy::project_view(), false, nesting);
+        let root = EntryId(1);
+        let source = EntryId(2);
+        let source_test = EntryId(3);
+        let script = EntryId(4);
+        let source_map = EntryId(5);
+        let note = EntryId(6);
+        seed(
+            &mut snap,
+            root,
+            None,
+            "root",
+            EntryKind::Directory,
+            0,
+            false,
+            false,
+        );
+        for (id, name) in [
+            (source, "source.ts"),
+            (source_test, "source.test.ts"),
+            (script, "bundle.js"),
+            (source_map, "bundle.js.map"),
+            (note, "notes.md"),
+        ] {
+            seed(
+                &mut snap,
+                id,
+                Some(root),
+                name,
+                EntryKind::File,
+                0,
+                false,
+                false,
+            );
+        }
+
+        assert_eq!(
+            snap.projected_children_of(root, false),
+            vec![source, script, note]
+        );
+        assert_eq!(snap.projected_children_of(source, false), vec![source_test]);
+        assert_eq!(snap.projected_children_of(script, false), vec![source_map]);
+        assert_eq!(snap.projected_child_count(source, false), Some(1));
+        assert!(snap.has_children(source));
+
+        let expanded = HashSet::from([root, source, script]);
+        let rows = snap.visible_rows(VisibleRowsQuery {
+            expanded: &expanded,
+            offset: 0,
+            limit: 100,
+            include_ignored: false,
+        });
+        assert_eq!(
+            rows.iter().map(|row| row.id).collect::<Vec<_>>(),
+            vec![root, source, source_test, script, source_map, note]
+        );
+        assert_eq!(
+            rows.iter().map(|row| row.depth).collect::<Vec<_>>(),
+            vec![0, 1, 2, 1, 2, 1]
+        );
+        assert_eq!(snap.visible_row_count(&expanded, false).known, 6);
+        assert_eq!(
+            snap.visible_row_ids(VisibleRowsQuery {
+                expanded: &expanded,
+                offset: 0,
+                limit: 100,
+                include_ignored: false,
+            }),
+            vec![root, source, source_test, script, source_map, note]
+        );
+        assert_eq!(
+            snap.visible_row_index(source_map, &expanded, false),
+            Some(4)
+        );
+        assert_eq!(
+            snap.visible_prefix_match("source.test", Some(source), true, &expanded, false),
+            Some(source_test)
+        );
+    }
+
+    #[test]
+    fn file_nesting_conflicts_are_stable_and_never_form_chains() {
+        let nesting = FileNestingPolicy::new(
+            [
+                ("*.js".into(), vec!["shared.map".into()]),
+                (
+                    "*.ts".into(),
+                    vec!["shared.map".into(), "${capture}.test.ts".into()],
+                ),
+            ],
+            true,
+        );
+        let mut snap =
+            StoreSnapshot::empty_with_projection(VisibilityPolicy::project_view(), false, nesting);
+        let root = EntryId(1);
+        let js = EntryId(2);
+        let ts = EntryId(3);
+        let shared = EntryId(4);
+        let nested_parent_candidate = EntryId(5);
+        let grandchild_candidate = EntryId(6);
+        seed(
+            &mut snap,
+            root,
+            None,
+            "root",
+            EntryKind::Directory,
+            0,
+            false,
+            false,
+        );
+        for (id, name) in [
+            (js, "a.js"),
+            (ts, "a.ts"),
+            (shared, "shared.map"),
+            (nested_parent_candidate, "a.test.ts"),
+            (grandchild_candidate, "a.test.test.ts"),
+        ] {
+            seed(
+                &mut snap,
+                id,
+                Some(root),
+                name,
+                EntryKind::File,
+                0,
+                false,
+                false,
+            );
+        }
+
+        // Sibling order wins cross-rule conflicts: a.js sees shared.map first.
+        assert_eq!(snap.projected_children_of(js, false), vec![shared]);
+        assert_eq!(
+            snap.projected_children_of(ts, false),
+            vec![nested_parent_candidate]
+        );
+        // A claimed child cannot become another virtual parent, so no cycles
+        // or recursively surprising chains can emerge from overlapping rules.
+        assert!(snap
+            .projected_children_of(nested_parent_candidate, false)
+            .is_empty());
+        assert_eq!(
+            snap.projected_children_of(root, false),
+            vec![js, ts, grandchild_candidate]
+        );
+    }
+
+    #[test]
+    fn file_nesting_respects_visibility_before_claiming_children() {
+        let nesting =
+            FileNestingPolicy::new([("*.ts".into(), vec!["${capture}.test.ts".into()])], true);
+        let mut snap = StoreSnapshot::empty_with_projection(
+            VisibilityPolicy {
+                show_hidden_files: false,
+                show_ignored_files: true,
+            },
+            false,
+            nesting,
+        );
+        let root = EntryId(1);
+        let source = EntryId(2);
+        let hidden_test = EntryId(3);
+        seed(
+            &mut snap,
+            root,
+            None,
+            "root",
+            EntryKind::Directory,
+            0,
+            false,
+            false,
+        );
+        seed(
+            &mut snap,
+            source,
+            Some(root),
+            "source.ts",
+            EntryKind::File,
+            0,
+            false,
+            false,
+        );
+        seed(
+            &mut snap,
+            hidden_test,
+            Some(root),
+            "source.test.ts",
+            EntryKind::File,
+            0,
+            false,
+            true,
+        );
+
+        assert_eq!(snap.projected_children_of(root, false), vec![source]);
+        assert!(snap.projected_children_of(source, false).is_empty());
+        assert!(!snap.has_children(source));
+        assert_eq!(snap.projected_children_of(source, true), vec![hidden_test]);
+    }
+
+    #[test]
+    fn compact_folders_and_file_nesting_compose_without_synthetic_ids() {
+        let nesting =
+            FileNestingPolicy::new([("*.ts".into(), vec!["${capture}.test.ts".into()])], true);
+        let mut snap =
+            StoreSnapshot::empty_with_projection(VisibilityPolicy::project_view(), true, nesting);
+        let root = EntryId(1);
+        let a = EntryId(2);
+        let b = EntryId(3);
+        let source = EntryId(4);
+        let test = EntryId(5);
+        seed(
+            &mut snap,
+            root,
+            None,
+            "root",
+            EntryKind::Directory,
+            0,
+            false,
+            false,
+        );
+        seed(
+            &mut snap,
+            a,
+            Some(root),
+            "a",
+            EntryKind::Directory,
+            0,
+            false,
+            false,
+        );
+        seed(
+            &mut snap,
+            b,
+            Some(a),
+            "b",
+            EntryKind::Directory,
+            0,
+            false,
+            false,
+        );
+        seed(
+            &mut snap,
+            source,
+            Some(b),
+            "index.ts",
+            EntryKind::File,
+            0,
+            false,
+            false,
+        );
+        seed(
+            &mut snap,
+            test,
+            Some(b),
+            "index.test.ts",
+            EntryKind::File,
+            0,
+            false,
+            false,
+        );
+
+        assert_eq!(snap.projected_children_of(root, false), vec![b]);
+        assert_eq!(snap.projected_children_of(b, false), vec![source]);
+        assert_eq!(snap.projected_children_of(source, false), vec![test]);
+        let rows = snap.visible_rows(VisibleRowsQuery {
+            expanded: &HashSet::from([root, b, source]),
+            offset: 0,
+            limit: 100,
+            include_ignored: false,
+        });
+        assert_eq!(
+            rows.iter().map(|row| row.id).collect::<Vec<_>>(),
+            vec![root, b, source, test]
+        );
+        assert_eq!(
+            rows[1].path_segments.as_deref(),
+            Some(&["a".into(), "b".into()][..])
+        );
+    }
+
+    #[test]
     fn visibility_policy_applies_to_every_projection_query() {
         let mut snap = StoreSnapshot::empty_with_visibility(VisibilityPolicy {
             show_hidden_files: false,
@@ -1114,6 +1636,8 @@ mod tests {
         );
         let expanded = HashSet::new();
         assert!(!snap.has_children(root));
+        assert_eq!(snap.projected_child_count(root, false), Some(0));
+        assert_eq!(snap.projected_child_count(root, true), Some(1));
         assert!(
             !snap
                 .visible_rows(VisibleRowsQuery {
@@ -1141,7 +1665,11 @@ mod tests {
 
     #[test]
     fn compact_projection_preserves_leaf_identity_across_every_query() {
-        let mut snap = StoreSnapshot::empty_with_projection(VisibilityPolicy::project_view(), true);
+        let mut snap = StoreSnapshot::empty_with_projection(
+            VisibilityPolicy::project_view(),
+            true,
+            FileNestingPolicy::default(),
+        );
         let root = EntryId(1);
         let a = EntryId(2);
         let b = EntryId(3);

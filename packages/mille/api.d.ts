@@ -198,6 +198,10 @@ export interface ResolvedExplorerSettings {
   readonly compactFolders: boolean;
   readonly compactFolders: boolean;
   readonly excludeGlobs: readonly string[];
+  /**
+   * Parent pattern → exact companion-name templates. Parent patterns accept
+   * zero or one `*`; child templates may substitute `${capture}`.
+   */
   readonly fileNestingPatterns: Readonly<Record<string, readonly string[]>>;
 }
 

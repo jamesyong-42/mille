@@ -56,9 +56,7 @@ function entryToClient(e: Entry): ClientEntry {
 
 /** Native store order is authoritative for viewport and structural metadata. */
 function sortedChildIds(snap: MirrorSnapshot, parentId: number): number[] {
-  return snap.compactFolders
-    ? [...snap.projectedChildrenOf(parentId)]
-    : [...snap.childrenOf(parentId)];
+  return [...snap.projectedChildrenOf(parentId)];
 }
 
 /**
@@ -548,15 +546,29 @@ class FileExplorerHostImpl implements FileExplorerHost {
         liveChangedIds.push(id);
         outEntries.push(entryToClient(entry));
         emitted.add(id);
-        const c = snap.directChildCount(id);
+        const c = snap.projectedChildCount(id);
         if (c !== null) outDirectChildCounts[String(id)] = c;
       }
       const childSetChanged = new Set(delta.childSetChanged);
       for (const rootId of coarse) childSetChanged.add(rootId);
+      // A real directory child-set mutation can change both its projected
+      // top-level list and the virtual children of any sibling file that
+      // acts as a nesting parent.
+      for (const directoryId of [...childSetChanged]) {
+        for (const siblingId of snap.childrenOf(directoryId)) {
+          if (session.expanded.has(siblingId)) childSetChanged.add(siblingId);
+        }
+      }
       const childLists = new Map<number, readonly number[]>();
       for (const parentId of childSetChanged) {
-        const pc = snap.directChildCount(parentId);
-        if (pc !== null) outDirectChildCounts[String(parentId)] = pc;
+        const pc = snap.projectedChildCount(parentId);
+        if (pc !== null) {
+          outDirectChildCounts[String(parentId)] = pc;
+        } else if (session.expanded.has(parentId)) {
+          // An expanded nesting parent that just lost its final projected
+          // child must actively clear the mirror's previous non-zero count.
+          outDirectChildCounts[String(parentId)] = 0;
+        }
         if (!session.expanded.has(parentId)) continue;
         const kids = sortedChildIds(snap, parentId);
         childLists.set(parentId, kids);
@@ -576,7 +588,7 @@ class FileExplorerHostImpl implements FileExplorerHost {
           if (!entry) continue;
           outEntries.push(entryToClient(entry));
           emitted.add(id);
-          const c = snap.directChildCount(id);
+          const c = snap.projectedChildCount(id);
           if (c !== null) outDirectChildCounts[String(id)] = c;
         }
       }
@@ -748,7 +760,7 @@ class FileExplorerHostImpl implements FileExplorerHost {
       .map(entryToClient);
     const directChildCounts: Record<string, number> = {};
     for (const e of rootEntries) {
-      const c = snap.directChildCount(e.id);
+      const c = snap.projectedChildCount(e.id);
       if (c !== null) directChildCounts[String(e.id)] = c;
       session.knownIds.add(e.id);
     }
@@ -804,6 +816,14 @@ class FileExplorerHostImpl implements FileExplorerHost {
     // so known-leaf folders don't trigger a pointless NAPI round-trip.
     for (const id of body.add ?? []) {
       if (this.prefetched.has(id)) continue;
+      const expandable = snap.getById(id);
+      if (expandable !== null && expandable.kind !== 1 && expandable.symlinkTargetIsDir !== true) {
+        // Nested files are virtual containers whose child records already
+        // reside in their real parent directory; never attempt a filesystem
+        // walk "inside" the file.
+        this.prefetched.add(id);
+        continue;
+      }
       const kids = snap.childrenOf(id);
       if (kids.length > 0) {
         // Already walked; mark as covered to skip future expansions too.
@@ -851,7 +871,7 @@ class FileExplorerHostImpl implements FileExplorerHost {
     const childSetIds: number[] = [];
     for (const id of body.add ?? []) {
       const kids = sortedChildIds(snap, id);
-      const childCount = snap.directChildCount(id);
+      const childCount = snap.projectedChildCount(id);
       if (kids.length > 0 || childCount === 0) {
         childSetIds.push(id);
         childLists.set(id, kids);
@@ -961,12 +981,18 @@ class FileExplorerHostImpl implements FileExplorerHost {
     for (const row of rows) {
       viewportIds.push(row.id);
       session.knownIds.add(row.id);
+      const childCount = snap.projectedChildCount(row.id);
+      if (childCount !== null) {
+        directChildCounts[String(row.id)] = childCount;
+      } else if (row.kind === 0) {
+        // Actively clear a stale nesting-parent count when a rename/delete
+        // makes an ordinary file a leaf again.
+        directChildCounts[String(row.id)] = 0;
+      }
       if (session.viewportIds.has(row.id) && row.pathSegments === undefined) continue;
       // Keep projection metadata (notably compact-folder pathSegments)
       // instead of re-reading the raw entry by id.
       entries.push(entryToClient(row));
-      const childCount = snap.directChildCount(row.id);
-      if (childCount !== null) directChildCounts[String(row.id)] = childCount;
     }
     session.viewportIds = new Set(viewportIds);
     return { entries, directChildCounts, viewportIds };

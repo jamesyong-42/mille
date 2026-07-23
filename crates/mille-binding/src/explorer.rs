@@ -24,6 +24,12 @@ use crate::types::{
     SearchOptionsJs, WarningPayloadJs,
 };
 
+#[napi(object)]
+pub struct FileNestingRuleJs {
+    pub parent_pattern: String,
+    pub child_patterns: Vec<String>,
+}
+
 /// Local-mode capability bitmask advertised in Phase 5 wave 1.
 /// ReadWrite (1) | CaseSensitive (2) | Watch (32) = 35.
 /// Keep in sync with api.d.ts `Capability` when later waves expand.
@@ -50,6 +56,7 @@ pub struct ExplorerOptionsJs {
     pub folders_on_top: Option<bool>,
     pub show_hidden_files: Option<bool>,
     pub show_ignored_files: Option<bool>,
+    pub file_nesting_rules: Option<Vec<FileNestingRuleJs>>,
 }
 
 /// Resolved form of ExplorerOptionsJs with defaults applied.
@@ -84,7 +91,7 @@ pub struct FileExplorer {
 #[napi]
 impl FileExplorer {
     #[napi(constructor)]
-    pub fn new(options: ExplorerOptionsJs) -> Result<Self> {
+    pub fn new(mut options: ExplorerOptionsJs) -> Result<Self> {
         let roots: Vec<PathBuf> = options.roots.iter().map(PathBuf::from).collect();
         if roots.is_empty() {
             return Err(Error::from_reason(
@@ -100,6 +107,16 @@ impl FileExplorer {
             }
         }
 
+        let case_sensitive = options.case_sensitive.unwrap_or(false);
+        let file_nesting = mille_core::FileNestingPolicy::new(
+            options
+                .file_nesting_rules
+                .take()
+                .unwrap_or_default()
+                .into_iter()
+                .map(|rule| (rule.parent_pattern, rule.child_patterns)),
+            case_sensitive,
+        );
         let resolved = ResolvedOptions {
             respect_ignore: options.respect_ignore.unwrap_or(true),
             follow_symlinks: match options.follow_symlinks.as_deref() {
@@ -127,7 +144,7 @@ impl FileExplorer {
                 Some("modified") => mille_core::sort::SortBy::Modified,
                 _ => mille_core::sort::SortBy::Name,
             },
-            case_sensitive: options.case_sensitive.unwrap_or(false),
+            case_sensitive,
             folders_on_top: options.folders_on_top.unwrap_or(true),
         };
         let visibility = mille_core::VisibilityPolicy {
@@ -136,10 +153,11 @@ impl FileExplorer {
         };
 
         Ok(Self {
-            store: Arc::new(EntryStore::with_projection(
+            store: Arc::new(EntryStore::with_projection_settings(
                 sibling_order,
                 visibility,
                 resolved.compact_folders,
+                file_nesting,
             )),
             watcher: Arc::new(std::sync::Mutex::new(None)),
             intents: Arc::new(parking_lot::Mutex::new(IntentCache::new())),

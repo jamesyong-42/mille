@@ -30,15 +30,15 @@ layers of work:
 The scores below are directional, not a claim of mathematical precision. A
 mature IDE explorer is the 10/10 reference point.
 
-| Area                                 | Score | Current assessment                                                                                                                                                            |
-| ------------------------------------ | ----: | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Filesystem and renderer architecture |   8.8 | Strong native walker, roots-only handshake, packed ordered lazy hydration, bounded viewport mirror, windowed React rendering, exact positions, and ID-only projections        |
-| Core tree interaction                |   7.4 | Windowed navigation, scalable multi-selection, reliable deep reveal, resilient inline rename, create/delete, clipboard, filtering, context menus, and drag/drop               |
-| Visual behavior                      |   7.4 | Viewport, focus, selection, and rename drafts survive churn; animation is row-scoped, storm-bounded, and reduced-motion aware; broader theme/sticky-root scenarios remain     |
-| Accessibility                        |   6.0 | Good ARIA tree semantics and keyboard tests; no real assistive-technology matrix                                                                                              |
-| Reliability and recovery             |   5.5 | Deterministic soak gates converge, but repeated Electron watcher stalls and direct native startup misses remain unresolved; crash/platform stress also remains                |
-| Performance confidence               |   7.8 | Million-sibling structure, binary-wire, bounded-hydration, windowed 500,000-row UI, Criterion, and Electron gates cover payload, paint, projection, navigation, and retention |
-| Explorer workflow breadth            |   3.8 | Versioned settings, native sort/visibility/exclusion, and durable navigation now exist; workspace, editor, source-control, history, and remote workflows remain shallow       |
+| Area                                 | Score | Current assessment                                                                                                                                                                     |
+| ------------------------------------ | ----: | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Filesystem and renderer architecture |   8.8 | Strong native walker, roots-only handshake, packed ordered lazy hydration, bounded viewport mirror, windowed React rendering, exact positions, and ID-only projections                 |
+| Core tree interaction                |   7.4 | Windowed navigation, scalable multi-selection, reliable deep reveal, resilient inline rename, create/delete, clipboard, filtering, context menus, and drag/drop                        |
+| Visual behavior                      |   7.4 | Viewport, focus, selection, and rename drafts survive churn; animation is row-scoped, storm-bounded, and reduced-motion aware; broader theme/sticky-root scenarios remain              |
+| Accessibility                        |   6.0 | Good ARIA tree semantics and keyboard tests; no real assistive-technology matrix                                                                                                       |
+| Reliability and recovery             |   5.5 | Deterministic soak gates converge, but repeated Electron watcher stalls and direct native startup misses remain unresolved; crash/platform stress also remains                         |
+| Performance confidence               |   7.8 | Million-sibling structure, binary-wire, bounded-hydration, windowed 500,000-row UI, Criterion, and Electron gates cover payload, paint, projection, navigation, and retention          |
+| Explorer workflow breadth            |   4.0 | Versioned settings, native sort/visibility/exclusion/compaction/nesting, and durable navigation exist; workspace, editor, source-control, history, and remote workflows remain shallow |
 
 As a reusable tree widget, Mille is approximately **6.5-7/10**. As a complete
 IDE explorer experience, it is approximately **5/10**.
@@ -235,6 +235,20 @@ Criterion evidence is 0.555 ms for last-row rank and 0.746 ms for a full prefix
 miss at 8,590 visible entries. The explicit re-open trigger is a production
 trace above 100,000 visible rows or a query p95 above 16 ms.
 
+Configurable file nesting is now an engine projection rather than a React
+convention. Parent and child rows keep their real entry IDs and filesystem
+parents, while projected child lists, rows, counts, indexes, prefix navigation,
+host viewports, and the lazy renderer mirror agree on the virtual hierarchy.
+Rules are bounded exact-name templates: a parent accepts at most one `*`, child
+templates substitute `${capture}`, and deterministic sibling/rule order claims
+each child once without recursive chains. Rename-out/rename-back integration
+tests prove that the real directory list and expanded virtual parent update in
+the same host tick. A 50,001-entry gate with 20,000 nested children initially
+measured 59.30 ms median / 61.14 ms p95 for projected children plus a 200-row
+viewport. Immutable-snapshot memoization reduced the identical warm path to
+2.24 ms median / 2.44 ms p95, with a 35.23 ms cold plan; caches reset on
+structural clones, and a retained older snapshot remains internally consistent.
+
 ## What is already strong
 
 ### Engine and host architecture
@@ -333,15 +347,14 @@ end-user behavior:
 ### 4. Explorer settings and state persistence are incomplete
 
 The versioned global/workspace/root settings record now drives native natural,
-type, modified-time, case, folders-on-top, hidden, ignored, exclude-glob, and
-compact-folder behavior at explorer construction. Native and renderer-mirror
-projections share visibility and compact leaf identities, and exclude globs
-apply to initial, lazy, and watcher-reconciliation walks. Remaining settings
-gaps include:
+type, modified-time, case, folders-on-top, hidden, ignored, exclude-glob,
+compact-folder, and file-nesting behavior at explorer construction. Native and
+renderer-mirror projections share visibility, compact leaf identities, and
+authoritative nested child lists, and exclude globs apply to initial, lazy, and
+watcher-reconciliation walks. Remaining settings gaps include:
 
 - locale-aware collation beyond the live natural/type/modified,
   case-sensitive, folders-on-top native ordering policy;
-- file nesting rules;
 - runtime reconfiguration without rebuilding the explorer;
 - UI controls for hidden/ignored visibility and exclusion settings;
 - same-display-name multi-root disambiguation for the new bounded, versioned,

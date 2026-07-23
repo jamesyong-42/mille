@@ -101,6 +101,12 @@ impl MirrorSnapshot {
         self.inner.direct_child_count(eid)
     }
 
+    #[napi(js_name = "projectedChildCount")]
+    pub fn projected_child_count(&self, id: i64, include_ignored: Option<bool>) -> Option<u32> {
+        self.inner
+            .projected_child_count(EntryId(id as u64), include_ignored.unwrap_or(false))
+    }
+
     /// True if the entry has at least one child visible in this snapshot.
     #[napi(js_name = "hasChildren")]
     pub fn has_children(&self, id: i64) -> bool {

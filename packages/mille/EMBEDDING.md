@@ -908,6 +908,27 @@ those entries from the projection.
 With `compactFolders: true`, single-directory chains below workspace roots are
 projected as one row. The row keeps the leaf directory's stable ID and exposes
 the full label in `pathSegments` (for example `['src', 'main', 'java']`).
+
+`fileNestingPatterns` projects generated or companion files below a sibling
+source file:
+
+```ts
+const settings = {
+  ...DEFAULT_EXPLORER_SETTINGS,
+  fileNestingPatterns: {
+    '*.ts': ['${capture}.test.ts', '${capture}.js'],
+    'package.json': ['package-lock.json'],
+  },
+};
+```
+
+A parent pattern accepts zero or one `*`; `${capture}` in each child template
+is replaced with the matched stem and resolves to an exact sibling filename.
+Rules and child lists are bounded by the settings parser. When multiple parents
+could claim the same file, current sibling order then normalized rule order
+wins. Nesting is one level deep, never creates synthetic IDs, and never changes
+filesystem mutation paths. Local snapshots and port clients use the same
+authoritative projected child lists.
 Counts, indexes, typeahead, host viewports, and port mirrors use the same leaf
 identity. In roots-only mode the host follows the chain with bounded depth-1
 reads and stops at the first branch; it does not eagerly walk the subtree.

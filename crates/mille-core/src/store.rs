@@ -19,6 +19,7 @@ use parking_lot::Mutex;
 use crate::changes::ChangeSet;
 use crate::entry::{Entry, EntryId, EntryKind};
 use crate::error::FxError;
+use crate::file_nesting::FileNestingPolicy;
 use crate::snapshot::{StoreSnapshot, VisibilityPolicy, MAX_ANCESTOR_WALK};
 use crate::sort::SiblingOrder;
 
@@ -53,10 +54,25 @@ impl EntryStore {
         visibility: VisibilityPolicy,
         compact_folders: bool,
     ) -> Self {
+        Self::with_projection_settings(
+            sibling_order,
+            visibility,
+            compact_folders,
+            FileNestingPolicy::default(),
+        )
+    }
+
+    pub fn with_projection_settings(
+        sibling_order: SiblingOrder,
+        visibility: VisibilityPolicy,
+        compact_folders: bool,
+        file_nesting: FileNestingPolicy,
+    ) -> Self {
         Self {
             inner: ArcSwap::new(Arc::new(StoreSnapshot::empty_with_projection(
                 visibility,
                 compact_folders,
+                file_nesting,
             ))),
             path_to_id: DashMap::new(),
             id_counter: AtomicU64::new(0),
@@ -586,6 +602,12 @@ impl EntryStore {
         // Same-parent rename: parent unchanged, so reparented_ids stays empty.
         self.record_mutation(prev_tree_version, new_tree_version, |cs| {
             cs.changed_ids.insert(id);
+            // Display projections (file nesting, name/type sorting) derive
+            // sibling membership from basenames, so a same-parent rename is
+            // still an authoritative child-list change.
+            if let Some(parent_id) = entry.parent_id {
+                cs.child_set_changed.insert(parent_id);
+            }
         });
 
         Ok(())
@@ -1056,6 +1078,36 @@ mod tests {
 
         s.rename(b, "/r/zzz".into()).unwrap();
         assert_eq!(s.snapshot().children_of(root), &[a, c, b]);
+    }
+
+    #[test]
+    fn rename_invalidates_new_snapshot_nesting_cache_but_not_retained_snapshot() {
+        let s = EntryStore::with_projection_settings(
+            SiblingOrder::default(),
+            VisibilityPolicy::project_view(),
+            false,
+            FileNestingPolicy::new([("*.ts".into(), vec!["${capture}.test.ts".into()])], true),
+        );
+        let root = s.insert("/r".into(), dir("r", None)).unwrap();
+        let source = s
+            .insert("/r/source.ts".into(), leaf("source.ts", Some(root)))
+            .unwrap();
+        let test = s
+            .insert(
+                "/r/source.test.ts".into(),
+                leaf("source.test.ts", Some(root)),
+            )
+            .unwrap();
+        let before = s.snapshot();
+        assert_eq!(before.projected_children_of(root, false), vec![source]);
+        assert_eq!(before.projected_children_of(source, false), vec![test]);
+
+        s.rename(test, "/r/source.spec.ts".into()).unwrap();
+        let after = s.snapshot();
+        assert_eq!(after.projected_children_of(root, false), vec![test, source]);
+        assert!(after.projected_children_of(source, false).is_empty());
+        assert_eq!(before.projected_children_of(source, false), vec![test]);
+        assert!(s.take_pending_changes().child_set_changed.contains(&root));
     }
 
     // --- ChangeSet producer tests (commit 4.1) ---

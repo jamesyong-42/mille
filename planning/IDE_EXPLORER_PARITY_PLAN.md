@@ -665,6 +665,23 @@ invariants. A 200-directory chain gate measured row-plus-count projection at
 0.309 ms median and 0.349 ms p95 against a 5 ms ceiling. Locale-aware
 collation, runtime reconfiguration, and configurable file nesting remain.
 
+File-nesting result (2026-07-22): resolved `fileNestingPatterns` now compile
+into a bounded native policy. Parent patterns accept at most one `*`; exact
+child templates substitute `${capture}`. Files retain their real entry IDs and
+filesystem parents while projected child lists, rows, IDs, counts, exact
+indexes, prefix navigation, host viewports, and the lazy port mirror expose the
+virtual hierarchy. Sibling order and normalized rule order resolve conflicts,
+each child is claimed once, and claimed children cannot become recursive
+parents. The host advertises a nested file's disclosure count before expansion,
+does not attempt a filesystem walk inside it, and republishes both real and
+virtual child lists when a sibling rename changes the plan. Native tests cover
+conflicts and compact-folder composition; a roots-only port test covers
+expansion and rename-out/rename-back updates. On a 50,001-entry directory with
+20,000 nested children, snapshot memoization moved projected-child plus 200-row
+viewport work from 59.30/61.14 ms median/p95 to 2.24/2.44 ms, with a 35.23 ms
+cold plan and 10 ms warm p95 gate. Locale-aware collation and runtime
+reconfiguration remain for Phase 3.1.
+
 #### 3.2 Complete multi-root workspace behavior
 
 - Add, remove, rename-display, and reorder workspace roots.

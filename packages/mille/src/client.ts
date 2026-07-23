@@ -252,6 +252,7 @@ type NativeSnapshot = {
   roots(): Entry[];
   getById(id: number): Entry | null;
   directChildCount(id: number): number | null;
+  projectedChildCount(id: number, includeIgnored?: boolean): number | null;
   hasChildren(id: number): boolean;
   childrenOf(id: number): number[];
   projectedChildrenOf(id: number, includeIgnored?: boolean): number[];
@@ -383,6 +384,13 @@ export class FileExplorer {
       if (options.compactFolders === undefined) {
         nativeOpts.compactFolders = options.settings.compactFolders;
       }
+      const fileNestingRules = Object.entries(options.settings.fileNestingPatterns).map(
+        ([parentPattern, childPatterns]) => ({
+          parentPattern,
+          childPatterns: [...childPatterns],
+        }),
+      );
+      if (fileNestingRules.length > 0) nativeOpts.fileNestingRules = fileNestingRules;
     }
     // `initialWalk` is consumed by the host wrapper (host.ts), not by the
     // native binding — don't pass it through.
@@ -952,6 +960,12 @@ export class MirrorSnapshot {
 
   directChildCount(id: EntryId): number | null {
     const v = this.inner.directChildCount(id);
+    return v ?? null;
+  }
+
+  /** @internal — child count after compact-folder and file-nesting projection. */
+  projectedChildCount(id: EntryId, includeIgnored?: boolean): number | null {
+    const v = this.inner.projectedChildCount(id, includeIgnored);
     return v ?? null;
   }
 

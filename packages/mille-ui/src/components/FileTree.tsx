@@ -565,7 +565,9 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
       },
       rowCount: count,
       readRows: projection.readRows,
+      readRowIds: projection.readIds,
       findRowIndex: findVisibleRowIndex,
+      findExactRowIndex: findExactVisibleRowIndex,
       getRowById: (id) => {
         const mounted = visibleRows.find((row) => row.id === id);
         if (mounted) return mounted;
@@ -577,6 +579,7 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
       readAllVisibleRows,
       count,
       findVisibleRowIndex,
+      findExactVisibleRowIndex,
       projection,
       mountedViewportOffset,
       visibleRows,

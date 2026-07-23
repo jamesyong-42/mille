@@ -590,6 +590,105 @@ test('local keyboard navigation reads a bounded row neighborhood', async () => {
   container.remove();
 });
 
+test('Select All and long ranges read identities without complete row projections', async () => {
+  const fx = createFakeEngine();
+  const rows = buildRows(10_000);
+  const baseSnapshot = createFakeSnapshot({ rows, treeVersion: 1 });
+  const rowRequests = [];
+  const idRequests = [];
+  fx.emitDelta({
+    ...baseSnapshot,
+    visibleRows: (options) => {
+      rowRequests.push(options.limit);
+      return baseSnapshot.visibleRows(options);
+    },
+    visibleRowIds: (options) => {
+      idRequests.push(options.limit);
+      return baseSnapshot.visibleRowIds(options);
+    },
+  });
+
+  const { container, root } = mount();
+  const obs = makeObservers({ height: 400 });
+  let selectedCount = 0;
+  await act(async () => {
+    root.render(
+      createElement(FileTree, {
+        fx,
+        ariaLabel: 'ID-only Select All',
+        rowHeight: 20,
+        overscan: 10,
+        onSelectionChange: (ids) => {
+          selectedCount = ids.size;
+        },
+        __testObserveElementRect: obs.observeElementRect,
+        __testObserveElementOffset: obs.observeElementOffset,
+      }),
+    );
+  });
+
+  const tree = container.querySelector('[role="tree"]');
+  const firstRow = container.querySelector('[role="treeitem"]');
+  assert.ok(tree && firstRow);
+  await act(async () => {
+    firstRow.dispatchEvent(new hdWindow.MouseEvent('click', { bubbles: true }));
+  });
+  rowRequests.length = 0;
+  idRequests.length = 0;
+
+  await act(async () => {
+    tree.dispatchEvent(
+      new hdWindow.KeyboardEvent('keydown', {
+        key: 'a',
+        metaKey: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+  });
+
+  assert.equal(selectedCount, rows.length);
+  assert.deepEqual(idRequests, [rows.length]);
+  assert.ok(
+    rowRequests.reduce((total, limit) => total + limit, 0) <= 100,
+    `Select All materialized ${rowRequests.reduce((total, limit) => total + limit, 0)} rows`,
+  );
+
+  await act(async () => {
+    tree.dispatchEvent(
+      new hdWindow.KeyboardEvent('keydown', {
+        key: 'Escape',
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+  });
+  assert.equal(selectedCount, 0);
+  rowRequests.length = 0;
+  idRequests.length = 0;
+
+  await act(async () => {
+    tree.dispatchEvent(
+      new hdWindow.KeyboardEvent('keydown', {
+        key: 'End',
+        shiftKey: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+  });
+
+  assert.equal(selectedCount, rows.length);
+  assert.deepEqual(idRequests, [rows.length]);
+  assert.ok(
+    rowRequests.reduce((total, limit) => total + limit, 0) <= 100,
+    `Shift+End materialized ${rowRequests.reduce((total, limit) => total + limit, 0)} rows`,
+  );
+
+  await act(async () => { root.unmount(); });
+  container.remove();
+});
+
 test('imperative reveal uses one exact-position lookup for a deep projection', async () => {
   const fx = createFakeEngine();
   const rows = buildRows(10_000);

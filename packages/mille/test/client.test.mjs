@@ -205,6 +205,10 @@ test('populateFromRoots seeds the store with entries', async () => {
     assert.equal(snap.visibleRowIndex(walkRoot.id, new Set()), 0);
     const expanded = new Set([walkRoot.id]);
     const visible = snap.visibleRows({ expanded, offset: 0, limit: 100 });
+    assert.deepEqual(
+      snap.visibleRowIds({ expanded, offset: 0, limit: 100 }),
+      visible.map((row) => row.id),
+    );
     for (let index = 0; index < visible.length; index += 1) {
       assert.equal(snap.visibleRowIndex(visible[index].id, expanded), index);
     }

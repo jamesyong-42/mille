@@ -434,6 +434,28 @@ future architecture refinement. Select All, long-range selection, path-walk
 fallback, worst-case typeahead, and wide-folder ordered-id metadata remain
 Phase 2.4 work.
 
+Eleventh identity-projection result (2026-07-22): Select All and long-range
+selection no longer request complete `VisibleRow` objects for every selected
+entry. Snapshots now expose `visibleRowIds(options)` across Rust, N-API, the
+bounded port mirror, public TypeScript, the fake engine, and the React
+projection. Range endpoints use exact-position queries before one ID-only range
+read; legacy snapshots retain the row-window fallback. On the 500,000-row gate,
+Select All issued one request for the unavoidable 500,000 selected ids and zero
+complete row payloads. Five standalone timings ranged from 53.08 to 58.14 ms
+with a 56.51 ms median. Shift+End from row 100,000 selected 400,000 ids through
+two exact-position queries, one ID-only request, and 49 complete viewport rows;
+five timings ranged from 47.63 to 62.76 ms with a 54.61 ms median. The first
+regression test exposed 10,528 hidden row reads from using the nearby lookup for
+a far anchor; routing range endpoints through the exact contract removed them.
+Native Criterion measured full medium-fixture ids at 79.989-82.850 microseconds
+versus 126.23-127.73 microseconds for full native row projections, a 36.1% median-time
+reduction. Property tests prove ID order equals row order. All 314 UI tests, all
+12 playground tests, 160 non-watcher core tests, and 41 focused native/port
+tests passed. Selection still inherently stores O(k) selected identities. The
+remaining Phase 2.4 work is path-walk fallback, worst-case typeahead, wide-folder
+ordered-id metadata, and evaluating a maintained visible-rank structure from
+real native traces.
+
 #### 2.5 Define state under deletion and errors
 
 - Move focus to the nearest logical sibling or parent when the focused row is

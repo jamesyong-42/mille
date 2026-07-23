@@ -243,6 +243,50 @@ impl StoreSnapshot {
         None
     }
 
+    /// Visible ids in display order for an offset/limit range.
+    ///
+    /// This follows the same traversal semantics as `visible_rows` without
+    /// constructing row payloads for selection-only consumers.
+    pub fn visible_row_ids(&self, query: VisibleRowsQuery<'_>) -> Vec<EntryId> {
+        let limit = query.limit as usize;
+        if limit == 0 {
+            return Vec::new();
+        }
+
+        let mut out: Vec<EntryId> = Vec::new();
+        let mut skipped: u32 = 0;
+        let mut stack: Vec<EntryId> = Vec::new();
+        for &root in self.roots.iter().rev() {
+            stack.push(root);
+        }
+
+        while let Some(id) = stack.pop() {
+            let Some(entry) = self.entries.get(&id) else {
+                continue;
+            };
+            let visible = query.include_ignored || entry_counts_visible(entry);
+            if visible {
+                if skipped < query.offset {
+                    skipped += 1;
+                } else {
+                    out.push(id);
+                    if out.len() >= limit {
+                        return out;
+                    }
+                }
+                if query.expanded.contains(&id) {
+                    if let Some(kids) = self.children.get(&id) {
+                        for &child in kids.iter().rev() {
+                            stack.push(child);
+                        }
+                    }
+                }
+            }
+        }
+
+        out
+    }
+
     /// Flattened visible rows in display order, sliced by `offset`/`limit`.
     /// Early-terminates the DFS once `limit` rows are collected, so large
     /// subtrees beyond the viewport don't get materialized.
@@ -584,6 +628,15 @@ mod tests {
         assert_eq!(snap.visible_row_index(r, &expanded, false), Some(0));
         assert_eq!(snap.visible_row_index(b, &expanded, false), Some(2));
         assert_eq!(snap.visible_row_index(EntryId(99), &expanded, false), None);
+        assert_eq!(
+            snap.visible_row_ids(VisibleRowsQuery {
+                expanded: &expanded,
+                offset: 1,
+                limit: 2,
+                include_ignored: false,
+            }),
+            vec![a, b]
+        );
     }
 
     #[test]
@@ -897,6 +950,16 @@ mod tests {
                 limit: u32::MAX,
                 include_ignored,
             });
+            let row_ids = snap.visible_row_ids(VisibleRowsQuery {
+                expanded: &expanded,
+                offset: 0,
+                limit: u32::MAX,
+                include_ignored,
+            });
+            proptest::prop_assert_eq!(
+                row_ids,
+                rows.iter().map(|row| row.id).collect::<Vec<_>>()
+            );
             for id in ids {
                 let expected = rows
                     .iter()

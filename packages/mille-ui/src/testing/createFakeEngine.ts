@@ -27,6 +27,7 @@ export interface FakeMirrorSnapshot {
   readonly decorationVersion: number;
   roots(): readonly Entry[];
   visibleRows(options: VisibleRowsOptions): readonly VisibleRow[];
+  visibleRowIds(options: VisibleRowsOptions): readonly EntryId[];
   visibleRowCount(
     expanded: ReadonlySet<EntryId>,
     includeIgnored?: boolean,
@@ -163,6 +164,7 @@ const EMPTY_SNAPSHOT: FakeMirrorSnapshot = freeze({
   decorationVersion: 0,
   roots: () => [],
   visibleRows: () => [],
+  visibleRowIds: () => [],
   visibleRowCount: () => ({ known: 0, pendingExpansions: new Set<EntryId>() }),
   visibleRowIndex: () => null,
   getById: () => null,
@@ -222,6 +224,11 @@ export function createFakeSnapshot(init: FakeSnapshotInit = {}): FakeMirrorSnaps
       const start = options.offset;
       const end = start + options.limit;
       return rows.slice(start, end);
+    },
+    visibleRowIds: (options: VisibleRowsOptions) => {
+      const start = options.offset;
+      const end = start + options.limit;
+      return rows.slice(start, end).map((row) => row.id);
     },
     visibleRowCount: (_expanded, _includeIgnored) => ({
       known: rows.length,
@@ -544,6 +551,7 @@ export function createFakeEngine(): FakeEngine {
         decorationVersion: structural.decorationVersion + 1,
         roots: () => structural.roots(),
         visibleRows: (options) => structural.visibleRows(options),
+        visibleRowIds: (options) => structural.visibleRowIds(options),
         visibleRowCount: (expanded, includeIgnored) =>
           structural.visibleRowCount(expanded, includeIgnored),
         visibleRowIndex: (id, expanded, includeIgnored) =>

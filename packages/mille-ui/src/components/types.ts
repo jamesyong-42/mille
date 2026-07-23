@@ -77,6 +77,8 @@ export interface FileTreeSnapshotLike {
   readonly decorationVersion: number;
   roots(): readonly Entry[];
   visibleRows(options: VisibleRowsOptions): readonly VisibleRow[];
+  /** Optional ID-only projection for selection and identity consumers. */
+  visibleRowIds?(options: VisibleRowsOptions): readonly EntryId[];
   visibleRowCount(
     expanded: ReadonlySet<EntryId>,
     includeIgnored?: boolean,

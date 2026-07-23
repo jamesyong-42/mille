@@ -33,7 +33,10 @@ for (const rel of candidates) {
     if (err && err.code !== 'MODULE_NOT_FOUND') throw err;
   }
 }
-assert.ok(native, `no built .node found — ran pnpm run build:napi? (tried ${candidates.join(', ')})`);
+assert.ok(
+  native,
+  `no built .node found — ran pnpm run build:napi? (tried ${candidates.join(', ')})`,
+);
 
 const { FileExplorer, buildInfo, version } = native;
 
@@ -112,6 +115,7 @@ test('visibleRows/visibleRowCount work on an empty snapshot', () => {
     const rows = snap.visibleRows({ expanded: [], offset: 0, limit: 100 });
     assert.ok(Array.isArray(rows));
     assert.equal(rows.length, 0);
+    assert.deepEqual(snap.visibleRowIds({ expanded: [], offset: 0, limit: 100 }), []);
     const count = snap.visibleRowCount([]);
     assert.equal(typeof count.known, 'number');
     assert.ok(Array.isArray(count.pendingExpansions));
@@ -126,10 +130,12 @@ test('emitReadyForTests + onReady fire end-to-end through the TSFN', async () =>
   try {
     const fx = new FileExplorer({ roots: [dir] });
     let fired = 0;
-    const subId = fx.onReady(() => { fired += 1; });
+    const subId = fx.onReady(() => {
+      fired += 1;
+    });
     fx.emitReadyForTests();
     // TSFN dispatch is async. Give the libuv queue a couple of ticks.
-    await new Promise(resolve => setTimeout(resolve, 50));
+    await new Promise((resolve) => setTimeout(resolve, 50));
     assert.equal(fired, 1, 'ready listener should have fired exactly once');
     // off() expects a number — subscription ids are bigints at the API layer.
     const removed = fx.off(Number(subId));

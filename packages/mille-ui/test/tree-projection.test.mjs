@@ -77,6 +77,28 @@ test('row windows are bounded and the complete projection stays lazy', () => {
   assert.equal(counters.rows, 2, 'full projection materializes only on explicit demand');
 });
 
+test('identity windows use the snapshot id-only contract without row payloads', () => {
+  const counters = { count: 0, rows: 0, maxLimit: 0, ids: 0 };
+  const snapshot = {
+    ...makeSnapshot(7, counters),
+    visibleRowCount: () => ({ known: 500_000, pendingExpansions: new Set() }),
+    visibleRowIds: ({ offset, limit }) => {
+      counters.ids += limit;
+      return Array.from({ length: limit }, (_, index) => offset + index + 1);
+    },
+  };
+  const projection = readTreeProjection(snapshot, new Set(), null);
+
+  assert.deepEqual(projection.readIds(400_000, 3), [400_001, 400_002, 400_003]);
+  assert.equal(counters.ids, 3);
+  assert.equal(counters.rows, 0);
+
+  const fallbackCounters = { count: 0, rows: 0, maxLimit: 0 };
+  const fallback = readTreeProjection(makeSnapshot(8, fallbackCounters), new Set(), null);
+  assert.deepEqual(fallback.readIds(0, 1), [1]);
+  assert.equal(fallbackCounters.rows, 1);
+});
+
 test('visible index lookup probes bounded chunks around a prior index', () => {
   const rows = Array.from({ length: 20_000 }, (_, index) => ({
     id: index + 1,

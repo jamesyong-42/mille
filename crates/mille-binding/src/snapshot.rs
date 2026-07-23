@@ -131,6 +131,27 @@ impl MirrorSnapshot {
             .collect()
     }
 
+    /// Flattened visible ids for selection-only consumers. Avoids creating
+    /// and marshaling complete row objects.
+    #[napi(js_name = "visibleRowIds")]
+    pub fn visible_row_ids(&self, options: VisibleRowsOptionsJs) -> Vec<i64> {
+        let expanded: HashSet<EntryId> = options
+            .expanded
+            .iter()
+            .map(|id| EntryId(*id as u64))
+            .collect();
+        self.inner
+            .visible_row_ids(mille_core::VisibleRowsQuery {
+                expanded: &expanded,
+                offset: options.offset,
+                limit: options.limit,
+                include_ignored: options.include_ignored.unwrap_or(false),
+            })
+            .into_iter()
+            .map(|id| id.raw() as i64)
+            .collect()
+    }
+
     /// Exact logical index in the flattened visible order. Performs one
     /// native DFS and returns no row payloads.
     #[napi(js_name = "visibleRowIndex")]

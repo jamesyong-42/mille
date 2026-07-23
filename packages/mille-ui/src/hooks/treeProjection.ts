@@ -9,6 +9,8 @@ export interface TreeProjection {
   readonly visibleCount: VisibleRowCount;
   /** Read a bounded slice for the mounted virtual window. */
   readRows(offset: number, limit: number): readonly VisibleRow[];
+  /** Read ordered ids without materializing complete row payloads. */
+  readIds(offset: number, limit: number): readonly EntryId[];
   /** Lazily materialize full order for discrete keyboard/imperative commands. */
   readAllRows(): readonly VisibleRow[];
   /** Find an id near a prior logical index using bounded row-window probes. */
@@ -57,6 +59,25 @@ export function readTreeProjection(
     const rows = snapshot.visibleRows({ expanded, offset: safeOffset, limit: safeLimit });
     cachedWindow = { offset: safeOffset, limit: safeLimit, rows };
     return rows;
+  };
+  const readIds = (offset: number, limit: number): readonly EntryId[] => {
+    const safeOffset = Math.max(0, Math.min(visibleCount.known, Math.trunc(offset)));
+    const safeLimit = Math.max(
+      0,
+      Math.min(visibleCount.known - safeOffset, Math.trunc(limit)),
+    );
+    if (safeLimit === 0) return [];
+    if (cachedAllRows !== null) {
+      return cachedAllRows.slice(safeOffset, safeOffset + safeLimit).map((row) => row.id);
+    }
+    if (snapshot.visibleRowIds) {
+      return snapshot.visibleRowIds({
+        expanded,
+        offset: safeOffset,
+        limit: safeLimit,
+      });
+    }
+    return readRows(safeOffset, safeLimit).map((row) => row.id);
   };
   const readAllRows = (): readonly VisibleRow[] => {
     if (cachedAllRows === null) {
@@ -118,6 +139,7 @@ export function readTreeProjection(
     expanded,
     visibleCount,
     readRows,
+    readIds,
     readAllRows,
     findRowIndex,
     findExactRowIndex,

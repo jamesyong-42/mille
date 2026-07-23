@@ -6,6 +6,7 @@
 //   - visible_rows (100-row slice): < 0.2ms on populated snapshot
 //   - visible_row_count (all expanded): < 0.05ms
 //   - visible_row_index (last row): < 0.2ms on populated snapshot
+//   - visible_row_ids (full order): faster than full row materialization
 
 use std::collections::HashSet;
 
@@ -117,6 +118,26 @@ fn bench_visible_rows_full(c: &mut Criterion) {
     });
 }
 
+fn bench_visible_row_ids_full(c: &mut Criterion) {
+    let (td, _) = medium_tree();
+    let walked = walk(td.path(), WalkOptions::default()).unwrap();
+    let store = EntryStore::new();
+    populate_store(&store, td.path(), &walked, None).unwrap();
+    let snap = store.snapshot();
+    let expanded = expanded_set_all(&store);
+
+    c.bench_function("visible_row_ids_full_medium", |b| {
+        b.iter(|| {
+            let _ = snap.visible_row_ids(VisibleRowsQuery {
+                expanded: &expanded,
+                offset: 0,
+                limit: u32::MAX,
+                include_ignored: false,
+            });
+        })
+    });
+}
+
 fn bench_visible_row_index(c: &mut Criterion) {
     let (td, _) = medium_tree();
     let walked = walk(td.path(), WalkOptions::default()).unwrap();
@@ -176,6 +197,7 @@ criterion_group!(
     bench_visible_row_count,
     bench_visible_rows_100,
     bench_visible_rows_full,
+    bench_visible_row_ids_full,
     bench_visible_row_index,
     bench_pnpm_style_ignore,
 );
@@ -189,6 +211,7 @@ criterion_group!(
     bench_visible_row_count,
     bench_visible_rows_100,
     bench_visible_rows_full,
+    bench_visible_row_ids_full,
     bench_visible_row_index,
 );
 

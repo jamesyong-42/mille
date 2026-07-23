@@ -318,6 +318,44 @@ export class ClientMirrorSnapshot {
     return out;
   }
 
+  /** Visible ids without allocating complete row payloads. */
+  visibleRowIds(options: VisibleRowsOptions): readonly EntryId[] {
+    const includeIgnored = options.includeIgnored ?? false;
+    const limit = options.limit;
+    if (limit === 0) return [];
+
+    const out: EntryId[] = [];
+    const stack: number[] = [];
+    let skipped = 0;
+    for (let i = this.state.roots.length - 1; i >= 0; i--) {
+      stack.push(this.state.roots[i]!);
+    }
+
+    while (stack.length > 0) {
+      const id = stack.pop()!;
+      const entry = this.state.byId.get(id);
+      if (entry !== undefined && !isVisibleEntry(entry, includeIgnored)) continue;
+
+      if (skipped < options.offset) {
+        skipped += 1;
+      } else {
+        out.push(id);
+        if (out.length >= limit) return out;
+      }
+
+      if (entry !== undefined && options.expanded.has(id)) {
+        const kids = this.state.children.get(id);
+        if (kids !== undefined) {
+          const sorted = this.sortedChildrenFor(id, kids);
+          for (let i = sorted.length - 1; i >= 0; i--) {
+            stack.push(sorted[i]!);
+          }
+        }
+      }
+    }
+    return out;
+  }
+
   /** Exact logical index with one payload-free DFS over the mirror. */
   visibleRowIndex(
     target: EntryId,

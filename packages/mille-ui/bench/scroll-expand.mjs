@@ -631,6 +631,173 @@ async function runKeyboardNavigation(rows) {
   };
 }
 
+async function runSelectAll(rows) {
+  const fx = createFakeEngine();
+  let maxProjectionReadRows = 0;
+  let projectionRowsRead = 0;
+  let idRequests = 0;
+  let idsRead = 0;
+  const snapshot = createFakeSnapshot({ rows, treeVersion: 1 });
+  fx.emitDelta({
+    ...snapshot,
+    visibleRows: (options) => {
+      if (options.limit !== Number.MAX_SAFE_INTEGER) {
+        maxProjectionReadRows = Math.max(maxProjectionReadRows, options.limit);
+        projectionRowsRead += options.limit;
+      }
+      return snapshot.visibleRows(options);
+    },
+    visibleRowIds: (options) => {
+      idRequests += 1;
+      idsRead += options.limit;
+      return snapshot.visibleRowIds(options);
+    },
+  });
+  const { container, root } = mountContainer();
+  const obs = makeObservers({ height: 600 });
+  let selectedCount = 0;
+
+  await act(async () => {
+    root.render(
+      createElement(FileTree, {
+        fx,
+        ariaLabel: 'bench-select-all',
+        rowHeight: 22,
+        overscan: 10,
+        onSelectionChange: (ids) => {
+          selectedCount = ids.size;
+        },
+        __testObserveElementRect: obs.observeElementRect,
+        __testObserveElementOffset: obs.observeElementOffset,
+      }),
+    );
+  });
+  const tree = container.querySelector('[role="tree"]');
+  const first = container.querySelector('[role="treeitem"]');
+  if (!tree || !first) throw new Error('Select All bench tree is not mounted');
+  await act(async () => dispatchClick(first));
+  maxProjectionReadRows = 0;
+  projectionRowsRead = 0;
+  idRequests = 0;
+  idsRead = 0;
+
+  const result = await measureAsync('Select All (500k rows)', async () => {
+    await act(async () => {
+      tree.dispatchEvent(
+        new hdWindow.KeyboardEvent('keydown', {
+          key: 'a',
+          metaKey: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    });
+  });
+  const rendered = container.querySelectorAll('[role="treeitem"]').length;
+
+  await act(async () => root.unmount());
+  container.remove();
+  return {
+    ...result,
+    rendered,
+    interactionPreserved: selectedCount === rows.length,
+    maxMaterializedRows: maxProjectionReadRows,
+    projectionRowsRead,
+    idRequests,
+    idsRead,
+  };
+}
+
+async function runLongRange(rows) {
+  const fx = createFakeEngine();
+  let maxProjectionReadRows = 0;
+  let projectionRowsRead = 0;
+  let indexLookups = 0;
+  let idRequests = 0;
+  let idsRead = 0;
+  const snapshot = createFakeSnapshot({ rows, treeVersion: 1 });
+  fx.emitDelta({
+    ...snapshot,
+    visibleRows: (options) => {
+      if (options.limit !== Number.MAX_SAFE_INTEGER) {
+        maxProjectionReadRows = Math.max(maxProjectionReadRows, options.limit);
+        projectionRowsRead += options.limit;
+      }
+      return snapshot.visibleRows(options);
+    },
+    visibleRowIndex: (id, expanded, includeIgnored) => {
+      indexLookups += 1;
+      return snapshot.visibleRowIndex(id, expanded, includeIgnored);
+    },
+    visibleRowIds: (options) => {
+      idRequests += 1;
+      idsRead += options.limit;
+      return snapshot.visibleRowIds(options);
+    },
+  });
+  const { container, root } = mountContainer();
+  const obs = makeObservers({ height: 600 });
+  let selectedCount = 0;
+
+  await act(async () => {
+    root.render(
+      createElement(FileTree, {
+        fx,
+        ariaLabel: 'bench-long-range-selection',
+        rowHeight: 22,
+        overscan: 10,
+        onSelectionChange: (ids) => {
+          selectedCount = ids.size;
+        },
+        __testObserveElementRect: obs.observeElementRect,
+        __testObserveElementOffset: obs.observeElementOffset,
+      }),
+    );
+  });
+  const targetIndex = 100_000;
+  await act(async () => obs.setOffset(targetIndex * 22));
+  const tree = container.querySelector('[role="tree"]');
+  const target = container.querySelector(
+    `[data-mille-row-id="${rows[targetIndex]?.id}"]`,
+  );
+  if (!tree || !target) throw new Error('long-range bench target is not mounted');
+  await act(async () => dispatchClick(target));
+  maxProjectionReadRows = 0;
+  projectionRowsRead = 0;
+  indexLookups = 0;
+  idRequests = 0;
+  idsRead = 0;
+
+  const result = await measureAsync('Shift+End range 100k→500k', async () => {
+    await act(async () => {
+      tree.dispatchEvent(
+        new hdWindow.KeyboardEvent('keydown', {
+          key: 'End',
+          shiftKey: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    });
+  });
+  const rendered = container.querySelectorAll('[role="treeitem"]').length;
+  const expectedIds = rows.length - targetIndex;
+
+  await act(async () => root.unmount());
+  container.remove();
+  return {
+    ...result,
+    rendered,
+    interactionPreserved: selectedCount === expectedIds,
+    maxMaterializedRows: maxProjectionReadRows,
+    projectionRowsRead,
+    indexLookups,
+    idRequests,
+    idsRead,
+    expectedIds,
+  };
+}
+
 async function runTypeahead(rows, { key, label, expectMatch }) {
   const fx = createFakeEngine();
   let maxProjectionReadRows = 0;
@@ -945,6 +1112,10 @@ async function main() {
   results.push(renameResult);
   const keyboardResult = await runKeyboardNavigation(rows);
   results.push(keyboardResult);
+  const selectAllResult = await runSelectAll(rows);
+  results.push(selectAllResult);
+  const longRangeResult = await runLongRange(rows);
+  results.push(longRangeResult);
   const typeaheadNearResult = await runTypeahead(rows, {
     key: 'n',
     label: 'typeahead near match (500k rows)',
@@ -976,6 +1147,12 @@ async function main() {
   );
   console.log(
     `      Keyboard projection reads: ${keyboardResult.projectionRowsRead.toLocaleString()} rows total, ${keyboardResult.maxMaterializedRows} max per read.`,
+  );
+  console.log(
+    `      Select All projection reads: ${selectAllResult.idRequests} id-only request carrying ${selectAllResult.idsRead.toLocaleString()} ids; ${selectAllResult.projectionRowsRead.toLocaleString()} viewport rows.`,
+  );
+  console.log(
+    `      Long-range selection reads: ${longRangeResult.indexLookups} exact index queries + ${longRangeResult.idRequests} id-only request carrying ${longRangeResult.idsRead.toLocaleString()} ids; ${longRangeResult.projectionRowsRead.toLocaleString()} row payloads.`,
   );
   console.log(
     `      Typeahead projection reads: near=${typeaheadNearResult.projectionRowsRead.toLocaleString()}, miss=${typeaheadMissResult.projectionRowsRead.toLocaleString()} rows; ${Math.max(typeaheadNearResult.maxMaterializedRows, typeaheadMissResult.maxMaterializedRows)} max per read.`,
@@ -1020,6 +1197,33 @@ async function main() {
   ) {
     throw new Error(
       `keyboard navigation read max=${keyboardResult.maxMaterializedRows}, total=${keyboardResult.projectionRowsRead} rows`,
+    );
+  }
+  if (!selectAllResult.interactionPreserved) {
+    throw new Error('Select All did not select every visible id');
+  }
+  if (
+    selectAllResult.idRequests !== 1 ||
+    selectAllResult.idsRead !== rows.length ||
+    selectAllResult.maxMaterializedRows > 100 ||
+    selectAllResult.projectionRowsRead > 100
+  ) {
+    throw new Error(
+      `Select All used ${selectAllResult.idRequests} id requests / ${selectAllResult.idsRead} ids and ${selectAllResult.projectionRowsRead} row payloads`,
+    );
+  }
+  if (!longRangeResult.interactionPreserved) {
+    throw new Error('Shift+End did not select the complete long range');
+  }
+  if (
+    longRangeResult.indexLookups !== 2 ||
+    longRangeResult.idRequests !== 1 ||
+    longRangeResult.idsRead !== longRangeResult.expectedIds ||
+    longRangeResult.maxMaterializedRows > 100 ||
+    longRangeResult.projectionRowsRead > 100
+  ) {
+    throw new Error(
+      `long range used ${longRangeResult.indexLookups} indexes / ${longRangeResult.idRequests} id requests / ${longRangeResult.idsRead} ids and ${longRangeResult.projectionRowsRead} row payloads`,
     );
   }
   if (!typeaheadNearResult.interactionPreserved) {

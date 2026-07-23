@@ -253,11 +253,13 @@ type NativeSnapshot = {
     limit: number;
     includeIgnored?: boolean;
   }): VisibleRow[];
-  visibleRowIndex(
-    id: number,
-    expanded: number[],
-    includeIgnored?: boolean,
-  ): number | null;
+  visibleRowIds(options: {
+    expanded: number[];
+    offset: number;
+    limit: number;
+    includeIgnored?: boolean;
+  }): number[];
+  visibleRowIndex(id: number, expanded: number[], includeIgnored?: boolean): number | null;
   visibleRowsBin(options: {
     expanded: number[];
     offset: number;
@@ -918,6 +920,24 @@ export class MirrorSnapshot {
       nativeOpts.includeIgnored = options.includeIgnored;
     }
     return this.inner.visibleRows(nativeOpts);
+  }
+
+  /** ID-only projection path for selection and other identity consumers. */
+  visibleRowIds(options: VisibleRowsOptions): readonly EntryId[] {
+    const nativeOpts: {
+      expanded: number[];
+      offset: number;
+      limit: number;
+      includeIgnored?: boolean;
+    } = {
+      expanded: [...options.expanded],
+      offset: options.offset,
+      limit: options.limit,
+    };
+    if (options.includeIgnored !== undefined) {
+      nativeOpts.includeIgnored = options.includeIgnored;
+    }
+    return this.inner.visibleRowIds(nativeOpts);
   }
 
   visibleRowIndex(

@@ -69,8 +69,12 @@ export interface KeyboardRowLookup {
   readonly rowCount?: number;
   /** Read a bounded ordered window. Falls back to `visibleRows.slice`. */
   readRows?(offset: number, limit: number): readonly VisibleRow[];
+  /** Read ordered identities without complete row payloads. */
+  readRowIds?(offset: number, limit: number): readonly EntryId[];
   /** Resolve an id near its expected index. Falls back to a full-order scan. */
   findRowIndex?(id: EntryId, hintIndex?: number): number;
+  /** Resolve an exact id position without nearby row-window probes. */
+  findExactRowIndex?(id: EntryId, hintIndex?: number): number;
 }
 
 export interface UseFileTreeKeyboardOptions {
@@ -165,6 +169,14 @@ function readRowWindow(
   return rows.readRows?.(offset, limit) ?? rows.visibleRows.slice(offset, offset + limit);
 }
 
+function readRowIds(
+  rows: KeyboardRowLookup,
+  offset: number,
+  limit: number,
+): readonly EntryId[] {
+  return rows.readRowIds?.(offset, limit) ?? visibleIds(readRowWindow(rows, offset, limit));
+}
+
 function lookupRowIndex(
   rows: KeyboardRowLookup,
   id: EntryId | null,
@@ -174,17 +186,27 @@ function lookupRowIndex(
   return rows.findRowIndex?.(id, hintIndex) ?? findRowIndex(rows.visibleRows, id);
 }
 
+function lookupExactRowIndex(
+  rows: KeyboardRowLookup,
+  id: EntryId,
+  hintIndex: number,
+): number {
+  return rows.findExactRowIndex?.(id, hintIndex) ?? lookupRowIndex(rows, id, hintIndex);
+}
+
 function readSelectionRange(
   rows: KeyboardRowLookup,
   fromId: EntryId,
   toId: EntryId,
   hintIndex: number,
 ): readonly EntryId[] {
-  const fromIndex = lookupRowIndex(rows, fromId, hintIndex);
-  const toIndex = lookupRowIndex(rows, toId, hintIndex);
-  if (fromIndex === -1 || toIndex === -1) return visibleIds(rows.visibleRows);
+  const fromIndex = lookupExactRowIndex(rows, fromId, hintIndex);
+  const toIndex = lookupExactRowIndex(rows, toId, hintIndex);
+  if (fromIndex === -1 || toIndex === -1) {
+    return readRowIds(rows, 0, lookupRowCount(rows));
+  }
   const start = Math.min(fromIndex, toIndex);
-  return visibleIds(readRowWindow(rows, start, Math.abs(toIndex - fromIndex) + 1));
+  return readRowIds(rows, start, Math.abs(toIndex - fromIndex) + 1);
 }
 
 /** Dispatch a command through the registry; swallow missing-command errors. */
@@ -632,9 +654,7 @@ export function useFileTreeKeyboard(
         case 'tree.selectAll': {
           event.preventDefault();
           if (!multiSelect) return;
-          const all = new Set<EntryId>();
-          for (const r of rows.visibleRows) all.add(r.id);
-          selection.setSelection(all);
+          selection.setSelection(new Set(readRowIds(rows, 0, rowCount)));
           return;
         }
         case 'tree.focusFilter': {

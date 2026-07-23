@@ -95,6 +95,7 @@ test('visibleRows: expanded root emits children in sorted order', () => {
   assert.equal(rows[2].depth, 1);
   assert.equal(rows[3].name, 'c.txt');
   assert.equal(rows[3].depth, 1);
+  assert.deepEqual(snap.visibleRowIds({ expanded: new Set([1]), offset: 1, limit: 2 }), [11, 12]);
   assert.equal(snap.visibleRowIndex(1, new Set([1])), 0);
   assert.equal(snap.visibleRowIndex(12, new Set([1])), 2);
   assert.equal(snap.visibleRowIndex(12, new Set()), null);

@@ -246,6 +246,8 @@ export interface MirrorSnapshot {
 
   /** O(log n) in the sum-tree; O(1) from the mirror in typical cases. */
   visibleRows(options: VisibleRowsOptions): readonly VisibleRow[];
+  /** Visible ids for selection-only consumers, without complete row payloads. */
+  visibleRowIds(options: VisibleRowsOptions): readonly EntryId[];
   visibleRowCount(expanded: ReadonlySet<EntryId>, includeIgnored?: boolean): VisibleRowCount;
   /** Exact index in the flattened visible order via one DFS, or `null` when not visible. */
   visibleRowIndex(

@@ -96,6 +96,11 @@ export interface TransferOptions {
   readonly collision?: 'error' | 'rename';
 }
 
+export interface ResyncOptions {
+  /** Reconcile every known descendant. Defaults to direct children only. */
+  readonly recursive?: boolean;
+}
+
 export interface Decoration {
   readonly badge?: string;
   readonly color?: string;
@@ -197,6 +202,8 @@ type NativeFx = {
   reorderRoots(ids: number[]): number;
   updateWorkspaceRoots(roots: string[]): Promise<number>;
   refreshWorkspaceRoots(): Promise<number>;
+  resync(id: number, recursive?: boolean): Promise<number>;
+  resyncWorkspace(): Promise<number>;
   populateFromRoots(): Promise<number>;
   // Phase B2 — bounded-depth walk of a single path. Older native builds
   // (pre-v0.2) may not ship this method; the TS wrapper guards with
@@ -507,6 +514,19 @@ export class FileExplorer {
    */
   refreshWorkspaceRoots(): Promise<number> {
     return wrap(this.nativeFx.refreshWorkspaceRoots());
+  }
+
+  /**
+   * Reconcile one entry against disk through the watcher-tested scanner.
+   * Files refresh through their containing directory.
+   */
+  resync(id: EntryId, options?: ResyncOptions): Promise<number> {
+    return wrap(this.nativeFx.resync(id, options?.recursive ?? false));
+  }
+
+  /** Reconcile every configured root and descendant against disk. */
+  resyncWorkspace(): Promise<number> {
+    return wrap(this.nativeFx.resyncWorkspace());
   }
 
   get capabilities(): number {

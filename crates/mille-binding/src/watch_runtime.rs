@@ -32,14 +32,14 @@ pub(crate) struct WatchConfig {
 }
 
 #[derive(Default)]
-struct ReconcileOutcome {
-    changed_ids: HashSet<EntryId>,
-    child_set_changed: HashSet<EntryId>,
-    coarse_ids: HashSet<EntryId>,
+pub(crate) struct ReconcileOutcome {
+    pub(crate) changed_ids: HashSet<EntryId>,
+    pub(crate) child_set_changed: HashSet<EntryId>,
+    pub(crate) coarse_ids: HashSet<EntryId>,
 }
 
 impl ReconcileOutcome {
-    fn merge(&mut self, other: Self) {
+    pub(crate) fn merge(&mut self, other: Self) {
         self.changed_ids.extend(other.changed_ids);
         self.child_set_changed.extend(other.child_set_changed);
         self.coarse_ids.extend(other.coarse_ids);
@@ -396,7 +396,7 @@ fn containing_root(roots: &[PathBuf], path: &Path) -> Option<PathBuf> {
 /// Reconcile one directory against disk. `depth=Some(1)` updates the
 /// directory and its direct children; `None` performs a complete subtree
 /// reconciliation for overflow recovery.
-fn reconcile_directory(
+pub(crate) fn reconcile_directory(
     store: &EntryStore,
     config: &WatchConfig,
     directory: &Path,

@@ -104,6 +104,16 @@ test('setExpanded + setViewport record their calls without notifying', () => {
   assert.equal(fx.calls.setViewport[0].limit, 100);
 });
 
+test('resync controls record scope without synthesizing disk changes', async () => {
+  const fx = createFakeEngine();
+  fx.emitDelta(createFakeSnapshot({ treeVersion: 7 }));
+  assert.equal(await fx.resync(42, { recursive: true }), 7);
+  assert.equal(await fx.resyncWorkspace(), 7);
+  assert.deepEqual(fx.calls.resync, [{ id: 42, recursive: true }]);
+  assert.deepEqual(fx.calls.resyncWorkspace, [{}]);
+  assert.equal(fx.getSnapshot().treeVersion, 7);
+});
+
 test('reset clears listeners and call records', () => {
   const fx = createFakeEngine();
   let fired = 0;

@@ -4,6 +4,17 @@
 
 ### Added
 
+- **Root-aware scoped-search handoff** — folder menus add Find in Folder,
+  Include in Search, and Exclude from Search. `onSearchScope` receives a
+  provider-neutral, bounded, atomic request containing exact root-aware
+  targets, including multi-selection for include/exclude. The host remains
+  responsible for translating literals to its content-search provider.
+- **Authoritative refresh and controlled collapse** — files/folders expose
+  Refresh from Disk, roots expose Refresh Workspace, and hosts can intercept
+  both through `onRefresh`. Collapse All and the new Collapse Descendants
+  command now update the tree's actual React expansion state; the imperative
+  handle adds `collapseDescendants(id)`. A 100,000-wide/10,000-deep benchmark
+  guards descendant-state computation.
 - **Root-aware file-system host actions** — the default command registry and
   context menu now provide Copy Absolute Path, Copy Workspace-Relative Path,
   Reveal in File Manager, Open Containing Folder, and Open in Terminal.

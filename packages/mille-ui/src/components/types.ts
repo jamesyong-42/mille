@@ -39,6 +39,8 @@ import type {
   ActiveEntryResolution,
 } from '../active-entry-policy.js';
 import type { FileActionTarget } from '../file-actions.js';
+import type { FileSearchRequest } from '../file-search.js';
+import type { FileRefreshTarget } from '../commands/types.js';
 
 // Observer signatures mirror virtual-core's. Declared here rather
 // than in the hook to avoid a component → hook → component cycle.
@@ -82,6 +84,13 @@ export interface FileTreeEngine {
     readonly limit: number;
     readonly overscan?: number;
   }): void;
+  /** Optional authoritative disk reconciliation used by refresh commands. */
+  resync?(
+    id: EntryId,
+    options?: { readonly recursive?: boolean },
+  ): Promise<number>;
+  /** Optional complete-workspace disk reconciliation. */
+  resyncWorkspace?(): Promise<number>;
 }
 
 /**
@@ -335,6 +344,9 @@ export interface FileTreeRef {
 
   /** Collapse every currently expanded folder, including workspace roots. */
   collapseAll(): void;
+
+  /** Collapse expanded descendants while preserving the target folder itself. */
+  collapseDescendants(id: EntryId): void;
 
   /**
    * Expand multiple known folders in one state transition. Useful for hosts
@@ -596,6 +608,8 @@ export interface FileTreeProps {
   readonly onRevealInFileManager?: (target: FileActionTarget) => void | Promise<void>;
   readonly onOpenContainingFolder?: (target: FileActionTarget) => void | Promise<void>;
   readonly onOpenTerminal?: (target: FileActionTarget) => void | Promise<void>;
+  readonly onRefresh?: (target: FileRefreshTarget) => void | Promise<void>;
+  readonly onSearchScope?: (request: FileSearchRequest) => void | Promise<void>;
 
   // ─── Phase 10: decoration pipeline ───────────────────────────────
   /**

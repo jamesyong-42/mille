@@ -619,6 +619,84 @@ impl FileExplorer {
         Ok(version as u32)
     }
 
+    /// Authoritatively reconcile one known entry against disk.
+    ///
+    /// Directories reconcile their direct children by default or their complete
+    /// known subtree when `recursive` is true. Files reconcile through their
+    /// containing directory so atomic replacement, deletion, and metadata
+    /// changes all use the same watcher-tested path.
+    #[napi(js_name = "resync")]
+    pub async fn resync(&self, id: i64, recursive: Option<bool>) -> Result<u32> {
+        self.ensure_watcher()?;
+        let entry_id = EntryId(id as u64);
+        let entry = self.store.get_by_id(entry_id).ok_or_else(|| {
+            fx_error_to_napi(FxError::InvalidInput(format!(
+                "id {} not found in snapshot",
+                id
+            )))
+        })?;
+        let path = self.resolve_path_for_id(id)?;
+        let directory_like = entry.kind == EntryKind::Directory
+            || entry.symlink_target_is_dir == Some(true)
+            || entry.parent_id.is_none();
+        let (scope, depth) = if directory_like {
+            (
+                path,
+                if recursive.unwrap_or(false) {
+                    None
+                } else {
+                    Some(1)
+                },
+            )
+        } else {
+            entry.parent_id.ok_or_else(|| {
+                fx_error_to_napi(FxError::InvalidInput(format!(
+                    "file id {} has no containing directory",
+                    id
+                )))
+            })?;
+            let parent_path = path.parent().map(Path::to_path_buf).ok_or_else(|| {
+                fx_error_to_napi(FxError::InvalidInput(format!(
+                    "file id {} has no containing directory path",
+                    id
+                )))
+            })?;
+            (parent_path, Some(1))
+        };
+
+        let _policy_guard = self.policy_gate.lock();
+        let previous_version = self.store.tree_version();
+        let outcome = crate::watch_runtime::reconcile_directory(
+            &self.store,
+            &self.watch_config(),
+            &scope,
+            depth,
+        )
+        .map_err(fx_error_to_napi)?;
+        self.emit_reconcile_notice(previous_version, &outcome);
+        Ok(self.store.tree_version() as u32)
+    }
+
+    /// Authoritatively reconcile every configured root and all descendants.
+    /// One change notice covers the complete operation.
+    #[napi(js_name = "resyncWorkspace")]
+    pub async fn resync_workspace(&self) -> Result<u32> {
+        self.ensure_watcher()?;
+        let roots = self.roots.read().clone();
+        let _policy_guard = self.policy_gate.lock();
+        let previous_version = self.store.tree_version();
+        let config = self.watch_config();
+        let mut outcome = crate::watch_runtime::ReconcileOutcome::default();
+        for root in roots {
+            let root_outcome =
+                crate::watch_runtime::reconcile_directory(&self.store, &config, &root, None)
+                    .map_err(fx_error_to_napi)?;
+            outcome.merge(root_outcome);
+        }
+        self.emit_reconcile_notice(previous_version, &outcome);
+        Ok(self.store.tree_version() as u32)
+    }
+
     /// Bounded-depth walk starting at `path`. We filter the walk output
     /// against the current snapshot before calling `populate_store` to avoid
     /// unnecessary updates; the store also enforces path idempotence. This
@@ -1814,19 +1892,58 @@ impl FileExplorer {
             Arc::clone(&self.store),
             Arc::clone(&self.events),
             Arc::clone(&self.intents),
-            crate::watch_runtime::WatchConfig {
-                roots: Arc::clone(&self.roots),
-                respect_ignore: self.options.respect_ignore,
-                exclude_globs: Arc::clone(&self.exclude_globs),
-                policy_gate: Arc::clone(&self.policy_gate),
-                follow_symlinks: self.options.follow_symlinks,
-                walker_concurrency: self.options.walker_concurrency,
-                debounce_ms: self.options.watch_debounce_ms,
-            },
+            self.watch_config(),
         )
         .map_err(fx_error_to_napi)?;
         *guard = Some(watcher);
         Ok(())
+    }
+
+    fn watch_config(&self) -> crate::watch_runtime::WatchConfig {
+        crate::watch_runtime::WatchConfig {
+            roots: Arc::clone(&self.roots),
+            respect_ignore: self.options.respect_ignore,
+            exclude_globs: Arc::clone(&self.exclude_globs),
+            policy_gate: Arc::clone(&self.policy_gate),
+            follow_symlinks: self.options.follow_symlinks,
+            walker_concurrency: self.options.walker_concurrency,
+            debounce_ms: self.options.watch_debounce_ms,
+        }
+    }
+
+    fn emit_reconcile_notice(
+        &self,
+        previous_version: u64,
+        outcome: &crate::watch_runtime::ReconcileOutcome,
+    ) {
+        let version = self.store.tree_version();
+        if version == previous_version && outcome.coarse_ids.is_empty() {
+            return;
+        }
+        let notice = || ChangeNoticeJs {
+            tree_version: version as u32,
+            decoration_version: 0,
+            tree_changed: version != previous_version,
+            decorations_changed: false,
+            changed_ids: outcome
+                .changed_ids
+                .iter()
+                .map(|id| id.raw() as i64)
+                .collect(),
+            child_set_changed: outcome
+                .child_set_changed
+                .iter()
+                .map(|id| id.raw() as i64)
+                .collect(),
+            decoration_changed_ids: Vec::new(),
+            coarse_subtrees: outcome
+                .coarse_ids
+                .iter()
+                .map(|id| id.raw() as i64)
+                .collect(),
+        };
+        self.events.emit_change(Channel::Change, notice());
+        self.events.emit_change(Channel::ChangeTree, notice());
     }
 
     fn record_intent(&self, path: PathBuf, kind: IntentKind) {

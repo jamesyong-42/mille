@@ -41,7 +41,7 @@ import {
 } from './protocol.js';
 import type { Disposable, MessagePortLike } from './types.js';
 import type { ExplorerProjectionSettings } from './explorer-settings.js';
-import type { TransferOptions, Uri } from './client.js';
+import type { ResyncOptions, TransferOptions, Uri } from './client.js';
 
 interface PendingRequest {
   resolve: (value: unknown) => void;
@@ -335,6 +335,24 @@ export class PortFileExplorer {
     const result = await this.call('refreshWorkspaceRoots', []);
     if (typeof result !== 'number') {
       throw new FileSystemError('EUNKNOWN', 'invalid refreshWorkspaceRoots response');
+    }
+    return result;
+  }
+
+  /** Reconcile one entry and resolve after every attached mirror is current. */
+  async resync(id: number, options?: ResyncOptions): Promise<number> {
+    const result = await this.call('resync', [id, options?.recursive ?? false]);
+    if (typeof result !== 'number') {
+      throw new FileSystemError('EUNKNOWN', 'invalid resync response');
+    }
+    return result;
+  }
+
+  /** Reconcile every workspace root and resolve after every mirror is current. */
+  async resyncWorkspace(): Promise<number> {
+    const result = await this.call('resyncWorkspace', []);
+    if (typeof result !== 'number') {
+      throw new FileSystemError('EUNKNOWN', 'invalid resyncWorkspace response');
     }
     return result;
   }

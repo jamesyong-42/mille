@@ -136,6 +136,11 @@ export interface TransferOptions {
   readonly collision?: 'error' | 'rename';
 }
 
+export interface ResyncOptions {
+  /** Reconcile every known descendant. Defaults to direct children only. */
+  readonly recursive?: boolean;
+}
+
 // ─── Explorer construction ─────────────────────────────────────────────────
 
 export interface ExplorerOptions {
@@ -545,6 +550,15 @@ export declare class FileExplorer implements Disposable {
    * identity. Port calls resolve after every attached mirror is current.
    */
   refreshWorkspaceRoots(): Promise<TreeVersion>;
+
+  /**
+   * Reconcile one indexed entry against disk using the watcher reconciliation
+   * path. Files refresh through their containing directory.
+   */
+  resync(id: EntryId, options?: ResyncOptions): Promise<TreeVersion>;
+
+  /** Reconcile every configured root and descendant against disk. */
+  resyncWorkspace(): Promise<TreeVersion>;
 
   /** Async URI → entry. May return null if the URI isn't under a known root. */
   getByUri(uri: Uri): Promise<Entry | null>;

@@ -24,5 +24,10 @@ export type {
   CommandDisposable,
   CommandRegistry,
   CommandRegistryOptions,
+  FileRefreshTarget,
   HostHooks,
 } from './types.js';
+export type {
+  FileSearchRequest,
+  FileSearchRequestKind,
+} from '../file-search.js';

@@ -958,6 +958,51 @@ ms p95 against 0.02 ms. A 1,000-sample hostile 4,096-level chain measured
 refresh/resync, collapse descendants (collapse all already exists), and scoped
 find/search host hooks.
 
+Second baseline-action result (2026-07-23): authoritative refresh now reuses
+the watcher-tested native reconciliation scanner for a file's containing
+directory, a directory at bounded or recursive depth, or every configured
+workspace root. Local no-ops preserve the tree version and emit no change;
+port calls flush the result to all attached mirrors before resolving. The
+default context menu exposes subtree/workspace refresh, the playground adds a
+whole-workspace toolbar action and visible status, and hosts can intercept the
+typed request through `onRefresh`.
+
+Collapse All and the new Collapse Descendants command now mutate the
+`FileTree`'s controlled React expansion state rather than relying on an
+engine-side hint; the imperative handle exposes the same descendant-preserving
+operation. Three native/port resync integration tests, eight focused UI tests,
+and the existing suites pass at 351/351 UI and 23/23 playground. The full core
+run passes 275/280: all three new resync tests pass, while four existing
+watcher-only integration cases time out in this sandbox and one test remains
+intentionally skipped. Production native, TypeScript, UI, and Electron builds
+pass. The headless bundle remains 13.84 KB gzip under its 14 KB ratchet and
+the styled index is 31.96 KB under 75 KB.
+
+On a 5,100-file temporary workspace, replacing 100 files per sample measured
+authoritative recursive resync at 55.09 ms median / 58.28 ms p95 and unchanged
+resync at 22.95/23.87 ms, under 100/50 ms gates. Controlled descendant
+collection measured 3.48/5.67 ms across 100,000 expanded siblings and
+0.97/2.60 ms across a 10,000-level chain, under 15/8 ms gates. Remaining Phase
+3.5 work is scoped find/search host hooks.
+
+Final baseline-action result (2026-07-23): folder context menus now expose
+Find in Folder, Include in Search, and Exclude from Search through one typed
+host callback. Requests retain owning-root identity and literal
+root-qualified/root-relative paths instead of imposing local glob syntax on
+indexed or remote search providers. Include/exclude accepts the active
+multi-selection, de-duplicates identities, rejects any invalid member
+atomically, and caps the handoff at 1,024 targets. The playground displays the
+exact request through its existing status surface.
+
+Pure request, command-delegation, and live-menu integration coverage brings the
+complete UI suite to 354/354; playground remains 23/23, both TypeScript
+configs and the production Electron build pass. The 100,000-sample
+single-folder gate measured 0.000250 ms median / 0.000334 ms p95. A 100-sample
+batch gate materializing 1,000 folder targets measured 0.274916/0.389000 ms,
+under 0.02/5 ms p95 ceilings. Headless remains 13.84 KB gzip; the styled index
+is 32.22 KB under 75 KB. This completes the planned Phase 3.5 baseline-action
+scope; full indexed content search remains Phase 5 integration work.
+
 ### Exit criteria
 
 - Settings persist and migrate across restarts.

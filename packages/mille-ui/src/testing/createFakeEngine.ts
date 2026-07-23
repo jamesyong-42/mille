@@ -87,6 +87,8 @@ export interface FakeEngineCalls {
   }>;
   setExpanded: Array<{ add: readonly EntryId[]; remove: readonly EntryId[] }>;
   setViewport: Array<{ offset: number; limit: number; overscan: number | undefined }>;
+  resync: Array<{ id: EntryId; recursive: boolean }>;
+  resyncWorkspace: Array<Record<string, never>>;
   search: Array<{ query: string; options: SearchOptions | undefined; aborted: boolean }>;
 }
 
@@ -101,6 +103,8 @@ export interface FakeEngine {
   on(event: 'change', listener: (n?: unknown) => void): { dispose(): void };
   setExpanded(diff: { add?: readonly EntryId[]; remove?: readonly EntryId[] }): void;
   setViewport(opts: { offset: number; limit: number; overscan?: number }): void;
+  resync(id: EntryId, options?: { readonly recursive?: boolean }): Promise<number>;
+  resyncWorkspace(): Promise<number>;
 
   create(parentId: EntryId, name: string, kind: number): Promise<Entry>;
   rename(id: EntryId, newName: string): Promise<Entry>;
@@ -318,6 +322,8 @@ export function createFakeEngine(): FakeEngine {
     copy: [],
     setExpanded: [],
     setViewport: [],
+    resync: [],
+    resyncWorkspace: [],
     search: [],
   };
   // Phase 8 — scripted search results keyed by exact query string.
@@ -416,6 +422,14 @@ export function createFakeEngine(): FakeEngine {
         limit: opts.limit,
         overscan: opts.overscan,
       });
+    },
+    resync: async (id, options) => {
+      calls.resync.push({ id, recursive: options?.recursive ?? false });
+      return current.treeVersion;
+    },
+    resyncWorkspace: async () => {
+      calls.resyncWorkspace.push({});
+      return current.treeVersion;
     },
 
     // ─── Mutations — record + synthesize a minimal delta ──────────

@@ -187,10 +187,13 @@ export type {
   CommandDisposable,
   CommandRegistry,
   CommandRegistryOptions,
+  FileRefreshTarget,
   HostHooks,
 } from '../commands/types.js';
 export type { CommandRegistryHandle } from '../types.js';
 export type { FileActionSnapshot, FileActionTarget } from '../file-actions.js';
+export type { FileSearchRequest, FileSearchRequestKind } from '../file-search.js';
+export type { ExpansionSnapshot } from '../tree-expansion.js';
 export type {
   ActiveEntryAutoReveal,
   ActiveEntryClassificationInput,

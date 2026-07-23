@@ -24,6 +24,14 @@ function makeFakeFx() {
   return {
     calls,
     setExpanded: (diff) => { calls.push(['setExpanded', diff]); },
+    resync: async (id, options) => {
+      calls.push(['resync', { id, options }]);
+      return 1;
+    },
+    resyncWorkspace: async () => {
+      calls.push(['resyncWorkspace']);
+      return 1;
+    },
     create: async (parentId, name, kind) => {
       calls.push(['create', { parentId, name, kind }]);
       return { id: 999, parentId, name, kind, size: 0, mtimeMs: 0, ctimeMs: 0, isIgnored: false, isReadonly: false, isHidden: false };
@@ -71,6 +79,7 @@ function makeCtx({
   isMultiSelect = false,
   isRenaming = false,
   host = {},
+  expansion,
 } = {}) {
   return {
     fx,
@@ -82,6 +91,7 @@ function makeCtx({
     isMultiSelect,
     isRenaming,
     host,
+    ...(expansion ? { expansion } : {}),
   };
 }
 
@@ -200,6 +210,51 @@ describe('defaultCommands — tree structure', () => {
     assert.equal(fx.calls.length, 1);
     assert.equal(fx.calls[0][0], 'setExpanded');
     assert.deepEqual(fx.calls[0][1], { remove: [1] });
+  });
+
+  it('tree.collapseDescendants removes only expanded descendants through controlled state', () => {
+    const reg = createCommandRegistry(defaultCommands);
+    const fx = makeFakeFx();
+    const entries = new Map([
+      [1, folderEntry(1)],
+      [2, folderEntry(2, 1)],
+      [3, folderEntry(3, 2)],
+      [4, folderEntry(4, 1)],
+      [9, folderEntry(9)],
+    ]);
+    const expansionCalls = [];
+    reg.setContextProvider(() =>
+      makeCtx({
+        fx,
+        snapshot: makeSnapshot(entries),
+        focusedEntry: entries.get(2),
+        expansion: {
+          expandedIds: new Set([1, 2, 3, 4, 9]),
+          setExpanded: (diff) => expansionCalls.push(diff),
+        },
+      }),
+    );
+    reg.dispatch('tree.collapseDescendants');
+    assert.deepEqual(expansionCalls, [{ remove: [3] }]);
+    assert.deepEqual(fx.calls, []);
+  });
+
+  it('tree.collapseAll removes the actual controlled expansion set', () => {
+    const reg = createCommandRegistry(defaultCommands);
+    const fx = makeFakeFx();
+    const expansionCalls = [];
+    reg.setContextProvider(() =>
+      makeCtx({
+        fx,
+        expansion: {
+          expandedIds: new Set([1, 20, 300]),
+          setExpanded: (diff) => expansionCalls.push(diff),
+        },
+      }),
+    );
+    reg.dispatch('tree.collapseAll');
+    assert.deepEqual(expansionCalls, [{ remove: [1, 20, 300] }]);
+    assert.deepEqual(fx.calls, []);
   });
 
   it('tree.revealPath expands ancestor ids for the given id', () => {
@@ -400,6 +455,84 @@ describe('defaultCommands — mutations', () => {
       ],
     );
     assert.ok(calls.every(({ target }) => target.entry === entry));
+    assert.deepEqual(fx.calls, []);
+  });
+
+  it('refresh commands use host feedback hooks when supplied', async () => {
+    const reg = createCommandRegistry(defaultCommands);
+    const fx = makeFakeFx();
+    const refreshed = [];
+    reg.setContextProvider(() =>
+      makeCtx({
+        fx,
+        focusedEntry: folderEntry(2, 1),
+        host: { refresh: (target) => refreshed.push(target) },
+      }),
+    );
+    await reg.dispatch('tree.refresh');
+    await reg.dispatch('workspace.refresh');
+    assert.deepEqual(refreshed, [
+      { kind: 'subtree', id: 2, recursive: true },
+      { kind: 'workspace' },
+    ]);
+    assert.deepEqual(fx.calls, []);
+  });
+
+  it('refresh commands fall back to engine reconciliation', async () => {
+    const reg = createCommandRegistry(defaultCommands);
+    const fx = makeFakeFx();
+    reg.setContextProvider(() =>
+      makeCtx({ fx, focusedEntry: fileEntry(3, 2) }),
+    );
+    await reg.dispatch('tree.refresh');
+    await reg.dispatch('workspace.refresh');
+    assert.deepEqual(fx.calls, [
+      ['resync', { id: 3, options: { recursive: true } }],
+      ['resyncWorkspace'],
+    ]);
+  });
+
+  it('scoped search commands hand off root-aware single and multi-folder requests', async () => {
+    const reg = createCommandRegistry(defaultCommands);
+    const fx = makeFakeFx();
+    const root = folderEntry(1);
+    const src = folderEntry(2, 1);
+    const testFolder = folderEntry(3, 1);
+    const snapshot = makeSnapshot(
+      new Map([
+        [root.id, root],
+        [src.id, src],
+        [testFolder.id, testFolder],
+      ]),
+    );
+    const requests = [];
+    reg.setContextProvider(() =>
+      makeCtx({
+        fx,
+        snapshot,
+        focusedEntry: src,
+        selectedIds: new Set([src.id, testFolder.id]),
+        selectedEntries: [src, testFolder],
+        isMultiSelect: true,
+        host: { searchScope: (request) => requests.push(request) },
+      }),
+    );
+
+    await reg.dispatch('search.findInFolder');
+    await reg.dispatch('search.include');
+    await reg.dispatch('search.exclude', { ids: [testFolder.id] });
+
+    assert.deepEqual(
+      requests.map((request) => ({
+        kind: request.kind,
+        paths: request.targets.map((target) => target.rootRelativePath),
+      })),
+      [
+        { kind: 'findInFolder', paths: ['dir-2'] },
+        { kind: 'include', paths: ['dir-2', 'dir-3'] },
+        { kind: 'exclude', paths: ['dir-3'] },
+      ],
+    );
     assert.deepEqual(fx.calls, []);
   });
 });

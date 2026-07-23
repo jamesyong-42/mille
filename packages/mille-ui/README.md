@@ -188,6 +188,61 @@ before using clipboard, shell, or process-launch APIs. The Electron playground
 is a complete reference implementation and reports unsupported host actions in
 the UI.
 
+## Refresh and collapse
+
+The default context menu includes authoritative Refresh from Disk for files
+and folders, Refresh Workspace for roots, Collapse All, and Collapse
+Descendants. If the engine implements `resync` / `resyncWorkspace`, refresh
+works without extra wiring. A host can intercept it to add progress or status
+UI:
+
+```tsx
+import { FileTree, type FileRefreshTarget } from '@vibecook/mille-ui';
+
+async function refresh(target: FileRefreshTarget) {
+  if (target.kind === 'workspace') {
+    await fx.resyncWorkspace();
+  } else {
+    await fx.resync(target.id, { recursive: target.recursive });
+  }
+}
+
+<FileTree fx={fx} ariaLabel="Files" onRefresh={refresh} />;
+```
+
+Imperative consumers can call
+`treeRef.current?.collapseDescendants(folderId)` to preserve the target folder
+while closing every expanded folder below it. Both the command and imperative
+path update the tree's controlled React expansion state, so the result is
+immediate and does not depend on an engine-side expansion side effect. The
+Electron playground wires refresh to its existing status surface and provides
+a toolbar shortcut for whole-workspace refresh.
+
+## Hand off scoped content search
+
+Filename filtering/ranking stays on `FileTree`; content search belongs to the
+host's search provider. Folder context menus expose Find in Folder, Include in
+Search, and Exclude from Search through one provider-neutral callback:
+
+```tsx
+import { FileTree, type FileSearchRequest } from '@vibecook/mille-ui';
+
+function searchScope(request: FileSearchRequest) {
+  searchView.applyTreeScope(request.kind, request.targets);
+}
+
+<FileTree fx={fx} ariaLabel="Files" onSearchScope={searchScope} />;
+```
+
+Each target carries owning-root identity plus literal root-qualified and
+root-relative POSIX paths. No glob syntax is invented in renderer code; the
+host translates literals for ripgrep, an IDE index, a remote provider, or
+another search backend. Include/exclude requests preserve a selected folder
+set, de-duplicate identities, reject a missing/hostile member atomically, and
+are bounded to 1,024 targets. The Electron playground displays the exact
+handoff so integrations can verify the request before wiring a content-search
+surface.
+
 ## Entry points
 
 | Import                              | What you get                            |

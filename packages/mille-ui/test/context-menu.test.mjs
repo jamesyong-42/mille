@@ -358,6 +358,7 @@ test('menu commands execute with the tree live context and open intent', async (
   const registry = createCommandRegistry(defaultCommands);
   const opened = [];
   const copied = [];
+  const searchScopes = [];
 
   // Deliberately do not install a registry context provider. A menu item must
   // execute with the same live tree context that controlled its visibility.
@@ -378,6 +379,12 @@ test('menu commands execute with the tree live context and open intent', async (
           },
           onCopyPath: (target, kind) => {
             copied.push({ kind, path: target.rootQualifiedPath });
+          },
+          onSearchScope: (request) => {
+            searchScopes.push({
+              kind: request.kind,
+              paths: request.targets.map((target) => target.rootQualifiedPath),
+            });
           },
           __testObserveElementRect: obs.observeElementRect,
           __testObserveElementOffset: obs.observeElementOffset,
@@ -418,6 +425,19 @@ test('menu commands execute with the tree live context and open intent', async (
     }));
   });
   assert.deepEqual(copied, [{ kind: 'relative', path: 'alpha/banana.ts' }]);
+
+  await act(async () => { fireContextMenu(rowEls[0]); });
+  const findInFolderItem = hdDocument.body.querySelector(
+    '[data-mille-command-id="search.findInFolder"]',
+  );
+  assert.ok(findInFolderItem, 'Find in Folder should be visible for a directory');
+  await act(async () => {
+    findInFolderItem.dispatchEvent(new hdWindow.MouseEvent('click', {
+      bubbles: true,
+      cancelable: true,
+    }));
+  });
+  assert.deepEqual(searchScopes, [{ kind: 'findInFolder', paths: ['alpha'] }]);
 
   await act(async () => { root.unmount(); });
   container.remove();

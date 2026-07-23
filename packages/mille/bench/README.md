@@ -133,3 +133,39 @@ filesystem rename, one identity-preserving immutable store publication,
 complete reverse-path rewrite, and public path verification. It enforces a
 16 ms p95 gate; fixture size, warmups, samples, and budget use
 `MILLE_CROSS_ROOT_*`.
+
+## Authoritative subtree resync
+
+```sh
+pnpm bench:resync
+```
+
+The native harness builds a temporary 5,100-file workspace, replaces 100 files
+between each of 10 measured samples, and recursively reconciles the root
+through the public API. Every sample must converge to the exact disk child
+count. After three cache warmups, twenty unchanged scans must preserve the tree
+version. Reports include the maximum, while gates use nearest-rank p95. Default
+p95 gates are 100 ms for churn and 50 ms for a no-op; fixture size, warmups,
+sample count, and budgets use the `MILLE_RESYNC_*` environment variables.
+
+The related UI collapse-state gate lives in `@vibecook/mille-ui`:
+
+```sh
+pnpm bench:collapse
+```
+
+It removes expanded descendants from controlled React state across a
+100,000-sibling tree and a 10,000-level chain. Thirty samples enforce default
+p95 budgets of 15 ms wide and 8 ms deep. Override the fixture or budgets with
+the `MILLE_COLLAPSE_*` environment variables.
+
+The scoped-search handoff has a separate path-materialization gate:
+
+```sh
+pnpm bench:search-scope
+```
+
+It measures 100,000 single-folder requests and 100 batches containing 1,000
+selected folders. Every batch verifies exact target cardinality. Default p95
+budgets are 0.02 ms for one scope and 5 ms for the multi-scope batch; fixture,
+sample, and budget overrides use the `MILLE_SEARCH_SCOPE_*` variables.

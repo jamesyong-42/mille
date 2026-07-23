@@ -38,7 +38,7 @@ mature IDE explorer is the 10/10 reference point.
 | Accessibility                        |   6.0 | Good ARIA tree semantics and keyboard tests; no real assistive-technology matrix                                                                                                                                          |
 | Reliability and recovery             |   5.5 | Deterministic soak gates converge, but repeated Electron watcher stalls and direct native startup misses remain unresolved; crash/platform stress also remains                                                            |
 | Performance confidence               |   7.8 | Million-sibling structure, binary-wire, bounded-hydration, windowed 500,000-row UI, Criterion, and Electron gates cover payload, paint, projection, navigation, and retention                                             |
-| Explorer workflow breadth            |   4.6 | Versioned settings, native sort/visibility/exclusion/compaction/nesting, durable navigation, policy-driven active-file following, typed opens, and reference-host path/OS actions exist; broader workflows remain shallow |
+| Explorer workflow breadth            |   4.9 | Versioned settings, native sort/visibility/exclusion/compaction/nesting, durable navigation, active-file following, typed opens, path/OS actions, refresh/collapse, and scoped-search handoff exist; broader workflows remain shallow |
 
 As a reusable tree widget, Mille is approximately **6.5-7/10**. As a complete
 IDE explorer experience, it is approximately **5/10**.
@@ -267,6 +267,25 @@ and containment escapes. The full UI/playground suites pass at 343/343 and
 23/23; target materialization measured 0.000583 ms p95 for normal depth and
 0.288375 ms p95 at the bounded 4,096-level limit.
 
+Authoritative manual recovery is now integrated through the same native scanner
+used by watcher reconciliation. Files refresh through their containing
+directory, folders can refresh recursively, and a workspace refresh reconciles
+every root; port calls synchronize every renderer mirror before returning, and
+unchanged scans preserve the tree version. The default tree and playground
+expose these actions directly. Collapse All and Collapse Descendants now update
+the component's controlled expansion state, with an equivalent imperative
+handle. The 5,100-file resync gate measured 58.28 ms churn p95 and 23.87 ms
+no-op p95; the expansion-state gate measured 5.67 ms p95 at 100,000 siblings
+and 2.60 ms p95 at 10,000 levels.
+
+Scoped search now has an explicit provider boundary rather than another
+renderer convention. Find in Folder and multi-folder include/exclude commands
+produce bounded, atomic, root-aware literal targets; hosts translate them to
+their local index, ripgrep, or remote provider. The playground exposes the
+handoff, but it deliberately does not pretend to be a complete content-search
+product. Single-folder request materialization measured 0.000334 ms p95 and a
+1,000-folder batch measured 0.389 ms p95.
+
 ## What is already strong
 
 ### Engine and host architecture
@@ -406,7 +425,6 @@ model, Mille lacks or delegates most of the following:
 
 - Open Files, Changed Files, Problems, tests, and custom scope views;
 - source-control actions and a file timeline/history surface;
-- refresh/resync, collapse-descendants, and scoped find/search actions;
 - refactoring and content-search integrations;
 - root management, per-root exclusions, and workspace persistence;
 - virtual and remote filesystem providers.

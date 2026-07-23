@@ -14,6 +14,11 @@ import type {
 } from '@vibecook/mille';
 import type { FileOpenEvent } from '../open-policy.js';
 import type { FileActionTarget } from '../file-actions.js';
+import type { FileSearchRequest } from '../file-search.js';
+
+export type FileRefreshTarget =
+  | Readonly<{ kind: 'subtree'; id: EntryId; recursive: true }>
+  | Readonly<{ kind: 'workspace' }>;
 
 /**
  * A single invocable command. Commands are the only mutation path in the
@@ -79,6 +84,10 @@ export interface HostHooks {
   openContainingFolder?(target: FileActionTarget): void | Promise<void>;
   /** Open a terminal at a directory, or at a file's parent directory. */
   openTerminalForEntry?(target: FileActionTarget): void | Promise<void>;
+  /** Reconcile one subtree or the complete workspace through the host. */
+  refresh?(target: FileRefreshTarget): void | Promise<void>;
+  /** Open or refine the host's content-search UI with exact tree scopes. */
+  searchScope?(request: FileSearchRequest): void | Promise<void>;
   /**
    * Open a terminal rooted at the given absolute path.
    * @deprecated Prefer `openTerminalForEntry`; retained for host compatibility.
@@ -104,6 +113,18 @@ export interface CommandContext {
   readonly isMultiSelect: boolean;
   readonly isRenaming: boolean;
   readonly host: HostHooks;
+  /**
+   * Optional controlled expansion surface. Styled trees supply this so menu
+   * commands update React state first; headless registries may omit it and
+   * delegate directly to `fx.setExpanded`.
+   */
+  readonly expansion?: {
+    readonly expandedIds: ReadonlySet<EntryId>;
+    setExpanded(diff: {
+      readonly add?: readonly EntryId[];
+      readonly remove?: readonly EntryId[];
+    }): void;
+  };
   /**
    * Phase 7 — ids currently marked as "cut" in the in-app clipboard.
    * Disjoint from `copyIds`. Read by `file.paste`; drives the

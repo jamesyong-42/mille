@@ -85,8 +85,16 @@ export type {
   UseAutoExpandDwellOptions,
 } from './hooks/index.js';
 export type { CommandRegistryHandle } from './types.js';
+export type { FileRefreshTarget } from './commands/types.js';
 export { fileActionTargetForId } from './file-actions.js';
 export type { FileActionSnapshot, FileActionTarget } from './file-actions.js';
+export { fileSearchRequestForIds } from './file-search.js';
+export type {
+  FileSearchRequest,
+  FileSearchRequestKind,
+} from './file-search.js';
+export type { ExpansionSnapshot } from './tree-expansion.js';
+export { expandedDescendantIds } from './tree-expansion.js';
 export {
   classifyActiveEntry,
   normalizeActiveEntryTarget,

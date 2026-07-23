@@ -1026,6 +1026,23 @@ mounts and permission changes. Port refreshes resolve after all attached
 mirrors are current. The default `FileTree` renders unavailable roots as
 disabled, non-draggable folder rows with no disclosure affordance.
 
+Use authoritative reconciliation when files may have changed without a usable
+watch event:
+
+```ts
+await fx.resync(folderId, { recursive: true }); // complete subtree
+await fx.resync(fileId); // containing directory
+await fx.resyncWorkspace(); // every configured root
+```
+
+`resync()` uses the same bounded scanner and policy gates as watcher recovery.
+A directory refresh without `recursive: true` reconciles its immediate
+children; a file refresh reconciles its containing directory so additions,
+deletions, and renames beside that file are not missed. `resyncWorkspace()`
+walks every configured root. Local calls emit at most one tree change, and a
+no-op preserves the tree version. Port calls resolve only after every attached
+mirror has received the authoritative result.
+
 Moves and copies deny cross-root transfers unless the call opts in:
 
 ```ts

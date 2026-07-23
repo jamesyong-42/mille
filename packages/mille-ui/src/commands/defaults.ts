@@ -16,6 +16,11 @@
 import type { Entry, EntryId } from '@vibecook/mille';
 import { commandOpenEvent } from '../open-policy.js';
 import { fileActionTargetForId } from '../file-actions.js';
+import {
+  fileSearchRequestForIds,
+  type FileSearchRequestKind,
+} from '../file-search.js';
+import { expandedDescendantIds } from '../tree-expansion.js';
 import type { Command } from './types.js';
 
 // Local mirror of api.d.ts `EntryKind`. The engine ships `entry.kind` as a
@@ -38,7 +43,7 @@ const expandCommand: Command = {
   run(ctx, args) {
     const ids = resolveIds(args, ctx.focusedId);
     if (ids.length === 0) return;
-    ctx.fx.setExpanded({ add: ids });
+    setExpanded(ctx, { add: ids });
   },
 };
 
@@ -50,7 +55,7 @@ const collapseCommand: Command = {
   run(ctx, args) {
     const ids = resolveIds(args, ctx.focusedId);
     if (ids.length === 0) return;
-    ctx.fx.setExpanded({ remove: ids });
+    setExpanded(ctx, { remove: ids });
   },
 };
 
@@ -67,7 +72,7 @@ const expandAllCommand: Command = {
     const rootId = resolveSingleId(args, ctx.focusedId);
     if (rootId === null) return;
     const ids = collectDescendantFolders(ctx, rootId);
-    ctx.fx.setExpanded({ add: ids });
+    setExpanded(ctx, { add: ids });
   },
 };
 
@@ -75,13 +80,27 @@ const collapseAllCommand: Command = {
   id: 'tree.collapseAll',
   label: 'Collapse All',
   run(ctx) {
-    // Collapse every folder currently known in the snapshot.
-    const ids: EntryId[] = [];
-    for (const root of ctx.snapshot.roots()) {
-      collectAllFolders(ctx, root.id, ids);
-    }
+    const ids = ctx.expansion ? [...ctx.expansion.expandedIds] : ctx.snapshot.roots().map((r) => r.id);
     if (ids.length === 0) return;
-    ctx.fx.setExpanded({ remove: ids });
+    setExpanded(ctx, { remove: ids });
+  },
+};
+
+const collapseDescendantsCommand: Command = {
+  id: 'tree.collapseDescendants',
+  label: 'Collapse Descendants',
+  group: '1_navigation',
+  when: 'focusedIs.folder',
+  run(ctx, args) {
+    const rootId = resolveSingleId(args, ctx.focusedId);
+    if (rootId === null) return;
+    const ids = expandedDescendantIds(
+      ctx.snapshot,
+      ctx.expansion?.expandedIds ?? new Set<EntryId>(),
+      rootId,
+    );
+    if (ids.length === 0) return;
+    setExpanded(ctx, { remove: ids });
   },
 };
 
@@ -125,6 +144,7 @@ export const treeDefaults: readonly Command[] = [
   collapseCommand,
   expandAllCommand,
   collapseAllCommand,
+  collapseDescendantsCommand,
   selectAllCommand,
   revealPathCommand,
 ];
@@ -388,6 +408,77 @@ const openTerminalCommand: Command = {
   },
 };
 
+const refreshSubtreeCommand: Command = {
+  id: 'tree.refresh',
+  label: 'Refresh from Disk',
+  group: '4_path_actions',
+  when: '(focusedIs.file || focusedIs.folder) && !focusedIs.root',
+  visibleInContextMenu: (ctx) =>
+    ctx.host.refresh !== undefined ||
+    typeof (ctx.fx as unknown as { resync?: unknown }).resync === 'function',
+  async run(ctx, args) {
+    const id = resolveSingleId(args, ctx.focusedId);
+    if (id === null) return;
+    if (ctx.host.refresh) {
+      await ctx.host.refresh({ kind: 'subtree', id, recursive: true });
+      return;
+    }
+    await ctx.fx.resync(id, { recursive: true });
+  },
+};
+
+const refreshWorkspaceCommand: Command = {
+  id: 'workspace.refresh',
+  label: 'Refresh Workspace',
+  group: '4_path_actions',
+  when: 'focusedIs.root',
+  visibleInContextMenu: (ctx) =>
+    ctx.host.refresh !== undefined ||
+    typeof (ctx.fx as unknown as { resyncWorkspace?: unknown }).resyncWorkspace === 'function',
+  async run(ctx) {
+    if (ctx.host.refresh) {
+      await ctx.host.refresh({ kind: 'workspace' });
+      return;
+    }
+    await ctx.fx.resyncWorkspace();
+  },
+};
+
+const findInFolderCommand: Command = {
+  id: 'search.findInFolder',
+  label: 'Find in Folder…',
+  group: '5_search',
+  when: 'focusedIs.folder',
+  async run(ctx, args) {
+    const id = resolveSingleId(args, ctx.focusedId);
+    if (id === null) return;
+    const request = fileSearchRequestForIds(ctx.snapshot, 'findInFolder', [id]);
+    if (request !== null) await ctx.host.searchScope?.(request);
+  },
+};
+
+const includeInSearchCommand: Command = {
+  id: 'search.include',
+  label: 'Include in Search',
+  group: '5_search',
+  when: 'focusedIs.folder',
+  async run(ctx, args) {
+    const request = resolveFileSearchRequest(args, ctx, 'include');
+    if (request !== null) await ctx.host.searchScope?.(request);
+  },
+};
+
+const excludeFromSearchCommand: Command = {
+  id: 'search.exclude',
+  label: 'Exclude from Search',
+  group: '5_search',
+  when: 'focusedIs.folder',
+  async run(ctx, args) {
+    const request = resolveFileSearchRequest(args, ctx, 'exclude');
+    if (request !== null) await ctx.host.searchScope?.(request);
+  },
+};
+
 export const mutationDefaults: readonly Command[] = [
   createCommand,
   renameCommand,
@@ -402,6 +493,11 @@ export const mutationDefaults: readonly Command[] = [
   revealInFileManagerCommand,
   openContainingFolderCommand,
   openTerminalCommand,
+  refreshSubtreeCommand,
+  refreshWorkspaceCommand,
+  findInFolderCommand,
+  includeInSearchCommand,
+  excludeFromSearchCommand,
 ];
 
 export const defaultCommands: readonly Command[] = [
@@ -434,6 +530,22 @@ function resolveSingleId(args: unknown, focusedId: EntryId | null): EntryId | nu
 function resolveFileActionTarget(args: unknown, ctx: CommandContextLike) {
   const entry = resolveEntry(args, ctx);
   return entry === null ? null : fileActionTargetForId(ctx.snapshot, entry.id);
+}
+
+function resolveFileSearchRequest(
+  args: unknown,
+  ctx: CommandContextLike,
+  kind: FileSearchRequestKind,
+) {
+  let ids: readonly EntryId[];
+  if (isRecord(args) && Array.isArray(args['ids'])) {
+    ids = args['ids'].filter((value): value is EntryId => typeof value === 'number');
+  } else if (ctx.focusedId !== null && ctx.selectedIds.has(ctx.focusedId)) {
+    ids = [...ctx.selectedIds];
+  } else {
+    ids = ctx.focusedId === null ? [] : [ctx.focusedId];
+  }
+  return fileSearchRequestForIds(ctx.snapshot, kind, ids);
 }
 
 interface ParsedCreateArgs {
@@ -569,6 +681,17 @@ function collectAncestors(ctx: CommandContextLike, id: EntryId): readonly EntryI
     current = ctx.snapshot.getById(current.parentId);
   }
   return out;
+}
+
+function setExpanded(
+  ctx: CommandContextLike,
+  diff: { readonly add?: readonly EntryId[]; readonly remove?: readonly EntryId[] },
+): void {
+  if (ctx.expansion) {
+    ctx.expansion.setExpanded(diff);
+  } else {
+    ctx.fx.setExpanded(diff);
+  }
 }
 
 function isRecord(v: unknown): v is Record<string, unknown> {

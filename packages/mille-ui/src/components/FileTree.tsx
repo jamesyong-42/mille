@@ -88,6 +88,7 @@ import {
   shouldAutoRevealActiveEntry,
   type ActiveEntryAutoReveal,
 } from '../active-entry-policy.js';
+import { expandedDescendantIds } from '../tree-expansion.js';
 import type {
   AriaRowProps,
   FileTreeEngine,
@@ -174,6 +175,8 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
     onRevealInFileManager,
     onOpenContainingFolder,
     onOpenTerminal,
+    onRefresh,
+    onSearchScope,
     onClipboardChange,
     contextMenuSlot,
     contextMenuExtraItems,
@@ -940,6 +943,12 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
         ...(onOpenTerminal
           ? { openTerminalForEntry: onOpenTerminal }
           : null),
+        ...(onRefresh ? { refresh: onRefresh } : null),
+        ...(onSearchScope ? { searchScope: onSearchScope } : null),
+      },
+      expansion: {
+        expandedIds: expanded,
+        setExpanded: setManyExpanded,
       },
       cutIds: clipboard.cutIds,
       copyIds: clipboard.copyIds,
@@ -979,6 +988,10 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
     onRevealInFileManager,
     onOpenContainingFolder,
     onOpenTerminal,
+    onRefresh,
+    onSearchScope,
+    expanded,
+    setManyExpanded,
   ]);
 
   const contextMenuContent = useMemo<ReactNode>(() => {
@@ -1664,6 +1677,10 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
       collapseAll: () => {
         clearExpanded();
       },
+      collapseDescendants: (id: EntryId) => {
+        const remove = expandedDescendantIds(snapshot, expanded, id);
+        if (remove.length > 0) setManyExpanded({ remove });
+      },
       expand: (ids: readonly EntryId[]) => {
         setManyExpanded({ add: ids });
       },
@@ -1705,7 +1722,9 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
       filterState,
       clipboard,
       clearExpanded,
+      expanded,
       setManyExpanded,
+      snapshot,
       captureNavigationState,
       restoreNavigationState,
       focusFilter,

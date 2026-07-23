@@ -20,6 +20,8 @@ import {
   type ActiveEntryPolicy,
   type FileActionTarget,
   type FileOpenEvent,
+  type FileRefreshTarget,
+  type FileSearchRequest,
   type FileTreeNavigationState,
 } from '@vibecook/mille-ui';
 import type { IconTheme } from '@vibecook/mille-ui/icons';
@@ -174,6 +176,34 @@ function Explorer({ fx, root }: { fx: PortFileExplorer; root: string }): ReactEl
     },
     [root],
   );
+  const refreshFromDisk = useCallback(
+    async (target: FileRefreshTarget): Promise<void> => {
+      try {
+        if (target.kind === 'workspace') {
+          await fx.resyncWorkspace();
+          setFileActionStatus('Workspace refreshed from disk');
+        } else {
+          await fx.resync(target.id, { recursive: true });
+          setFileActionStatus('Subtree refreshed from disk');
+        }
+      } catch (error) {
+        setFileActionStatus(
+          `Refresh unavailable: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    },
+    [fx],
+  );
+  const handoffSearchScope = useCallback((request: FileSearchRequest): void => {
+    const paths = request.targets.map((target) => target.rootQualifiedPath).join(', ');
+    const label =
+      request.kind === 'findInFolder'
+        ? 'Find in folder'
+        : request.kind === 'include'
+          ? 'Search include'
+          : 'Search exclude';
+    setFileActionStatus(`${label}: ${paths}`);
+  }, []);
   useEffect(() => {
     if (fileActionStatus === null) return;
     const timer = window.setTimeout(() => setFileActionStatus(null), 4_000);
@@ -471,6 +501,15 @@ function Explorer({ fx, root }: { fx: PortFileExplorer; root: string }): ReactEl
             </button>
             <button
               type="button"
+              title="Refresh workspace from disk"
+              onClick={() => {
+                void refreshFromDisk({ kind: 'workspace' });
+              }}
+            >
+              ↻
+            </button>
+            <button
+              type="button"
               title="Reveal active file"
               disabled={activeTab.entryId === undefined}
               onClick={() => {
@@ -570,6 +609,8 @@ function Explorer({ fx, root }: { fx: PortFileExplorer; root: string }): ReactEl
                     performFileAction(target, 'openContainingFolder')
                   }
                   onOpenTerminal={(target) => performFileAction(target, 'openTerminal')}
+                  onRefresh={refreshFromDisk}
+                  onSearchScope={handoffSearchScope}
                 />
               )}
             </Profiler>

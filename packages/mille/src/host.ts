@@ -1173,6 +1173,40 @@ class FileExplorerHostImpl implements FileExplorerHost {
         await this.flushTickNow();
         return version;
       }
+      case 'resync': {
+        const [id, recursive] = args;
+        if (
+          typeof id !== 'number' ||
+          !Number.isSafeInteger(id) ||
+          id < 0 ||
+          typeof recursive !== 'boolean'
+        ) {
+          throw new Error('resync requires a non-negative integer id and recursive boolean');
+        }
+        const requested = this.explorer.getSnapshot().getById(id);
+        const markerId =
+          requested !== null && requested.kind !== 1 && requested.symlinkTargetIsDir !== true
+            ? (requested.parentId ?? id)
+            : id;
+        const version = await this.explorer.resync(id, { recursive });
+        this.prefetched.delete(markerId);
+        this.markSubtreeResynced(markerId);
+        await this.flushTickNow();
+        return version;
+      }
+      case 'resyncWorkspace': {
+        const rootIds = this.explorer
+          .getSnapshot()
+          .roots()
+          .map((root) => root.id);
+        const version = await this.explorer.resyncWorkspace();
+        for (const rootId of rootIds) {
+          this.prefetched.delete(rootId);
+          this.markSubtreeResynced(rootId);
+        }
+        await this.flushTickNow();
+        return version;
+      }
       case 'resolvePath': {
         const path = args[0];
         if (typeof path !== 'string') throw new Error('resolvePath requires a string path');

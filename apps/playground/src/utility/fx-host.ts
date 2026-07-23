@@ -3,6 +3,11 @@ import type { FileExplorerHost, MessagePortLike } from '@vibecook/mille/host';
 import type { MessagePortMain } from 'electron';
 import { registerGitDecorations, type GitDecorationsHandle } from '@vibecook/mille-ui/git';
 import { createShellGitClient } from '@vibecook/mille-ui/git/node';
+import {
+  createMapDiagnosticsClient,
+  registerDiagnosticsDecorations,
+  type DiagnosticsDecorationsHandle,
+} from '@vibecook/mille-ui/diagnostics';
 
 // Electron's MessagePortMain emits `message` events with a MessageEvent-
 // shaped object ({ data, ports }). The mille library's built-in adapter
@@ -37,6 +42,7 @@ function wrapMessagePortMain(port: MessagePortMain): MessagePortLike {
 
 let host: FileExplorerHost | null = null;
 let gitDecorations: GitDecorationsHandle | null = null;
+let diagnosticsDecorations: DiagnosticsDecorationsHandle | null = null;
 
 // v0.2 — the shell git client needs `node:child_process`, so it
 // cannot live in the renderer. Register it here against the
@@ -67,8 +73,91 @@ function setGitDecorations(enabled: boolean, rootPath: string): void {
       registrar: (provider) => currentHost.registerDecorationProvider(provider),
     });
     console.log('[fx-host] git decorations enabled');
+    // Re-register diagnostics after SCM so problem badges win the
+    // shared badge slot (later providers win on overlapping fields).
+    if (process.env.MILLE_DEMO_DIAGNOSTICS !== '0') {
+      diagnosticsDecorations?.dispose();
+      diagnosticsDecorations = null;
+      setDiagnosticsDecorations(true, rootPath);
+    }
   } catch (err) {
     console.warn('[fx-host] failed to enable git decorations:', err);
+  }
+}
+
+/**
+ * Phase 5.1 — demo diagnostics decorations. Seeds a few problems on
+ * well-known monorepo paths so the explorer shows problem-count badges
+ * without a real language server. Real hosts should swap this for an
+ * LSP-backed `DiagnosticsClient`.
+ *
+ * Registered *after* SCM (when both are on) so diagnostic badges win
+ * the shared badge slot via later-wins merge.
+ */
+function setDiagnosticsDecorations(enabled: boolean, rootPath: string): void {
+  if (!host) return;
+  if (!enabled) {
+    diagnosticsDecorations?.dispose();
+    diagnosticsDecorations = null;
+    console.log('[fx-host] diagnostics decorations disabled');
+    return;
+  }
+  if (diagnosticsDecorations !== null) return;
+  try {
+    const client = createMapDiagnosticsClient({
+      initial: new Map([
+        [
+          'packages/mille-ui/package.json',
+          [
+            {
+              path: 'packages/mille-ui/package.json',
+              severity: 'warning',
+              message: 'Demo: consider pinning peerDependency ranges',
+              source: 'playground',
+            },
+          ],
+        ],
+        [
+          'packages/mille-ui/src/index.ts',
+          [
+            {
+              path: 'packages/mille-ui/src/index.ts',
+              severity: 'error',
+              message: "Demo: Cannot find name 'example'",
+              source: 'ts',
+              code: 2304,
+            },
+            {
+              path: 'packages/mille-ui/src/index.ts',
+              severity: 'warning',
+              message: 'Demo: unused export surface',
+              source: 'eslint',
+            },
+          ],
+        ],
+        [
+          'planning/IDE_EXPLORER_PARITY_PLAN.md',
+          [
+            {
+              path: 'planning/IDE_EXPLORER_PARITY_PLAN.md',
+              severity: 'info',
+              message: 'Demo: Phase 5.2 views still open',
+              source: 'playground',
+            },
+          ],
+        ],
+      ]),
+    });
+    const currentHost = host;
+    diagnosticsDecorations = registerDiagnosticsDecorations({
+      fx: host.local,
+      client,
+      rootPath,
+      registrar: (provider) => currentHost.registerDecorationProvider(provider),
+    });
+    console.log('[fx-host] diagnostics decorations enabled (demo seed)');
+  } catch (err) {
+    console.warn('[fx-host] failed to enable diagnostics decorations:', err);
   }
 }
 
@@ -111,7 +200,19 @@ async function bootstrap(): Promise<void> {
       setGitDecorations(!!msg.enabled, root);
       return;
     }
+    if (msg?.type === 'set-diagnostics-decorations') {
+      setDiagnosticsDecorations(!!msg.enabled, root);
+      return;
+    }
   });
+
+  // Phase 5.1 — enable demo diagnostics by default so problem badges
+  // are visible without a UI toggle. Opt out with
+  // MILLE_DEMO_DIAGNOSTICS=0. If git decorations enable later, they
+  // re-register diagnostics after SCM so problem badges win the merge.
+  if (process.env.MILLE_DEMO_DIAGNOSTICS !== '0') {
+    setDiagnosticsDecorations(true, root);
+  }
 
   // Fixed in v0.2 B1 — roots now ship in deltas so the handshake can
   // fire immediately; the walker fills the tree in the background.

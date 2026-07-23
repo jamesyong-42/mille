@@ -39,6 +39,16 @@
   --mille-decoration-deleted: #f85149;
   --mille-decoration-ignored-opacity: 0.55;
 
+  /* Diagnostics / problems colors (Phase 5.1) */
+  --mille-decoration-error: #f85149;
+  --mille-decoration-warning: #d29922;
+  --mille-decoration-info: #58a6ff;
+  --mille-decoration-hint: #8b949e;
+  --mille-decoration-error-muted: #b53a34;
+  --mille-decoration-warning-muted: #a68b64;
+  --mille-decoration-info-muted: #3d6fa3;
+  --mille-decoration-hint-muted: #6c6c6c;
+
   /* Rename input */
   --mille-rename-input-bg: Canvas;
   --mille-rename-input-ring: var(--mille-accent-bg);
@@ -60,6 +70,15 @@
   --mille-decoration-added: #3fb950;
   --mille-decoration-deleted: #f85149;
   --mille-decoration-ignored-opacity: 0.5;
+
+  --mille-decoration-error: #f85149;
+  --mille-decoration-warning: #e3b341;
+  --mille-decoration-info: #58a6ff;
+  --mille-decoration-hint: #8b949e;
+  --mille-decoration-error-muted: #b53a34;
+  --mille-decoration-warning-muted: #a68b64;
+  --mille-decoration-info-muted: #3d6fa3;
+  --mille-decoration-hint-muted: #6c6c6c;
 
   --mille-rename-input-bg: #0d1117;
   --mille-rename-input-ring: var(--mille-accent-bg);

@@ -1,6 +1,6 @@
 # IDE Explorer Parity Implementation Plan
 
-**Status:** active — Phases 0–3 complete for planned scope; Phase 4.1 external import landed, 4.2–4.4 open
+**Status:** active — Phases 0–4 complete for planned scope; Phase 5.1 diagnostics decorations landed (SCM already present); 5.2–5.4 open
 **Created:** 2026-07-21  
 **Baseline assessment:**
 [IDE_EXPLORER_PARITY_ASSESSMENT.md](./IDE_EXPLORER_PARITY_ASSESSMENT.md)
@@ -1147,10 +1147,21 @@ Move from a capable filesystem tree to a central IDE navigation surface.
 #### 5.1 First-class decorations and statuses
 
 - Source-control states, including staged/conflicted/renamed combinations.
+  **Done** (`@vibecook/mille-ui/git` → `registerGitDecorations`).
 - Diagnostic severity and aggregate descendant badges.
-- Test status and failure decorations.
-- Dirty/open/active editor state.
-- Excluded, generated, library, and read-only state.
+  **Done (2026-07-23)** — `@vibecook/mille-ui/diagnostics` exports
+  `registerDiagnosticsDecorations` + host `DiagnosticsClient`. Leaf badge =
+  problem count (capped, default `99+`); color by max severity
+  (`error > warning > info > hint`); ancestors sum descendant counts with muted
+  colors; tooltips summarize counts and include single-diag messages. Merge
+  precedence is later-wins on overlapping fields (`mergeDecorations`); hosts
+  that want diagnostic badges over SCM letters should register diagnostics
+  after SCM. CSS tokens: `--mille-decoration-error|warning|info|hint` (+ muted).
+  Tests: `packages/mille-ui/test/diagnostics-decorations.test.mjs`.
+- Test status and failure decorations. *(open)*
+- Dirty/open/active editor state. *(open — active-entry policy already exists)*
+- Excluded, generated, library, and read-only state. *(partial via active-entry /
+  ignore flags; decoration overlays still open)*
 
 Define merge precedence, accessible text, and update cost for every provider.
 

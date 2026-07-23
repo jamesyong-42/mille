@@ -4,6 +4,14 @@
 
 ### Added
 
+- **Diagnostics decorations (Phase 5.1)** — `@vibecook/mille-ui/diagnostics`
+  exports `registerDiagnosticsDecorations`, a host-supplied
+  `DiagnosticsClient`, and `createMapDiagnosticsClient` for demos/tests.
+  Leaf rows show problem-count badges colored by max severity
+  (`error > warning > info > hint`); folders aggregate descendant counts with
+  muted colors. Badge cap, color/tooltip/badge overrides, and
+  `propagateToParent` match the git companion ergonomics. CSS tokens:
+  `--mille-decoration-error|warning|info|hint` (+ muted variants).
 - **Trash default and undo journal** — `delete` soft-trashes into workspace
   `.mille-trash` by default (undoable); `{ trash: false }` is permanent. Public
   `canUndo` / `peekUndo` / `undo` reverse create, rename, move, and soft-delete.

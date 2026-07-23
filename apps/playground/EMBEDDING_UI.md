@@ -259,7 +259,42 @@ const handle = registerGitDecorations({
 handle.dispose();
 ```
 
-### 5.2 Agent-rules
+### 5.2 Diagnostics / Problems
+
+Phase 5.1 — problem badges from a host-supplied diagnostics client
+(LSP, ESLint, tsserver, …). Leaf rows show problem counts colored by
+max severity (`error > warning > info > hint`); folders aggregate
+descendant counts with muted colors.
+
+```tsx
+import {
+  registerDiagnosticsDecorations,
+  type DiagnosticsClient,
+} from '@vibecook/mille-ui/diagnostics';
+
+const client: DiagnosticsClient = {
+  async getDiagnostics(root) {
+    // Map of workspace-relative path → Diagnostic[]
+    return diagnosticsByPath;
+  },
+  onChange(cb) {
+    // Subscribe to language-server / checker updates
+    return unsubscribe;
+  },
+};
+
+// Register *after* SCM if diagnostic badges should win the shared
+// badge slot (mergeDecorations: later providers win on fields).
+const handle = registerDiagnosticsDecorations({
+  fx,
+  client,
+  rootPath: '/Users/you/my-repo',
+  // propagateToParent: true,  // default — folder aggregate counts
+  // badgeCap: 99,             // default — renders "99+" above cap
+});
+```
+
+### 5.3 Agent-rules
 
 Highlights "files-as-config" entries (`CLAUDE.md`, `.cursor/rules/*`,
 `.kiro/steering/*`, `.clinerules`, `.continue/*`, `AGENTS.md`, `.rules`):
@@ -274,15 +309,15 @@ const handle = registerAgentRulesDecorations({
 });
 ```
 
-### 5.3 Port-client limitation
+### 5.4 Port-client limitation
 
-`registerGitDecorations` / `registerAgentRulesDecorations` call
-`fx.registerDecorationProvider(...)`. The **port-backed client** in
-the playground does not surface that method yet — decorations run on
-the native engine in the UtilityProcess. For v0.1 the playground
-registers against a no-op shim so the UI wiring is demonstrable; a
-host-side decoration forwarder (decoration frames across the port)
-lands in v0.2.
+`registerGitDecorations` / `registerDiagnosticsDecorations` /
+`registerAgentRulesDecorations` call `fx.registerDecorationProvider(...)`.
+The **port-backed client** in the playground does not surface that method
+yet — decorations run on the native engine in the UtilityProcess. For v0.1
+the playground registers against a no-op shim so the UI wiring is
+demonstrable; a host-side decoration forwarder (decoration frames across
+the port) lands in v0.2.
 
 If your renderer embeds the native engine directly (e.g. headless
 Node test, non-Electron shell), you get decorations end-to-end out of

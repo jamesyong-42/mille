@@ -92,6 +92,7 @@ export interface UseFileTreeRowRowProps {
   readonly 'aria-setsize'?: number;
   readonly 'aria-posinset'?: number;
   readonly 'aria-selected': boolean;
+  readonly 'aria-current'?: 'page';
   readonly 'aria-expanded'?: boolean;
   readonly 'aria-disabled'?: true;
   readonly title?: string;
@@ -99,6 +100,7 @@ export interface UseFileTreeRowRowProps {
   readonly 'data-mille-depth': number;
   readonly 'data-mille-selected'?: 'true';
   readonly 'data-mille-focused'?: 'true';
+  readonly 'data-mille-active'?: 'true';
   readonly 'data-mille-pending'?: 'true';
   readonly 'data-mille-sticky-root'?: 'true';
   readonly 'data-mille-cut'?: 'true';
@@ -215,6 +217,7 @@ export function useFileTreeRow(props: FileTreeRowProps): UseFileTreeRowResult {
     depth,
     selected,
     focused,
+    active,
     expanded,
     hasChildren,
     pending,
@@ -371,6 +374,10 @@ export function useFileTreeRow(props: FileTreeRowProps): UseFileTreeRowResult {
             : 'file';
     if (selected) out['data-mille-selected'] = t;
     if (focused) out['data-mille-focused'] = t;
+    if (active) {
+      out['data-mille-active'] = t;
+      out['aria-current'] = 'page';
+    }
     if (pending) out['data-mille-pending'] = t;
     if (isStickyRoot) out['data-mille-sticky-root'] = t;
     if (entering) out['data-mille-entering'] = t;
@@ -405,6 +412,7 @@ export function useFileTreeRow(props: FileTreeRowProps): UseFileTreeRowResult {
     setRowEl,
     ariaProps,
     selected,
+    active,
     row.id,
     row.isIgnored,
     row.kind,

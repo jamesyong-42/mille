@@ -869,6 +869,26 @@ the root-qualified paths stored in navigation state.
 - Avoid fighting the user when they deliberately navigate elsewhere.
 - Define behavior for excluded, hidden, generated, and external files.
 
+First follow-editor result (2026-07-23): `FileTree` now accepts an active editor
+target as either an `EntryId` or workspace-relative/root-qualified path and
+marks it independently with `aria-current="page"` /
+`data-mille-active="true"`. Optional auto-reveal reuses the indexed lazy-path
+pipeline, expands ancestors, and scrolls without changing tree focus or
+selection. It runs only when the target or policy changes, so later user
+navigation and unrelated filesystem publications do not snap back. Async path
+resolution is revision-guarded so a stale target cannot replace the current
+one. The playground enables the behavior by default, exposes an always-reveal
+toggle, and retains a manual Reveal Active File action. Four focused UI tests
+cover passive marking, lazy hydration, user-navigation preservation, and stale
+resolution. The 500,000-row, 30-target happy-dom gate measured 44.66 ms median
+and 92.82 ms p95 against a 120 ms p95 budget, with exactly one indexed position
+query per target, at most 38 materialized rows per read, and zero focus changes.
+The rejected path-state implementation measured 74.01 ms median / 114.03 ms p95
+over its initial five-sample signal; deriving known IDs directly from the
+controlled prop removed that extra state publication. Remaining Phase 3.4 work
+is configurable preview/permanent-open behavior and explicit policy for
+excluded, hidden, generated, or external active files.
+
 #### 3.5 Complete baseline actions
 
 - Copy absolute path and workspace-relative path.

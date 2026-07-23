@@ -1,12 +1,14 @@
 // Phase 16.1 — scripted perf harness for @vibecook/mille-ui.
 //
-// Measures three things against a synthetic 500k-row tree, using
-// happy-dom + React 19 `createRoot`:
+// Measures explorer interactions against a synthetic 500k-row tree, using
+// happy-dom + React 19 `createRoot`, including:
 //
 //   1. Initial render — time to first paint with 1000 pre-expanded folders.
 //   2. Scroll shift — time to re-render after a scrollTop change.
 //   3. Expand 1000 children — time to re-render after a delta that
 //      inserts 1000 new rows.
+//   4. Active-editor following — 30 controlled targets, exact-position
+//      lookup, bounded projection work, scroll, and focus preservation.
 //
 // happy-dom is not a browser. Numbers here are indicative only and
 // shouldn't be treated as frame-budget evidence. The real bench lives
@@ -17,7 +19,11 @@
 //   pnpm --filter @vibecook/mille-ui bench
 //
 // Exits non-zero if virtualization or viewport-anchor invariants regress.
-// Timing values remain reporters because happy-dom does not model paint.
+// Most timing values remain reporters because happy-dom does not model paint.
+// Active-editor following has a deliberately loose p95 regression gate because
+// its relative React work is still useful here; override its 30 samples / 120ms
+// budget with MILLE_FOLLOW_ACTIVE_SAMPLES and
+// MILLE_FOLLOW_ACTIVE_P95_BUDGET_MS.
 
 import { performance } from 'node:perf_hooks';
 import { Window } from 'happy-dom';
@@ -73,6 +79,18 @@ const { MAX_LAYOUT_ANIMATION_ROWS } = await import('../dist/hooks/layoutAnimatio
 
 const TOTAL_ROWS = 500_000;
 const EXPANDED_FOLDERS = 1_000;
+const FOLLOW_ACTIVE_SAMPLES = Number(
+  process.env.MILLE_FOLLOW_ACTIVE_SAMPLES ?? 30,
+);
+const FOLLOW_ACTIVE_P95_BUDGET_MS = Number(
+  process.env.MILLE_FOLLOW_ACTIVE_P95_BUDGET_MS ?? 120,
+);
+if (!Number.isInteger(FOLLOW_ACTIVE_SAMPLES) || FOLLOW_ACTIVE_SAMPLES < 1) {
+  throw new Error('MILLE_FOLLOW_ACTIVE_SAMPLES must be a positive integer');
+}
+if (!Number.isFinite(FOLLOW_ACTIVE_P95_BUDGET_MS) || FOLLOW_ACTIVE_P95_BUDGET_MS <= 0) {
+  throw new Error('MILLE_FOLLOW_ACTIVE_P95_BUDGET_MS must be positive');
+}
 
 function makeRow({ id, parentId, name, depth, kind, hasChildren, isExpanded }) {
   return {
@@ -1052,6 +1070,102 @@ async function runPathReveal(rows) {
   };
 }
 
+async function runFollowActiveEntry(rows) {
+  const fx = createFakeEngine();
+  let maxProjectionReadRows = 0;
+  let projectionRowsRead = 0;
+  let indexLookups = 0;
+  const snapshot = createFakeSnapshot({ rows, treeVersion: 1 });
+  fx.emitDelta({
+    ...snapshot,
+    visibleRows: (options) => {
+      if (options.limit !== Number.MAX_SAFE_INTEGER) {
+        maxProjectionReadRows = Math.max(maxProjectionReadRows, options.limit);
+        projectionRowsRead += options.limit;
+      }
+      return snapshot.visibleRows(options);
+    },
+    visibleRowIndex: (id, expanded, includeIgnored) => {
+      indexLookups += 1;
+      return snapshot.visibleRowIndex(id, expanded, includeIgnored);
+    },
+  });
+
+  const targets = [];
+  for (let sample = 0; sample < FOLLOW_ACTIVE_SAMPLES; sample += 1) {
+    const index = Math.floor(
+      (rows.length * (sample + 1)) / (FOLLOW_ACTIVE_SAMPLES + 1),
+    );
+    const id = rows[index]?.id;
+    if (id === undefined) throw new Error(`follow-active target ${index} is missing`);
+    targets.push(id);
+  }
+  const { container, root } = mountContainer();
+  const obs = makeObservers({ height: 600 });
+  let focusedChanges = 0;
+  const baseProps = {
+    fx,
+    ariaLabel: 'bench-follow-active-entry',
+    rowHeight: 22,
+    overscan: 10,
+    autoRevealActiveEntry: true,
+    onFocusedIdChange: () => {
+      focusedChanges += 1;
+    },
+    __testObserveElementRect: obs.observeElementRect,
+    __testObserveElementOffset: obs.observeElementOffset,
+  };
+  await act(async () => {
+    root.render(createElement(FileTree, { ...baseProps, activeEntry: null }));
+  });
+
+  maxProjectionReadRows = 0;
+  projectionRowsRead = 0;
+  indexLookups = 0;
+  const tree = container.querySelector('[role="tree"]');
+  if (!tree) throw new Error('follow-active tree is missing');
+  let scrollRequests = 0;
+  tree.scrollTo = (...args) => {
+    const top = typeof args[0] === 'object' ? args[0]?.top : args[1];
+    if (typeof top === 'number' && top > 0) scrollRequests += 1;
+  };
+
+  const timings = [];
+  for (const id of targets) {
+    const started = performance.now();
+    await act(async () => {
+      root.render(createElement(FileTree, { ...baseProps, activeEntry: id }));
+      await Promise.resolve();
+    });
+    timings.push(performance.now() - started);
+  }
+  timings.sort((left, right) => left - right);
+  const medianMs = timings[Math.floor(timings.length * 0.5)] ?? 0;
+  const p95Ms =
+    timings[Math.min(timings.length - 1, Math.floor(timings.length * 0.95))] ??
+    0;
+  const rendered = container.querySelectorAll('[role="treeitem"]').length;
+
+  await act(async () => root.unmount());
+  container.remove();
+  return {
+    label: `active-editor follow p95 (${FOLLOW_ACTIVE_SAMPLES} × 500k)`,
+    ms: p95Ms,
+    medianMs,
+    p95Ms,
+    rendered,
+    interactionPreserved:
+      indexLookups === FOLLOW_ACTIVE_SAMPLES &&
+      scrollRequests === FOLLOW_ACTIVE_SAMPLES &&
+      focusedChanges === 0,
+    maxMaterializedRows: maxProjectionReadRows,
+    projectionRowsRead,
+    indexLookups,
+    scrollRequests,
+    focusedChanges,
+  };
+}
+
 async function runAnchoredInsert(rows) {
   const fx = createFakeEngine();
   let maxProjectionReadRows = 0;
@@ -1227,6 +1341,8 @@ async function main() {
   results.push(revealResult);
   const pathRevealResult = await runPathReveal(rows);
   results.push(pathRevealResult);
+  const followActiveResult = await runFollowActiveEntry(rows);
+  results.push(followActiveResult);
   const anchorResult = await runAnchoredInsert(rows);
   results.push(anchorResult);
 
@@ -1259,6 +1375,9 @@ async function main() {
   );
   console.log(
     `      Path reveal: ${pathRevealResult.pathLookups} indexed path query + ${pathRevealResult.indexLookups} exact position query; ${pathRevealResult.projectionRowsRead.toLocaleString()} viewport rows.`,
+  );
+  console.log(
+    `      Active-editor follow: median=${followActiveResult.medianMs.toFixed(2)} ms, p95=${followActiveResult.p95Ms.toFixed(2)} ms (${FOLLOW_ACTIVE_P95_BUDGET_MS} ms budget); ${followActiveResult.indexLookups} position queries, ${followActiveResult.projectionRowsRead.toLocaleString()} viewport rows, ${followActiveResult.focusedChanges} focus changes.`,
   );
   if (anchorResult.driftPx > 0.5) {
     throw new Error(`viewport anchor drift ${anchorResult.driftPx.toFixed(2)} px exceeds 0.5 px`);
@@ -1372,6 +1491,24 @@ async function main() {
   ) {
     throw new Error(
       `path reveal used ${pathRevealResult.pathLookups} path / ${pathRevealResult.indexLookups} position queries and ${pathRevealResult.projectionRowsRead} rows`,
+    );
+  }
+  if (!followActiveResult.interactionPreserved) {
+    throw new Error(
+      `active-editor follow used ${followActiveResult.indexLookups} position queries, ${followActiveResult.scrollRequests} scrolls, and ${followActiveResult.focusedChanges} focus changes`,
+    );
+  }
+  if (
+    followActiveResult.maxMaterializedRows > 100 ||
+    followActiveResult.projectionRowsRead > FOLLOW_ACTIVE_SAMPLES * 100
+  ) {
+    throw new Error(
+      `active-editor follow read max=${followActiveResult.maxMaterializedRows}, total=${followActiveResult.projectionRowsRead} rows`,
+    );
+  }
+  if (followActiveResult.p95Ms > FOLLOW_ACTIVE_P95_BUDGET_MS) {
+    throw new Error(
+      `active-editor follow p95 ${followActiveResult.p95Ms.toFixed(2)} ms exceeds ${FOLLOW_ACTIVE_P95_BUDGET_MS} ms`,
     );
   }
   if (!decorationResult.decorationVisible) {

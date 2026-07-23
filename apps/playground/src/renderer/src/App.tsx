@@ -260,6 +260,7 @@ function Explorer({ fx, root }: { fx: PortFileExplorer; root: string }): ReactEl
   const [settingsOpen, setSettingsOpen] = useState(false);
   /** Editor pane is secondary — off by default so Project feels primary. */
   const [editorOpen, setEditorOpen] = useState(false);
+  const [followActiveEditor, setFollowActiveEditor] = useState(true);
 
   useEffect(() => {
     if (!settingsOpen) return;
@@ -437,6 +438,18 @@ function Explorer({ fx, root }: { fx: PortFileExplorer; root: string }): ReactEl
             </button>
             <button
               type="button"
+              title="Reveal active file"
+              disabled={activeTab.entryId === undefined}
+              onClick={() => {
+                if (activeTab.entryId !== undefined) {
+                  treeRef.current?.revealId(activeTab.entryId);
+                }
+              }}
+            >
+              ◎
+            </button>
+            <button
+              type="button"
               title={editorOpen ? 'Hide editor' : 'Show editor'}
               aria-pressed={editorOpen}
               onClick={() => setEditorOpen((v) => !v)}
@@ -463,6 +476,8 @@ function Explorer({ fx, root }: { fx: PortFileExplorer; root: string }): ReactEl
                     iconThemeId={iconThemeId}
                     onIconThemeChange={setIconThemeId}
                     iconThemeStatus={iconThemeStatus}
+                    followActiveEditor={followActiveEditor}
+                    onFollowActiveEditorChange={setFollowActiveEditor}
                     onReset={() => treeRef.current?.reset()}
                     compact
                   />
@@ -492,6 +507,8 @@ function Explorer({ fx, root }: { fx: PortFileExplorer; root: string }): ReactEl
                   searchMode="filter"
                   initialNavigationState={initialNavigationState}
                   onNavigationStateChange={persistNavigationState}
+                  activeEntry={activeTab.entryId ?? null}
+                  autoRevealActiveEntry={followActiveEditor}
                   onOpen={(row) => {
                     void openEntry(row);
                   }}

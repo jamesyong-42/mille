@@ -4,6 +4,11 @@
 
 ### Added
 
+- **Active-editor following** — `activeEntry` marks the file active in the
+  host editor independently of tree focus/selection, while
+  `autoRevealActiveEntry` optionally expands and scrolls through the lazy
+  indexed-path pipeline without stealing focus or snapping back on unrelated
+  updates.
 - **Versioned navigation persistence** — path-based expansion, selection,
   focus, filter mode, and pixel scroll anchors via
   `initialNavigationState`, `onNavigationStateChange`, and

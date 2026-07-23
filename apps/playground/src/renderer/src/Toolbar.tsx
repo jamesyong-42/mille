@@ -21,13 +21,7 @@
 // ships `registerDecorationProvider`, so the companions register
 // directly against it.
 
-import {
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-  type ReactElement,
-} from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react';
 import {
   registerAgentRulesDecorations,
   type AgentRulesHandle,
@@ -36,12 +30,7 @@ import type { PortFileExplorer } from '@vibecook/mille/port';
 
 export type ThemeMode = 'light' | 'dark';
 /** Soft-duotone is the product/playground default. */
-export type IconThemeId =
-  | 'duotone'
-  | 'default'
-  | 'stage'
-  | 'material'
-  | 'minimal';
+export type IconThemeId = 'duotone' | 'default' | 'stage' | 'material' | 'minimal';
 
 /**
  * v0.2 B7 — compact path display for the recents dropdown. Absolute
@@ -89,6 +78,9 @@ export interface ToolbarProps {
   /** v0.2 B5 — async-load lifecycle signal from the parent. Used to
    *  clear the "Loading Material…" toast when the bundle lands. */
   readonly iconThemeStatus?: 'idle' | 'loading' | 'loaded' | 'error';
+  /** Keep the Project tree aligned with the editor's active file. */
+  readonly followActiveEditor: boolean;
+  onFollowActiveEditorChange(next: boolean): void;
   /**
    * v0.2 B6 — parent-supplied reset callback. Typically calls
    * `treeRef.current?.reset()` to clear selection, filter, and
@@ -108,6 +100,8 @@ export function Toolbar(props: ToolbarProps): ReactElement {
     iconThemeId,
     onIconThemeChange,
     iconThemeStatus,
+    followActiveEditor,
+    onFollowActiveEditorChange,
     onReset,
     compact = false,
   } = props;
@@ -193,9 +187,7 @@ export function Toolbar(props: ToolbarProps): ReactElement {
           : 'Git decorations disabled.',
       );
     } catch (err) {
-      setToast(
-        `Git decorations failed: ${err instanceof Error ? err.message : String(err)}`,
-      );
+      setToast(`Git decorations failed: ${err instanceof Error ? err.message : String(err)}`);
       setGitOn(!next);
     }
   }, []);
@@ -281,9 +273,7 @@ export function Toolbar(props: ToolbarProps): ReactElement {
         // unmounting instance — no manual cleanup needed here.
       }
     } catch (err) {
-      setToast(
-        `Open folder failed: ${err instanceof Error ? err.message : String(err)}`,
-      );
+      setToast(`Open folder failed: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setPickerBusy(false);
     }
@@ -306,9 +296,7 @@ export function Toolbar(props: ToolbarProps): ReactElement {
         await window.millePlayground.openWorkspace(path);
         setToast(`Open folder: ${path} — walking…`);
       } catch (err) {
-        setToast(
-          `Open folder failed: ${err instanceof Error ? err.message : String(err)}`,
-        );
+        setToast(`Open folder failed: ${err instanceof Error ? err.message : String(err)}`);
       } finally {
         setPickerBusy(false);
       }
@@ -349,11 +337,7 @@ export function Toolbar(props: ToolbarProps): ReactElement {
             <ul className="recents-menu" role="menu">
               {recents.length === 0 ? (
                 <li role="none">
-                  <span
-                    className="recents-empty"
-                    role="menuitem"
-                    aria-disabled="true"
-                  >
+                  <span className="recents-empty" role="menuitem" aria-disabled="true">
                     No recent folders yet
                   </span>
                 </li>
@@ -375,11 +359,7 @@ export function Toolbar(props: ToolbarProps): ReactElement {
                 <hr />
               </li>
               <li role="none">
-                <button
-                  type="button"
-                  role="menuitem"
-                  onClick={() => void handlePickBrowse()}
-                >
+                <button type="button" role="menuitem" onClick={() => void handlePickBrowse()}>
                   Browse…
                 </button>
               </li>
@@ -397,11 +377,7 @@ export function Toolbar(props: ToolbarProps): ReactElement {
         >
           Light
         </button>
-        <button
-          type="button"
-          aria-pressed={theme === 'dark'}
-          onClick={() => onThemeChange('dark')}
-        >
+        <button type="button" aria-pressed={theme === 'dark'} onClick={() => onThemeChange('dark')}>
           Dark
         </button>
       </div>
@@ -411,9 +387,7 @@ export function Toolbar(props: ToolbarProps): ReactElement {
           Icons
           <select
             value={iconThemeId}
-            onChange={(e) =>
-              handleIconThemeChange(e.target.value as IconThemeId)
-            }
+            onChange={(e) => handleIconThemeChange(e.target.value as IconThemeId)}
           >
             <option value="duotone">Duotone</option>
             <option value="default">Default</option>
@@ -425,6 +399,14 @@ export function Toolbar(props: ToolbarProps): ReactElement {
       </div>
 
       <div className="toolbar-group">
+        <label>
+          <input
+            type="checkbox"
+            checked={followActiveEditor}
+            onChange={(e) => onFollowActiveEditorChange(e.target.checked)}
+          />
+          Always reveal active file
+        </label>
         <label>
           <input
             type="checkbox"

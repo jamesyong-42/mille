@@ -167,6 +167,8 @@ export interface FileTreeRowProps {
   readonly depth: number;
   readonly selected: boolean;
   readonly focused: boolean;
+  /** This entry is active in the host editor, independently of tree focus. */
+  readonly active?: boolean;
   readonly expanded: boolean;
   readonly hasChildren: boolean;
   readonly pending: boolean;
@@ -445,6 +447,20 @@ export interface FileTreeProps {
   readonly onNavigationStateChange?: (state: FileTreeNavigationState) => void;
   /** Persistence observer debounce. Default 150 ms. */
   readonly navigationStateDebounceMs?: number;
+
+  // ─── Phase 3.4 — active editor following ────────────────────────
+  /**
+   * Entry currently active in the host editor. Pass a known `EntryId` for
+   * direct updates or a workspace-relative/root-qualified path when the
+   * target may need lazy path-chain hydration.
+   */
+  readonly activeEntry?: EntryId | string | null;
+  /**
+   * Expand and scroll to `activeEntry` whenever that target changes.
+   * Defaults to `false`. The reveal does not change tree focus or selection,
+   * and unrelated renders do not repeat it after the user navigates away.
+   */
+  readonly autoRevealActiveEntry?: boolean;
 
   // ─── DEFERRED (Phase 4+): selection, focus, keyboard ─────────────
   readonly focusedId?: EntryId | null;

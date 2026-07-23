@@ -151,6 +151,8 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
     initialNavigationState,
     onNavigationStateChange,
     navigationStateDebounceMs = 150,
+    activeEntry,
+    autoRevealActiveEntry = false,
     multiSelect = true,
     focusedId: controlledFocusedId,
     onFocusedIdChange,
@@ -1062,7 +1064,10 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
     [snapshot],
   );
 
-  const pendingRevealIdRef = useRef<EntryId | null>(null);
+  const pendingRevealRef = useRef<{
+    readonly id: EntryId;
+    readonly focus: boolean;
+  } | null>(null);
   const scrollToRevealedIndex = useCallback(
     (index: number) => {
       const scroller = scrollerRef.current;
@@ -1075,8 +1080,8 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
     [rowHeight, scrollToIndex],
   );
 
-  const revealId = useCallback(
-    (id: EntryId): boolean => {
+  const revealIdWithFocus = useCallback(
+    (id: EntryId, focus: boolean): boolean => {
       // Verify the id actually exists in the current mirror. If not we
       // can't reveal it — the caller is probably racing a walker; they
       // should retry once the next delta lands.
@@ -1084,8 +1089,8 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
 
       const ancestors = ancestorsOf(id);
       const needsExpansion = ancestors.some((ancestorId) => !expanded.has(ancestorId));
-      pendingRevealIdRef.current = id;
-      selection.setFocused(id);
+      pendingRevealRef.current = { id, focus };
+      if (focus) selection.setFocused(id);
       if (needsExpansion) {
         setManyExpanded({ add: ancestors });
         return true;
@@ -1094,7 +1099,7 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
       const idx = findExactVisibleRowIndex(id);
       if (idx >= 0) {
         scrollToRevealedIndex(idx);
-        pendingRevealIdRef.current = null;
+        pendingRevealRef.current = null;
       }
       return true;
     },
@@ -1109,17 +1114,27 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
     ],
   );
 
-  const revealResolvedId = useCallback(
-    (id: EntryId): boolean => {
-      if (snapshot.getById(id) !== null) return revealId(id);
+  const revealId = useCallback(
+    (id: EntryId): boolean => revealIdWithFocus(id, true),
+    [revealIdWithFocus],
+  );
+
+  const revealResolvedIdWithFocus = useCallback(
+    (id: EntryId, focus: boolean): boolean => {
+      if (snapshot.getById(id) !== null) return revealIdWithFocus(id, focus);
       const latest = fx.getSnapshot();
-      pendingRevealIdRef.current = id;
+      pendingRevealRef.current = { id, focus };
       if (latest.getById(id) !== null) {
         setManyExpanded({ add: ancestorsOf(id, latest) });
       }
       return true;
     },
-    [snapshot, revealId, fx, setManyExpanded, ancestorsOf],
+    [snapshot, revealIdWithFocus, fx, setManyExpanded, ancestorsOf],
+  );
+
+  const revealResolvedId = useCallback(
+    (id: EntryId): boolean => revealResolvedIdWithFocus(id, true),
+    [revealResolvedIdWithFocus],
   );
 
   useLayoutEffect(() => {
@@ -1130,8 +1145,9 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
   }, [selection, revealResolvedId]);
 
   useLayoutEffect(() => {
-    const id = pendingRevealIdRef.current;
-    if (id === null) return;
+    const pending = pendingRevealRef.current;
+    if (pending === null) return;
+    const { id, focus } = pending;
     if (snapshot.getById(id) === null) {
       return;
     }
@@ -1143,8 +1159,8 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
     const index = findExactVisibleRowIndex(id);
     if (index === -1) return;
     scrollToRevealedIndex(index);
-    selection.setFocused(id);
-    pendingRevealIdRef.current = null;
+    if (focus) selection.setFocused(id);
+    pendingRevealRef.current = null;
   }, [
     snapshot,
     ancestorsOf,
@@ -1303,6 +1319,56 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
     },
     [resolvePath, revealResolvedId],
   );
+
+  const [resolvedActivePathId, setResolvedActivePathId] =
+    useState<EntryId | null>(null);
+  const resolvedActiveEntryId =
+    typeof activeEntry === 'number' ? activeEntry : resolvedActivePathId;
+  const activeResolutionRevisionRef = useRef(0);
+  const resolveActivePathRef = useRef(resolvePath);
+  const revealActiveIdRef = useRef(revealResolvedIdWithFocus);
+  useLayoutEffect(() => {
+    resolveActivePathRef.current = resolvePath;
+    revealActiveIdRef.current = revealResolvedIdWithFocus;
+  }, [resolvePath, revealResolvedIdWithFocus]);
+  useEffect(() => {
+    const revision = activeResolutionRevisionRef.current + 1;
+    activeResolutionRevisionRef.current = revision;
+    const invalidate = (): void => {
+      if (activeResolutionRevisionRef.current === revision) {
+        activeResolutionRevisionRef.current += 1;
+      }
+    };
+
+    if (activeEntry === null || activeEntry === undefined) {
+      setResolvedActivePathId(null);
+      return invalidate;
+    }
+    if (typeof activeEntry === 'number') {
+      setResolvedActivePathId(null);
+      if (autoRevealActiveEntry) {
+        revealActiveIdRef.current(activeEntry, false);
+      }
+      return invalidate;
+    }
+
+    setResolvedActivePathId(null);
+    void resolveActivePathRef.current(activeEntry).then(
+      (id) => {
+        if (activeResolutionRevisionRef.current !== revision) return;
+        setResolvedActivePathId(id);
+        if (id !== null && autoRevealActiveEntry) {
+          revealActiveIdRef.current(id, false);
+        }
+      },
+      () => {
+        if (activeResolutionRevisionRef.current === revision) {
+          setResolvedActivePathId(null);
+        }
+      },
+    );
+    return invalidate;
+  }, [activeEntry, autoRevealActiveEntry]);
 
   const pendingNavigationScrollRef = useRef<{
     readonly id: EntryId;
@@ -1719,6 +1785,7 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
           const isStickyRoot = stickyRoots && depth === 0;
           const isSelected = selection.selectedIds.has(row.id);
           const isFocused = selection.focusedId === row.id;
+          const isActive = resolvedActiveEntryId === row.id;
 
           const aria: AriaRowProps = {
             'aria-level': depth + 1,
@@ -1765,6 +1832,7 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
             depth,
             selected: isSelected,
             focused: isFocused,
+            active: isActive,
             expanded: rowExpanded,
             hasChildren: row.hasChildren,
             pending,

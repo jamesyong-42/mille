@@ -164,6 +164,7 @@ export function areFileTreeRowPropsEqual(
     prev.depth === next.depth &&
     prev.selected === next.selected &&
     prev.focused === next.focused &&
+    prev.active === next.active &&
     prev.expanded === next.expanded &&
     prev.hasChildren === next.hasChildren &&
     prev.pending === next.pending &&

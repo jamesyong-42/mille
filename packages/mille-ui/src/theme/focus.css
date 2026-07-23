@@ -26,6 +26,14 @@
 }
 
 /*
+ * Active-editor state is independent of keyboard focus and selection.
+ * A narrow trailing marker remains visible without replacing either state.
+ */
+.mille-row[data-mille-active="true"] {
+  border-inline-end: 2px solid var(--mille-active-entry-marker, var(--mille-accent-bg, #0969da));
+}
+
+/*
  * Filesystem layout changes only. The tree marks only mounted rows whose
  * virtual offset materially changed. Keeping this row-scoped avoids turning
  * every watcher notification into a viewport-wide compositor transaction.

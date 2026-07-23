@@ -83,6 +83,27 @@ The persisted record uses root-qualified paths, not process-local entry IDs,
 and includes expansion, selection, focus, filter text/mode, and scroll anchor.
 Missing paths are skipped during restore.
 
+## Follow the active editor
+
+Keep editor state separate from tree focus and selection, with optional
+one-shot reveal whenever the editor target changes:
+
+```tsx
+<FileTree
+  fx={fx}
+  ariaLabel="Files"
+  activeEntry={activeEntryId}
+  autoRevealActiveEntry
+/>;
+```
+
+`activeEntry` accepts an indexed `EntryId` or a workspace-relative/root-qualified
+path. IDs take the direct fast path; paths use lazy indexed resolution and
+hydrate only the target's ancestor chain. The active row exposes
+`aria-current="page"` and `data-mille-active="true"`. Auto-reveal expands and
+scrolls without changing tree focus or selection, and it runs only when the
+target changes, so later user navigation is not undone by unrelated updates.
+
 ## Entry points
 
 | Import                              | What you get                            |

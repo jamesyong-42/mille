@@ -346,8 +346,9 @@ end-user behavior:
   unavailable-root recovery, and explicit cross-root transfer/collision
   primitives, but the product explorer still needs a root management workflow,
   custom aliases, and overwrite/merge/skip prompting;
-- `revealPath` exists, but automatic active-editor synchronization is not a
-  product setting;
+- active-editor targets now have distinct row state, lazy optional auto-reveal,
+  and reference-playground controls, but single-click preview/permanent-open
+  policy is not complete;
 - a decoration pipeline exists, but Problems, tests, and source-control states
   are not integrated explorer experiences;
 - the command registry is extensible, but the built-in context menu is much
@@ -393,7 +394,7 @@ Mature behavior requires more than invoking the mutation:
 Compared with WebStorm's Project tool window and VS Code's Explorer/workspace
 model, Mille lacks or delegates most of the following:
 
-- active editor following and configurable single-click preview;
+- configurable single-click preview and permanent-open behavior;
 - Open Files, Changed Files, Problems, tests, and custom scope views;
 - source-control actions and a file timeline/history surface;
 - reveal in Finder/Explorer, open terminal, copy path/relative path, and refresh;

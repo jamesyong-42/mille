@@ -918,7 +918,9 @@ export class FileExplorer {
     newName?: string,
     options?: TransferOptions,
   ): Promise<Entry> {
-    return wrap(this.nativeFx.move(id, newParentId, newName, options));
+    return this.runTransfer(options, (nativeOptions) =>
+      wrap(this.nativeFx.move(id, newParentId, newName, nativeOptions)),
+    );
   }
 
   delete(id: EntryId, options?: { trash?: boolean; recursive?: boolean }): Promise<void> {
@@ -1017,7 +1019,7 @@ export class FileExplorer {
         throw err;
       }
       const onAbort = (): void => {
-        this.cancelOperation(operationId!);
+        void this.cancelOperation(operationId!);
       };
       signal.addEventListener('abort', onAbort, { once: true });
       try {

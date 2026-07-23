@@ -1092,7 +1092,10 @@ await fx.copyFromPath(src, parentId, undefined, {
 fx.cancelOperation('import-1'); // cooperative; checked between recursive steps
 ```
 
-Cancelled non-merge copies best-effort remove the partial destination.
+Cancelled **create** copies best-effort remove the partial destination.
+**Overwrite** copies stage into a sibling path and only swap on success, so a
+cancelled overwrite restores/keeps the original destination. Hosts using
+`createFileExplorerHost` forward `OP_*` warnings to every attached port client.
 Same-volume directory moves preserve the complete known subtree identity;
 cross-device moves return `EUNSUPPORTED` without partial store mutation until
 the Phase 4 copy/delete fallback lands. Progress, cancellation, and undo

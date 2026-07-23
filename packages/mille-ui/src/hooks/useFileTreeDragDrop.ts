@@ -887,7 +887,8 @@ export function useFileTreeDragDrop(
           }
         }
       } catch (error) {
-        reportDropError(error);
+        // Re-throw so FileTree's onDrop handler reports via onDropError once.
+        // Do not call reportDropError here — that double-fires with FileTree.
         throw error;
       } finally {
         // Clear dragging state even after failure so the UI is not stuck.

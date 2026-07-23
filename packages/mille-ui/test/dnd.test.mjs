@@ -587,6 +587,41 @@ test('onDropError is invoked when external import fails', async () => {
   container.remove();
 });
 
+test('onDropError fires once for internal move failures', async () => {
+  const fx = createFakeEngine();
+  fx.emitDelta(createFakeSnapshot({ rows: sampleRows(), treeVersion: 1 }));
+  fx.move = async () => {
+    throw new Error('move denied');
+  };
+  const errors = [];
+  const { container, root } = await mountTree({
+    fx,
+    props: {
+      dragDrop: {
+        onDropError: (error) => {
+          errors.push(error);
+        },
+      },
+    },
+  });
+  const source = rowByEntryId(container, 2);
+  const target = rowByEntryId(container, 3);
+  const dt = createFakeDataTransfer();
+  await act(async () => { fireDragEvent(source, 'dragstart', { dataTransfer: dt }); });
+  await act(async () => { fireDragEvent(target, 'dragenter', { clientY: 55, dataTransfer: dt }); });
+  await act(async () => { fireDragEvent(target, 'dragover', { clientY: 55, dataTransfer: dt }); });
+  await act(async () => { fireDragEvent(target, 'drop', { clientY: 55, dataTransfer: dt }); });
+  await act(async () => { await Promise.resolve(); });
+  await act(async () => { await Promise.resolve(); });
+  await act(async () => { await Promise.resolve(); });
+
+  assert.equal(errors.length, 1, 'internal drop failures must report once');
+  assert.match(String(errors[0]?.message ?? errors[0]), /move denied/);
+
+  await act(async () => { root.unmount(); });
+  container.remove();
+});
+
 test('disableDragDrop on the tree → rows are not rendered with draggable attr', async () => {
   const fx = createFakeEngine();
   fx.emitDelta(createFakeSnapshot({ rows: sampleRows(), treeVersion: 1 }));

@@ -1097,6 +1097,13 @@ gates a progress-aware 256-file import. On release macOS arm64 the gate measured
 emitted. This completes the planned Phase 4.3 progress/cancellation surface;
 watcher coalescing refinements remain available as follow-ups if needed.
 
+Phase 4.3 hardening (2026-07-23): overwrite uses sibling staging + swap so
+cancel/failure never destroys the original destination; host forwards
+`OP_*` warnings to port clients; `reportProgress: false` is honored; duplicate
+`operationId` is rejected; merge progress totals match completion; move uses the
+transfer cancel wrapper; pre-count respects cancellation; internal DnD reports
+`onDropError` once; port `cancelOperation` returns the host boolean.
+
 #### 4.4 Add recovery and undo
 
 - Make trash the safe default where the platform supports it.

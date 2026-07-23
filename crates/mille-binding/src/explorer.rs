@@ -225,10 +225,12 @@ impl FileExplorer {
     fn begin_copy_progress(
         &self,
         options: Option<&TransferOptionsJs>,
-    ) -> Option<CopyProgressCtx> {
-        let operation_id = options.and_then(|o| o.operation_id.clone())?;
+    ) -> std::result::Result<Option<CopyProgressCtx>, FxError> {
+        let Some(operation_id) = options.and_then(|o| o.operation_id.clone()) else {
+            return Ok(None);
+        };
         if operation_id.is_empty() {
-            return None;
+            return Ok(None);
         }
         let report = options
             .and_then(|o| o.report_progress)
@@ -236,19 +238,22 @@ impl FileExplorer {
         let token = CancellationToken::new();
         {
             let mut map = self.operations.lock();
+            if map.contains_key(&operation_id) {
+                return Err(FxError::InvalidInput(format!(
+                    "duplicate operationId already in flight: {operation_id}"
+                )));
+            }
             map.insert(operation_id.clone(), token.clone());
         }
-        if !report {
-            // Still register for cancellation without progress spam.
-        }
-        Some(CopyProgressCtx {
+        Ok(Some(CopyProgressCtx {
             operation_id,
             token,
             events: Arc::clone(&self.events),
             done: AtomicU64::new(0),
             total: AtomicU64::new(0),
             report_every: 16,
-        })
+            report_progress: report,
+        }))
     }
 
     fn end_copy_progress(&self, progress: Option<&CopyProgressCtx>, status: &str) {
@@ -257,6 +262,7 @@ impl FileExplorer {
         };
         progress.emit_complete(status);
         let mut map = self.operations.lock();
+        // Duplicate operationIds are rejected at begin, so removing by id is safe.
         map.remove(&progress.operation_id);
     }
 
@@ -1445,6 +1451,18 @@ impl FileExplorer {
             return Ok(EntryJs::from_core(source.as_ref()));
         }
 
+        let progress = self
+            .begin_copy_progress(options.as_ref())
+            .map_err(fx_error_to_napi)?;
+        if let Some(ref prog) = progress {
+            // Single-step renames still expose a cooperative cancel point.
+            if let Err(error) = prog.check() {
+                self.end_copy_progress(progress.as_ref(), "cancelled");
+                return Err(fx_error_to_napi(error));
+            }
+            prog.total.store(1, Ordering::Relaxed);
+        }
+
         // Merge for directories preserves destination-only children.
         if matches!(dest.action, DestAction::Merge)
             && source.kind == EntryKind::Directory
@@ -1453,13 +1471,24 @@ impl FileExplorer {
                 .await
                 .map_err(|e| fx_error_to_napi(io_to_fx(e, dest.path.clone())))?;
             if !(dest_meta.is_dir() && !dest_meta.file_type().is_symlink()) {
+                self.end_copy_progress(progress.as_ref(), "failed");
                 return Err(fx_error_to_napi(FxError::InvalidInput(
                     "collision: merge requires a real directory destination".into(),
                 )));
             }
-            merge_move_tree_on_disk(&old_path, &dest.path)
-                .await
-                .map_err(fx_error_to_napi)?;
+            if let Err(error) =
+                merge_move_tree_on_disk_with_progress(&old_path, &dest.path, progress.as_ref())
+                    .await
+            {
+                let status = if matches!(error, FxError::Cancelled) {
+                    "cancelled"
+                } else {
+                    "failed"
+                };
+                self.end_copy_progress(progress.as_ref(), status);
+                return Err(fx_error_to_napi(error));
+            }
+            self.end_copy_progress(progress.as_ref(), "completed");
             self.record_intent(old_path.clone(), IntentKind::Delete);
             self.record_intent(dest.path.clone(), IntentKind::Rename);
             let _policy_guard = self.policy_gate.lock();
@@ -1484,11 +1513,13 @@ impl FileExplorer {
         if matches!(dest.action, DestAction::Overwrite | DestAction::Merge) {
             // File merge falls back to overwrite. Never delete the source.
             if paths_equal(&dest.path, &old_path) {
+                self.end_copy_progress(progress.as_ref(), "completed");
                 return Ok(EntryJs::from_core(source.as_ref()));
             }
             if let Some(existing) = self.store.get_by_path(&dest.path) {
                 let existing_id = existing.id;
                 if existing_id == eid {
+                    self.end_copy_progress(progress.as_ref(), "completed");
                     return Ok(EntryJs::from_core(source.as_ref()));
                 }
                 let existing_kind = existing.kind;
@@ -1503,7 +1534,15 @@ impl FileExplorer {
         }
         let new_path = dest.path;
 
+        if let Some(ref prog) = progress {
+            if let Err(error) = prog.check() {
+                self.end_copy_progress(progress.as_ref(), "cancelled");
+                return Err(fx_error_to_napi(error));
+            }
+        }
+
         if let Err(error) = tokio::fs::rename(&old_path, &new_path).await {
+            self.end_copy_progress(progress.as_ref(), "failed");
             if error.raw_os_error() == Some(18) {
                 return Err(fx_error_to_napi(FxError::Unsupported(
                     "cross-device move requires copy/delete fallback".into(),
@@ -1517,8 +1556,13 @@ impl FileExplorer {
         let _policy_guard = self.policy_gate.lock();
         if let Err(error) = self.store.rename(eid, new_path.clone()) {
             let _ = tokio::fs::rename(&new_path, &old_path).await;
+            self.end_copy_progress(progress.as_ref(), "failed");
             return Err(fx_error_to_napi(error));
         }
+        if let Some(ref prog) = progress {
+            prog.bump(&new_path);
+        }
+        self.end_copy_progress(progress.as_ref(), "completed");
         self.reclassify_current_excludes()
             .map_err(fx_error_to_napi)?;
 
@@ -1709,40 +1753,38 @@ impl FileExplorer {
             )));
         }
 
-        if matches!(dest.action, DestAction::Overwrite) {
-            if paths_equal(&dst_path, &src_path) {
-                return Err(fx_error_to_napi(FxError::InvalidInput(
-                    "cannot overwrite source with itself".into(),
-                )));
-            }
-            if let Some(existing) = self.store.get_by_path(&dst_path) {
-                let existing_id = existing.id;
-                if existing_id == eid {
-                    return Err(fx_error_to_napi(FxError::InvalidInput(
-                        "cannot overwrite source with itself".into(),
-                    )));
-                }
-                let existing_kind = existing.kind;
-                let _policy_guard = self.policy_gate.lock();
-                if existing_kind == EntryKind::Directory {
-                    let _ = self.store.remove_subtree(existing_id);
-                } else {
-                    let _ = self.store.remove(existing_id);
-                }
-            }
-            remove_path_best_effort(&dst_path).await;
+        if matches!(dest.action, DestAction::Overwrite)
+            && (paths_equal(&dst_path, &src_path)
+                || self
+                    .store
+                    .get_by_path(&dst_path)
+                    .map(|e| e.id == eid)
+                    .unwrap_or(false))
+        {
+            return Err(fx_error_to_napi(FxError::InvalidInput(
+                "cannot overwrite source with itself".into(),
+            )));
         }
 
         if src_entry.kind == EntryKind::Directory {
-            let progress = self.begin_copy_progress(options.as_ref());
-            if let Some(ref progress) = progress {
-                match count_copy_entries(&src_path).await {
-                    Ok(total) => progress.total.store(total.max(1), Ordering::Relaxed),
-                    Err(_) => progress.total.store(1, Ordering::Relaxed),
+            let progress = self
+                .begin_copy_progress(options.as_ref())
+                .map_err(fx_error_to_napi)?;
+            if let Some(ref prog) = progress {
+                match count_copy_entries(&src_path, Some(prog)).await {
+                    Ok(total) => prog.total.store(total.max(1), Ordering::Relaxed),
+                    Err(FxError::Cancelled) => {
+                        self.end_copy_progress(progress.as_ref(), "cancelled");
+                        return Err(fx_error_to_napi(FxError::Cancelled));
+                    }
+                    Err(_) => prog.total.store(1, Ordering::Relaxed),
                 }
             }
             let copy_result = if matches!(dest.action, DestAction::Merge) {
                 merge_tree_on_disk_with_progress(&src_path, &dst_path, progress.as_ref()).await
+            } else if matches!(dest.action, DestAction::Overwrite) {
+                // Staging keeps the original destination until swap succeeds.
+                copy_via_staging(&src_path, &dst_path, progress.as_ref()).await
             } else {
                 copy_tree_on_disk_with_progress(&src_path, &dst_path, progress.as_ref()).await
             };
@@ -1753,12 +1795,28 @@ impl FileExplorer {
                     "failed"
                 };
                 self.end_copy_progress(progress.as_ref(), status);
-                if !matches!(dest.action, DestAction::Merge) {
+                // Create (non-overwrite, non-merge) may leave a partial tree.
+                if matches!(dest.action, DestAction::Create) {
                     let _ = remove_path_best_effort(&dst_path).await;
                 }
+                // Overwrite/merge failures leave the original destination intact
+                // (staging cleaned by copy_via_staging / merge is non-destructive).
                 return Err(fx_error_to_napi(error));
             }
             self.end_copy_progress(progress.as_ref(), "completed");
+            // Overwrite: drop any prior store identity before reindex/reconcile.
+            if matches!(dest.action, DestAction::Overwrite) {
+                if let Some(existing) = self.store.get_by_path(&dst_path) {
+                    let existing_id = existing.id;
+                    let existing_kind = existing.kind;
+                    let _policy_guard = self.policy_gate.lock();
+                    if existing_kind == EntryKind::Directory {
+                        let _ = self.store.remove_subtree(existing_id);
+                    } else {
+                        let _ = self.store.remove(existing_id);
+                    }
+                }
+            }
             self.record_intent(dst_path.clone(), IntentKind::Create);
             // Authoritatively reconcile the destination subtree so merge
             // updates existing entries (size/mtime/kind) and drops stale ones.
@@ -1791,22 +1849,36 @@ impl FileExplorer {
             return Ok(EntryJs::from_core(arc.as_ref()));
         }
 
-        let progress = self.begin_copy_progress(options.as_ref());
+        let progress = self
+            .begin_copy_progress(options.as_ref())
+            .map_err(fx_error_to_napi)?;
         if let Some(ref progress) = progress {
             progress.total.store(1, Ordering::Relaxed);
         }
-        if let Err(error) = copy_tree_on_disk_with_progress(&src_path, &dst_path, progress.as_ref()).await
-        {
+        let file_result = if matches!(dest.action, DestAction::Overwrite) {
+            copy_via_staging(&src_path, &dst_path, progress.as_ref()).await
+        } else {
+            copy_tree_on_disk_with_progress(&src_path, &dst_path, progress.as_ref()).await
+        };
+        if let Err(error) = file_result {
             let status = if matches!(error, FxError::Cancelled) {
                 "cancelled"
             } else {
                 "failed"
             };
             self.end_copy_progress(progress.as_ref(), status);
-            let _ = remove_path_best_effort(&dst_path).await;
+            if matches!(dest.action, DestAction::Create) {
+                let _ = remove_path_best_effort(&dst_path).await;
+            }
             return Err(fx_error_to_napi(error));
         }
         self.end_copy_progress(progress.as_ref(), "completed");
+        if matches!(dest.action, DestAction::Overwrite) {
+            if let Some(existing) = self.store.get_by_path(&dst_path) {
+                let _policy_guard = self.policy_gate.lock();
+                let _ = self.store.remove(existing.id);
+            }
+        }
         self.record_intent(dst_path.clone(), IntentKind::Create);
 
         let mut entry = stat_to_entry(&dst_path, Some(new_parent_eid), effective_name)
@@ -1959,37 +2031,31 @@ impl FileExplorer {
             return Ok(EntryJs::from_core(arc.as_ref()));
         }
 
-        if matches!(dest.action, DestAction::Overwrite) {
-            if paths_equal(&dst_path, &src_path) {
-                return Err(fx_error_to_napi(FxError::InvalidInput(
-                    "cannot overwrite source with itself".into(),
-                )));
-            }
-            if let Some(existing) = self.store.get_by_path(&dst_path) {
-                let existing_id = existing.id;
-                let existing_kind = existing.kind;
-                let _policy_guard = self.policy_gate.lock();
-                if existing_kind == EntryKind::Directory {
-                    let _ = self.store.remove_subtree(existing_id);
-                } else {
-                    let _ = self.store.remove(existing_id);
-                }
-            }
-            remove_path_best_effort(&dst_path).await;
+        if matches!(dest.action, DestAction::Overwrite) && paths_equal(&dst_path, &src_path) {
+            return Err(fx_error_to_napi(FxError::InvalidInput(
+                "cannot overwrite source with itself".into(),
+            )));
         }
 
-        // On mid-copy failure or cancel, remove any partial destination so we
-        // never leave empty placeholder files behind (except merge into an
-        // existing tree, where partial cleanup would destroy unrelated content).
-        let progress = self.begin_copy_progress(options.as_ref());
-        if let Some(ref progress) = progress {
-            match count_copy_entries(&src_path).await {
-                Ok(total) => progress.total.store(total.max(1), Ordering::Relaxed),
-                Err(_) => progress.total.store(1, Ordering::Relaxed),
+        // On mid-copy failure or cancel: create paths drop partial trees;
+        // overwrite uses staging so the original destination survives.
+        let progress = self
+            .begin_copy_progress(options.as_ref())
+            .map_err(fx_error_to_napi)?;
+        if let Some(ref prog) = progress {
+            match count_copy_entries(&src_path, Some(prog)).await {
+                Ok(total) => prog.total.store(total.max(1), Ordering::Relaxed),
+                Err(FxError::Cancelled) => {
+                    self.end_copy_progress(progress.as_ref(), "cancelled");
+                    return Err(fx_error_to_napi(FxError::Cancelled));
+                }
+                Err(_) => prog.total.store(1, Ordering::Relaxed),
             }
         }
         let copy_result = if matches!(dest.action, DestAction::Merge) {
             merge_tree_on_disk_with_progress(&src_path, &dst_path, progress.as_ref()).await
+        } else if matches!(dest.action, DestAction::Overwrite) {
+            copy_via_staging(&src_path, &dst_path, progress.as_ref()).await
         } else {
             copy_tree_on_disk_with_progress(&src_path, &dst_path, progress.as_ref()).await
         };
@@ -2000,12 +2066,24 @@ impl FileExplorer {
                 "failed"
             };
             self.end_copy_progress(progress.as_ref(), status);
-            if !matches!(dest.action, DestAction::Merge) {
+            if matches!(dest.action, DestAction::Create) {
                 let _ = remove_path_best_effort(&dst_path).await;
             }
             return Err(fx_error_to_napi(error));
         }
         self.end_copy_progress(progress.as_ref(), "completed");
+        if matches!(dest.action, DestAction::Overwrite) {
+            if let Some(existing) = self.store.get_by_path(&dst_path) {
+                let existing_id = existing.id;
+                let existing_kind = existing.kind;
+                let _policy_guard = self.policy_gate.lock();
+                if existing_kind == EntryKind::Directory {
+                    let _ = self.store.remove_subtree(existing_id);
+                } else {
+                    let _ = self.store.remove(existing_id);
+                }
+            }
+        }
         self.record_intent(dst_path.clone(), IntentKind::Create);
 
         // Index the new material. Files insert directly; directories walk
@@ -2795,6 +2873,9 @@ struct CopyProgressCtx {
     total: AtomicU64,
     /// Emit at most once per this many completed items.
     report_every: u64,
+    /// When false, still track done/total for completion payloads but skip
+    /// intermediate OP_PROGRESS spam.
+    report_progress: bool,
 }
 
 impl CopyProgressCtx {
@@ -2809,12 +2890,18 @@ impl CopyProgressCtx {
     fn bump(&self, path: &Path) {
         let done = self.done.fetch_add(1, Ordering::Relaxed) + 1;
         let total = self.total.load(Ordering::Relaxed).max(done);
+        if !self.report_progress {
+            return;
+        }
         if done == 1 || done == total || done % self.report_every == 0 {
             self.emit_progress(done, total, path);
         }
     }
 
     fn emit_progress(&self, done: u64, total: u64, path: &Path) {
+        if !self.report_progress {
+            return;
+        }
         let detail = format!(
             r#"{{"operationId":{},"phase":"copy","done":{},"total":{},"path":{}}}"#,
             serde_json_string(&self.operation_id),
@@ -2869,14 +2956,21 @@ fn serde_json_string(s: &str) -> String {
     out
 }
 
-async fn count_copy_entries(src: &Path) -> std::result::Result<u64, FxError> {
-    count_copy_entries_guarded(src, &mut Vec::new()).await
+async fn count_copy_entries(
+    src: &Path,
+    progress: Option<&CopyProgressCtx>,
+) -> std::result::Result<u64, FxError> {
+    count_copy_entries_guarded(src, &mut Vec::new(), progress).await
 }
 
 async fn count_copy_entries_guarded(
     src: &Path,
     stack: &mut Vec<PathBuf>,
+    progress: Option<&CopyProgressCtx>,
 ) -> std::result::Result<u64, FxError> {
+    if let Some(p) = progress {
+        p.check()?;
+    }
     let meta = tokio::fs::symlink_metadata(src)
         .await
         .map_err(|e| io_to_fx(e, src.to_path_buf()))?;
@@ -2915,7 +3009,7 @@ async fn count_copy_entries_guarded(
         .map_err(|e| io_to_fx(e, src.to_path_buf()))?
     {
         total = total.saturating_add(
-            Box::pin(count_copy_entries_guarded(&entry.path(), stack)).await?,
+            Box::pin(count_copy_entries_guarded(&entry.path(), stack, progress)).await?,
         );
     }
     stack.pop();
@@ -2926,6 +3020,79 @@ async fn count_copy_entries_guarded(
 /// Directory symlinks are *not* followed — they are recreated as symlinks
 /// when the platform supports it, otherwise copied as empty placeholders
 /// is rejected. File symlinks copy link-target contents once.
+/// Sibling staging path for safe overwrite: copy into this path, then swap.
+fn staging_path_for(dest: &Path) -> PathBuf {
+    let parent = dest.parent().unwrap_or_else(|| Path::new("."));
+    let name = dest
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("entry");
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    parent.join(format!(".mille-stage-{stamp}-{name}"))
+}
+
+fn backup_path_for(dest: &Path) -> PathBuf {
+    let parent = dest.parent().unwrap_or_else(|| Path::new("."));
+    let name = dest
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("entry");
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    parent.join(format!(".mille-bak-{stamp}-{name}"))
+}
+
+/// Copy `src` into `dst` via a sibling staging path so a cancelled overwrite
+/// never destroys the pre-existing destination.
+async fn copy_via_staging(
+    src: &Path,
+    dst: &Path,
+    progress: Option<&CopyProgressCtx>,
+) -> std::result::Result<(), FxError> {
+    let staging = staging_path_for(dst);
+    // Ensure we never collide with an existing staging leftover.
+    remove_path_best_effort(&staging).await;
+    if let Err(error) = copy_tree_on_disk_with_progress(src, &staging, progress).await {
+        remove_path_best_effort(&staging).await;
+        return Err(error);
+    }
+    if let Some(p) = progress {
+        p.check()?;
+    }
+    let dest_exists = tokio::fs::symlink_metadata(dst).await.is_ok();
+    let backup = if dest_exists {
+        let backup = backup_path_for(dst);
+        remove_path_best_effort(&backup).await;
+        tokio::fs::rename(dst, &backup)
+            .await
+            .map_err(|e| {
+                // Leave staging for cleanup; dest still intact on rename fail.
+                e
+            })
+            .map_err(|e| io_to_fx(e, dst.to_path_buf()))?;
+        Some(backup)
+    } else {
+        None
+    };
+    if let Err(error) = tokio::fs::rename(&staging, dst).await {
+        // Restore backup if we moved the original aside.
+        if let Some(backup) = backup.as_ref() {
+            let _ = tokio::fs::rename(backup, dst).await;
+        }
+        remove_path_best_effort(&staging).await;
+        return Err(io_to_fx(error, dst.to_path_buf()));
+    }
+    if let Some(backup) = backup {
+        remove_path_best_effort(&backup).await;
+    }
+    Ok(())
+}
+
 async fn copy_tree_on_disk(
     src: &Path,
     dst: &Path,
@@ -3127,6 +3294,11 @@ async fn merge_tree_on_disk_with_progress(
             // Prefer real directories only for merge descent (no symlink follow).
             let dst_is_real_dir = dst_meta.is_dir() && !dst_meta.file_type().is_symlink();
             if src_is_dir && !src_meta.file_type().is_symlink() && dst_is_real_dir {
+                // Count the destination directory itself so totals match pre-count
+                // (which includes directory nodes).
+                if let Some(p) = progress {
+                    p.bump(dst);
+                }
                 let mut rd = tokio::fs::read_dir(src)
                     .await
                     .map_err(|e| io_to_fx(e, src.to_path_buf()))?;
@@ -3161,6 +3333,18 @@ async fn merge_move_tree_on_disk(
     src: &Path,
     dst: &Path,
 ) -> std::result::Result<(), FxError> {
+    merge_move_tree_on_disk_with_progress(src, dst, None).await
+}
+
+async fn merge_move_tree_on_disk_with_progress(
+    src: &Path,
+    dst: &Path,
+    progress: Option<&CopyProgressCtx>,
+) -> std::result::Result<(), FxError> {
+    if let Some(p) = progress {
+        p.check()?;
+        p.bump(dst);
+    }
     let mut rd = tokio::fs::read_dir(src)
         .await
         .map_err(|e| io_to_fx(e, src.to_path_buf()))?;
@@ -3169,6 +3353,9 @@ async fn merge_move_tree_on_disk(
         .await
         .map_err(|e| io_to_fx(e, src.to_path_buf()))?
     {
+        if let Some(p) = progress {
+            p.check()?;
+        }
         let name = entry.file_name();
         let child_src = entry.path();
         let child_dst = dst.join(&name);
@@ -3181,18 +3368,29 @@ async fn merge_move_tree_on_disk(
                 tokio::fs::rename(&child_src, &child_dst)
                     .await
                     .map_err(|e| io_to_fx(e, child_src.clone()))?;
+                if let Some(p) = progress {
+                    p.bump(&child_dst);
+                }
             }
             Err(error) => return Err(io_to_fx(error, child_dst)),
             Ok(dst_meta) => {
                 let dst_is_dir = dst_meta.is_dir() && !dst_meta.file_type().is_symlink();
                 if src_is_dir && dst_is_dir {
-                    Box::pin(merge_move_tree_on_disk(&child_src, &child_dst)).await?;
+                    Box::pin(merge_move_tree_on_disk_with_progress(
+                        &child_src,
+                        &child_dst,
+                        progress,
+                    ))
+                    .await?;
                     let _ = tokio::fs::remove_dir(&child_src).await;
                 } else {
                     remove_path_best_effort(&child_dst).await;
                     tokio::fs::rename(&child_src, &child_dst)
                         .await
                         .map_err(|e| io_to_fx(e, child_src.clone()))?;
+                    if let Some(p) = progress {
+                        p.bump(&child_dst);
+                    }
                 }
             }
         }

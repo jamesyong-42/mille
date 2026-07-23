@@ -112,6 +112,7 @@ export class PortFileExplorer {
   private readonly port: MessagePortLike;
   private readonly pending = new Map<number, PendingRequest>();
   private readonly changeListeners = new Set<ChangeListener>();
+  private readonly warningListeners = new Set<(payload: unknown) => void>();
   private nextReqId = 1;
   private working: MirrorWorking = createMirror();
   private publishedSnapshot: ClientMirrorSnapshot = new ClientMirrorSnapshot(this.working);
@@ -228,9 +229,7 @@ export class PortFileExplorer {
   }
 
   /**
-   * Subscribe to change bumps. Fires on every published snapshot —
-   * handshake, delta, and future channels (event/batch/warning/error/
-   * ready arrive in wave 3+).
+   * Subscribe to change bumps and host-forwarded warnings (transfer progress).
    */
   on(event: string, listener: (...args: unknown[]) => void): Disposable {
     if (event === 'change') {
@@ -239,6 +238,15 @@ export class PortFileExplorer {
       return {
         dispose: () => {
           this.changeListeners.delete(wrapped);
+        },
+      };
+    }
+    if (event === 'warning') {
+      const wrapped = (payload: unknown) => listener(payload);
+      this.warningListeners.add(wrapped);
+      return {
+        dispose: () => {
+          this.warningListeners.delete(wrapped);
         },
       };
     }
@@ -373,10 +381,12 @@ export class PortFileExplorer {
     newName?: string,
     options?: TransferOptions,
   ): Promise<unknown> {
-    const args: Record<string, unknown> = { id, newParentId };
-    if (newName !== undefined) args.newName = newName;
-    if (options !== undefined) args.options = options;
-    return this.mutate('move', args);
+    return this.runTransfer(options, (nativeOptions) => {
+      const args: Record<string, unknown> = { id, newParentId };
+      if (newName !== undefined) args.newName = newName;
+      if (nativeOptions !== undefined) args.options = nativeOptions;
+      return this.mutate('move', args);
+    });
   }
 
   delete(id: number, options?: { trash?: boolean; recursive?: boolean }): Promise<unknown> {
@@ -467,10 +477,13 @@ export class PortFileExplorer {
     return result as { status: string; existingName?: string; path?: string };
   }
 
-  cancelOperation(operationId: string): boolean {
-    // Best-effort fire-and-forget; host applies cancel immediately.
-    void this.call('cancelOperation', [operationId]).catch(() => undefined);
-    return true;
+  /**
+   * Cancel a long transfer. Resolves to true when the host found and
+   * signalled a matching in-flight operation.
+   */
+  async cancelOperation(operationId: string): Promise<boolean> {
+    const result = await this.call('cancelOperation', [operationId]);
+    return result === true;
   }
 
   async readFile(id: number): Promise<Uint8Array> {
@@ -663,7 +676,20 @@ export class PortFileExplorer {
       case 'error':
         this.handleError(f.body as { code: string; message: string });
         return;
-      // event / warning / batch / ready land in wave 3+
+      case 'warning': {
+        const body = f.body as { code?: string; detail?: string };
+        if (typeof body?.code === 'string') {
+          for (const listener of this.warningListeners) {
+            try {
+              listener(body);
+            } catch {
+              /* listener errors must not break the port */
+            }
+          }
+        }
+        return;
+      }
+      // event / batch / ready land in wave 3+
       default:
         return;
     }

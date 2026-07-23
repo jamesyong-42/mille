@@ -667,8 +667,11 @@ export declare class FileExplorer implements Disposable {
    * Hosts use this to prompt only when a real collision exists.
    */
   probeDestination(parentId: EntryId, name: string): Promise<DestinationProbe>;
-  /** Cancel a long transfer previously started with `operationId`. */
-  cancelOperation(operationId: string): boolean;
+  /**
+   * Cancel a long transfer previously started with `operationId`.
+   * Local explorers return synchronously; port clients may return a Promise.
+   */
+  cancelOperation(operationId: string): boolean | Promise<boolean>;
 
   // I/O
   readFile(id: EntryId, signal?: AbortSignal): Promise<Uint8Array>;

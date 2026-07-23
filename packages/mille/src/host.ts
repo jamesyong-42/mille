@@ -205,6 +205,8 @@ class FileExplorerHostImpl implements FileExplorerHost {
   private readonly decorationStore = new DecorationStore();
   /** Native watcher event bridge (overflow/coarse invalidation). */
   private readonly watcherEventSub: Disposable;
+  /** Native warning bridge (transfer progress / OP_*). */
+  private readonly warningSub: Disposable;
   /** Ids whose merged decorations changed since the last tick. */
   private pendingDecorationChangedIds: Set<number> = new Set();
 
@@ -219,6 +221,18 @@ class FileExplorerHostImpl implements FileExplorerHost {
       // list and allow a later expansion to prefetch again if needed.
       this.prefetched.delete(event.id);
       this.markSubtreeCoarse(event.id);
+    });
+    // Forward transfer progress / other warnings to every attached renderer.
+    this.warningSub = this.explorer.on('warning', (raw) => {
+      const payload = raw as { code?: string; detail?: string } | undefined;
+      if (!payload || typeof payload.code !== 'string') return;
+      const body = {
+        code: payload.code,
+        ...(typeof payload.detail === 'string' ? { detail: payload.detail } : null),
+      };
+      for (const session of this.sessions.values()) {
+        this.send(session, frame('warning', body));
+      }
     });
   }
 
@@ -1320,6 +1334,7 @@ class FileExplorerHostImpl implements FileExplorerHost {
     if (this.disposed) return;
     this.disposed = true;
     this.watcherEventSub.dispose();
+    this.warningSub.dispose();
     this.stopTick();
     for (const id of [...this.sessions.keys()]) {
       this.detachSession(id);

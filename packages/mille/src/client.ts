@@ -89,6 +89,13 @@ export interface VisibleRowCount {
   readonly pendingExpansions: ReadonlySet<EntryId>;
 }
 
+export interface TransferOptions {
+  /** Cross-root transfers are denied unless explicitly enabled. */
+  readonly crossRoot?: boolean;
+  /** Existing destinations fail by default; `rename` selects a free copy suffix. */
+  readonly collision?: 'error' | 'rename';
+}
+
 export interface Decoration {
   readonly badge?: string;
   readonly color?: string;
@@ -201,9 +208,19 @@ type NativeFx = {
   ): Promise<number>;
   create(parentId: number, name: string, kind: number): Promise<Entry>;
   rename(id: number, newName: string): Promise<Entry>;
-  move(id: number, newParentId: number, newName?: string): Promise<Entry>;
+  move(
+    id: number,
+    newParentId: number,
+    newName?: string,
+    options?: TransferOptions,
+  ): Promise<Entry>;
   delete(id: number, options?: { trash?: boolean; recursive?: boolean }): Promise<void>;
-  copy(id: number, newParentId: number, newName?: string): Promise<Entry>;
+  copy(
+    id: number,
+    newParentId: number,
+    newName?: string,
+    options?: TransferOptions,
+  ): Promise<Entry>;
   readFile(id: number): Promise<Buffer>;
   readText(id: number, encoding?: string): Promise<string>;
   writeFile(id: number, data: Buffer, options?: { atomic?: boolean }): Promise<void>;
@@ -832,16 +849,26 @@ export class FileExplorer {
     return wrap(this.nativeFx.rename(id, newName));
   }
 
-  move(id: EntryId, newParentId: EntryId, newName?: string): Promise<Entry> {
-    return wrap(this.nativeFx.move(id, newParentId, newName));
+  move(
+    id: EntryId,
+    newParentId: EntryId,
+    newName?: string,
+    options?: TransferOptions,
+  ): Promise<Entry> {
+    return wrap(this.nativeFx.move(id, newParentId, newName, options));
   }
 
   delete(id: EntryId, options?: { trash?: boolean; recursive?: boolean }): Promise<void> {
     return wrap(this.nativeFx.delete(id, options));
   }
 
-  copy(id: EntryId, newParentId: EntryId, newName?: string): Promise<Entry> {
-    return wrap(this.nativeFx.copy(id, newParentId, newName));
+  copy(
+    id: EntryId,
+    newParentId: EntryId,
+    newName?: string,
+    options?: TransferOptions,
+  ): Promise<Entry> {
+    return wrap(this.nativeFx.copy(id, newParentId, newName, options));
   }
 
   // ─── I/O ────────────────────────────────────────────────────────────

@@ -785,9 +785,8 @@ impl EntryStore {
     pub fn rename(&self, id: EntryId, new_path: PathBuf) -> Result<(), FxError> {
         let _guard = self.write_lock.lock();
         let sibling_order = self.sibling_order.read().clone();
-        let entry = self
-            .inner
-            .load()
+        let current = self.inner.load_full();
+        let entry = current
             .entries
             .get(&id)
             .cloned()
@@ -796,10 +795,60 @@ impl EntryStore {
         let old_path = self
             .path_for_id(id)
             .ok_or_else(|| FxError::InternalBug(format!("entry {:?} has no indexed path", id)))?;
-        if old_path.parent() != new_path.parent() {
-            return Err(FxError::Unsupported(
-                "EntryStore::rename only supports moves within the same parent".into(),
+        if old_path == new_path {
+            return Ok(());
+        }
+        let new_parent_path = new_path
+            .parent()
+            .ok_or_else(|| FxError::InvalidInput("new_path has no parent".into()))?;
+        let same_parent_path = old_path.parent() == Some(new_parent_path);
+        let new_parent_id = if same_parent_path {
+            entry.parent_id
+        } else {
+            Some(
+                self.get_by_path(new_parent_path)
+                    .map(|parent| parent.id)
+                    .ok_or_else(|| {
+                        FxError::InvalidInput("destination parent is not indexed".into())
+                    })?,
+            )
+        };
+        if new_parent_id.is_some_and(|parent_id| {
+            current.get(parent_id).is_none_or(|parent| {
+                parent.kind != EntryKind::Directory && parent.symlink_target_is_dir != Some(true)
+            })
+        }) {
+            return Err(FxError::InvalidInput(
+                "destination parent is not a directory".into(),
             ));
+        }
+        if entry.parent_id.is_none() && !same_parent_path {
+            return Err(FxError::InvalidInput(
+                "workspace roots cannot be moved".into(),
+            ));
+        }
+        let old_parent_id = entry.parent_id;
+        let reparenting = old_parent_id != new_parent_id;
+        if reparenting {
+            let mut cursor = new_parent_id;
+            let mut hops = 0usize;
+            while let Some(candidate) = cursor {
+                if candidate == id {
+                    return Err(FxError::InvalidInput(
+                        "cannot move an entry into its own subtree".into(),
+                    ));
+                }
+                if hops >= MAX_ANCESTOR_WALK {
+                    return Err(FxError::InvalidInput(
+                        "destination parent chain is cyclic or too deep".into(),
+                    ));
+                }
+                cursor = current
+                    .entries
+                    .get(&candidate)
+                    .and_then(|item| item.parent_id);
+                hops += 1;
+            }
         }
 
         // Capture every known descendant mapping before publishing the renamed
@@ -822,6 +871,19 @@ impl EntryStore {
         } else {
             vec![(old_path.clone(), id, new_path.clone())]
         };
+        let moving_ids: HashSet<EntryId> = path_updates
+            .iter()
+            .map(|(_, entry_id, _)| *entry_id)
+            .collect();
+        for (_, _, destination) in &path_updates {
+            if let Some(existing) = self.path_to_id.get(destination.as_path()) {
+                if !moving_ids.contains(existing.value()) {
+                    return Err(FxError::InvalidInput(format!(
+                        "destination path is already indexed: {destination:?}"
+                    )));
+                }
+            }
+        }
 
         let new_name = new_path
             .file_name()
@@ -829,16 +891,78 @@ impl EntryStore {
             .ok_or_else(|| FxError::InvalidInput("new_path has no valid UTF-8 filename".into()))?
             .to_string();
 
-        let current = self.inner.load_full();
         let mut next = (*current).clone();
 
-        // Clone the Entry, update name, reinsert the Arc.
+        // Clone the Entry, update name/parent, and reinsert the Arc.
         let mut updated = (*entry).clone();
         updated.name = new_name.clone();
+        updated.parent_id = new_parent_id;
         next.entries.insert(id, Arc::new(updated));
 
-        // Re-sort siblings: directories first, then name within group.
-        if let Some(parent_id) = entry.parent_id {
+        if reparenting {
+            let new_parent_id = new_parent_id.expect("reparent destination has a parent id");
+            if let Some(old_parent_id) = old_parent_id {
+                if let Some(siblings) = next.children.get_mut(&old_parent_id) {
+                    siblings.retain(|child| *child != id);
+                }
+                if let Some(count) = next.direct_child_counts.get_mut(&old_parent_id) {
+                    *count = count.saturating_sub(1);
+                }
+            }
+            let mut siblings = next.children.remove(&new_parent_id).unwrap_or_default();
+            let insert_pos = siblings
+                .binary_search_by(|&sibling| {
+                    let sibling_entry = next.entries.get(&sibling);
+                    match (sibling_entry, next.entries.get(&id)) {
+                        (Some(sibling_entry), Some(updated)) => {
+                            sibling_order.compare(sibling_entry, updated)
+                        }
+                        _ => sibling.cmp(&id),
+                    }
+                })
+                .unwrap_or_else(|position| position);
+            siblings.insert(insert_pos, id);
+            next.children.insert(new_parent_id, siblings);
+            *next.direct_child_counts.entry(new_parent_id).or_insert(0) += 1;
+
+            let visible = current
+                .descendant_visible_counts
+                .get(&id)
+                .copied()
+                .unwrap_or(0);
+            let size = current
+                .descendant_total_sizes
+                .get(&id)
+                .copied()
+                .unwrap_or(0);
+            let mut cursor = old_parent_id;
+            let mut hops = 0usize;
+            while let Some(ancestor) = cursor {
+                if hops >= MAX_ANCESTOR_WALK {
+                    break;
+                }
+                if let Some(count) = next.descendant_visible_counts.get_mut(&ancestor) {
+                    *count = count.saturating_sub(visible);
+                }
+                if let Some(total) = next.descendant_total_sizes.get_mut(&ancestor) {
+                    *total = total.saturating_sub(size);
+                }
+                cursor = next.entries.get(&ancestor).and_then(|item| item.parent_id);
+                hops += 1;
+            }
+            let mut cursor = Some(new_parent_id);
+            let mut hops = 0usize;
+            while let Some(ancestor) = cursor {
+                if hops >= MAX_ANCESTOR_WALK {
+                    break;
+                }
+                *next.descendant_visible_counts.entry(ancestor).or_insert(0) += visible;
+                *next.descendant_total_sizes.entry(ancestor).or_insert(0) += size;
+                cursor = next.entries.get(&ancestor).and_then(|item| item.parent_id);
+                hops += 1;
+            }
+        } else if let Some(parent_id) = old_parent_id {
+            // Same-parent rename: re-sort in place.
             if let Some(siblings) = next.children.get_mut(&parent_id) {
                 if let Some(pos) = siblings.iter().position(|&c| c == id) {
                     siblings.remove(pos);
@@ -877,10 +1001,17 @@ impl EntryStore {
         // Same-parent rename: parent unchanged, so reparented_ids stays empty.
         self.record_mutation(prev_tree_version, new_tree_version, |cs| {
             cs.changed_ids.insert(id);
-            // Display projections (file nesting, name/type sorting) derive
-            // sibling membership from basenames, so a same-parent rename is
-            // still an authoritative child-list change.
-            if let Some(parent_id) = entry.parent_id {
+            if reparenting {
+                cs.reparented_ids.insert(id, (old_parent_id, new_parent_id));
+                if let Some(old_parent_id) = old_parent_id {
+                    cs.child_set_changed.insert(old_parent_id);
+                    cs.subtree_roots_changed.insert(old_parent_id);
+                }
+                if let Some(new_parent_id) = new_parent_id {
+                    cs.child_set_changed.insert(new_parent_id);
+                    cs.subtree_roots_changed.insert(new_parent_id);
+                }
+            } else if let Some(parent_id) = old_parent_id {
                 cs.child_set_changed.insert(parent_id);
             }
         });
@@ -1672,6 +1803,48 @@ mod tests {
 
         s.rename(b, "/r/zzz".into()).unwrap();
         assert_eq!(s.snapshot().children_of(root), &[a, c, b]);
+    }
+
+    #[test]
+    fn cross_parent_move_preserves_subtree_ids_paths_and_summaries() {
+        let s = EntryStore::new();
+        let root_a = s.insert("/a".into(), dir("a", None)).unwrap();
+        let root_b = s.insert("/b".into(), dir("b", None)).unwrap();
+        let folder = s
+            .insert("/a/folder".into(), dir("folder", Some(root_a)))
+            .unwrap();
+        let leaf = s
+            .insert(
+                "/a/folder/file.txt".into(),
+                file_with_size("file.txt", Some(folder), 42),
+            )
+            .unwrap();
+        let retained = s.snapshot();
+        s.take_pending_changes();
+
+        s.rename(folder, "/b/renamed".into()).unwrap();
+        let current = s.snapshot();
+        assert_eq!(current.get(folder).unwrap().parent_id, Some(root_b));
+        assert_eq!(current.get(folder).unwrap().name, "renamed");
+        assert_eq!(current.get(leaf).unwrap().parent_id, Some(folder));
+        assert_eq!(current.children_of(root_a), &[]);
+        assert_eq!(current.children_of(root_b), &[folder]);
+        assert_eq!(s.path_for_id(folder), Some(PathBuf::from("/b/renamed")));
+        assert_eq!(
+            s.path_for_id(leaf),
+            Some(PathBuf::from("/b/renamed/file.txt"))
+        );
+        assert_eq!(s.snapshot().subtree_total_size(root_a), 0);
+        assert_eq!(s.snapshot().subtree_total_size(root_b), 42);
+        assert_eq!(retained.children_of(root_a), &[folder]);
+
+        let changes = s.take_pending_changes();
+        assert_eq!(
+            changes.reparented_ids.get(&folder),
+            Some(&(Some(root_a), Some(root_b)))
+        );
+        assert!(changes.child_set_changed.contains(&root_a));
+        assert!(changes.child_set_changed.contains(&root_b));
     }
 
     #[test]

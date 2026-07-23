@@ -23,6 +23,7 @@ export type {
   Disposable,
   SearchHit,
   SearchOptions,
+  TransferOptions,
   Uri,
   VisibleRow,
   VisibleRowCount,

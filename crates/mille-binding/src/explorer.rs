@@ -3,7 +3,7 @@
 //! Owns the entry store, live filesystem watcher, mutations, snapshots,
 //! typed event fan-out, and deterministic shutdown for local mode.
 
-use std::path::{Component, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
@@ -19,7 +19,9 @@ use mille_core::{
 
 use crate::error::{fx_error_to_napi, io_to_fx};
 use crate::events::{Channel, EventBus};
-use crate::mutations::{kind_from_u8, resolve_entry_path, stat_to_entry, DeleteOptionsJs};
+use crate::mutations::{
+    kind_from_u8, resolve_entry_path, stat_to_entry, DeleteOptionsJs, TransferOptionsJs,
+};
 use crate::snapshot::MirrorSnapshot;
 use crate::types::{
     ChangeNoticeJs, ChangeSetJs, EntryJs, ErrorPayloadJs, FileSystemEventJs, SearchHitJs,
@@ -1150,8 +1152,8 @@ impl FileExplorer {
         Ok(EntryJs::from_core(arc.as_ref()))
     }
 
-    /// Rename a leaf (file or symlink). Directory rename is deferred to the
-    /// Phase 2 walker refactor — core returns Unsupported for that case.
+    /// Rename an entry in place while preserving its identity and any known
+    /// descendant identities.
     #[napi]
     pub async fn rename(&self, id: i64, new_name: String) -> Result<EntryJs> {
         let eid = EntryId(id as u64);
@@ -1188,16 +1190,18 @@ impl FileExplorer {
     }
 
     /// Move an entry under a new parent, optionally renaming in flight.
-    /// Phase 5 scope: same leaf-only constraint as rename.
     #[napi(js_name = "move")]
     pub async fn move_entry(
         &self,
         id: i64,
         new_parent_id: i64,
         new_name: Option<String>,
+        options: Option<TransferOptionsJs>,
     ) -> Result<EntryJs> {
         let eid = EntryId(id as u64);
         let new_parent_eid = EntryId(new_parent_id as u64);
+        let (allow_cross_root, collision) =
+            transfer_policy(options.as_ref()).map_err(fx_error_to_napi)?;
 
         let old_path = resolve_entry_path(&self.store, eid).ok_or_else(|| {
             fx_error_to_napi(FxError::InvalidInput(format!(
@@ -1211,26 +1215,76 @@ impl FileExplorer {
                 new_parent_id
             )))
         })?;
+        let snapshot = self.store.snapshot();
+        let source = snapshot.get(eid).ok_or_else(|| {
+            fx_error_to_napi(FxError::InvalidInput(format!(
+                "id {} vanished mid-move",
+                id
+            )))
+        })?;
+        if source.parent_id.is_none() {
+            return Err(fx_error_to_napi(FxError::InvalidInput(
+                "workspace roots cannot be moved".into(),
+            )));
+        }
+        let destination_parent = snapshot.get(new_parent_eid).ok_or_else(|| {
+            fx_error_to_napi(FxError::InvalidInput(format!(
+                "new_parent id {} vanished mid-move",
+                new_parent_id
+            )))
+        })?;
+        if destination_parent.kind != EntryKind::Directory
+            && destination_parent.symlink_target_is_dir != Some(true)
+        {
+            return Err(fx_error_to_napi(FxError::InvalidInput(
+                "move destination is not a directory".into(),
+            )));
+        }
+        if source.kind == EntryKind::Directory && new_parent_path.starts_with(&old_path) {
+            return Err(fx_error_to_napi(FxError::InvalidInput(
+                "cannot move a directory into its own subtree".into(),
+            )));
+        }
+        let roots = self.roots.read().clone();
+        let source_root = configured_root_for_path(&roots, &old_path);
+        let destination_root = configured_root_for_path(&roots, &new_parent_path);
+        if source_root != destination_root && !allow_cross_root {
+            return Err(fx_error_to_napi(FxError::Unsupported(
+                "cross-root move requires { crossRoot: true }".into(),
+            )));
+        }
 
-        let effective_name = new_name.unwrap_or_else(|| {
+        let desired_name = new_name.unwrap_or_else(|| {
             old_path
                 .file_name()
                 .and_then(|n| n.to_str())
                 .map(|s| s.to_string())
                 .unwrap_or_default()
         });
-        let new_path = new_parent_path.join(&effective_name);
+        if new_parent_path.join(&desired_name) == old_path {
+            return Ok(EntryJs::from_core(source.as_ref()));
+        }
+        let (_, new_path) =
+            resolve_transfer_destination(&new_parent_path, &desired_name, collision)
+                .await
+                .map_err(fx_error_to_napi)?;
 
-        tokio::fs::rename(&old_path, &new_path)
-            .await
-            .map_err(|e| fx_error_to_napi(io_to_fx(e, old_path.clone())))?;
+        if let Err(error) = tokio::fs::rename(&old_path, &new_path).await {
+            if error.raw_os_error() == Some(18) {
+                return Err(fx_error_to_napi(FxError::Unsupported(
+                    "cross-device move requires copy/delete fallback".into(),
+                )));
+            }
+            return Err(fx_error_to_napi(io_to_fx(error, old_path.clone())));
+        }
         self.record_intent(old_path.clone(), IntentKind::Rename);
         self.record_intent(new_path.clone(), IntentKind::Rename);
 
-        // Store still only supports leaf rename today; reparenting to a
-        // different parent lands with the Phase 2 walker refactor.
         let _policy_guard = self.policy_gate.lock();
-        self.store.rename(eid, new_path).map_err(fx_error_to_napi)?;
+        if let Err(error) = self.store.rename(eid, new_path.clone()) {
+            let _ = tokio::fs::rename(&new_path, &old_path).await;
+            return Err(fx_error_to_napi(error));
+        }
         self.reclassify_current_excludes()
             .map_err(fx_error_to_napi)?;
 
@@ -1288,8 +1342,6 @@ impl FileExplorer {
         }
         self.record_intent(path.clone(), IntentKind::Delete);
 
-        // Store removal only covers this id; Phase 2 walker reconciles
-        // descendants via the watcher stream.
         if recursive {
             self.store.remove_subtree(eid);
         } else {
@@ -1298,18 +1350,20 @@ impl FileExplorer {
         Ok(())
     }
 
-    /// Copy an entry under a new parent. Phase 5 scope: file-only; a
-    /// recursive directory copy lands with Phase 2's walker-backed
-    /// subtree ops.
+    /// Copy a file under a new parent. Recursive directory copy remains a
+    /// later transfer-pipeline feature.
     #[napi]
     pub async fn copy(
         &self,
         id: i64,
         new_parent_id: i64,
         new_name: Option<String>,
+        options: Option<TransferOptionsJs>,
     ) -> Result<EntryJs> {
         let eid = EntryId(id as u64);
         let new_parent_eid = EntryId(new_parent_id as u64);
+        let (allow_cross_root, collision) =
+            transfer_policy(options.as_ref()).map_err(fx_error_to_napi)?;
         let snap = self.store.snapshot();
 
         let src_path = resolve_entry_path(&self.store, eid).ok_or_else(|| {
@@ -1333,12 +1387,36 @@ impl FileExplorer {
         })?;
         if src_entry.kind == EntryKind::Directory {
             return Err(fx_error_to_napi(FxError::Unsupported(
-                "recursive directory copy deferred to Phase 2 walker".into(),
+                "recursive directory copy is not supported yet".into(),
+            )));
+        }
+        let destination_parent = snap.get(new_parent_eid).ok_or_else(|| {
+            fx_error_to_napi(FxError::InvalidInput(format!(
+                "new_parent id {} vanished mid-copy",
+                new_parent_id
+            )))
+        })?;
+        if destination_parent.kind != EntryKind::Directory
+            && destination_parent.symlink_target_is_dir != Some(true)
+        {
+            return Err(fx_error_to_napi(FxError::InvalidInput(
+                "copy destination is not a directory".into(),
+            )));
+        }
+        let roots = self.roots.read().clone();
+        let source_root = configured_root_for_path(&roots, &src_path);
+        let destination_root = configured_root_for_path(&roots, &new_parent_path);
+        if source_root != destination_root && !allow_cross_root {
+            return Err(fx_error_to_napi(FxError::Unsupported(
+                "cross-root copy requires { crossRoot: true }".into(),
             )));
         }
 
-        let effective_name = new_name.unwrap_or_else(|| src_entry.name.clone());
-        let dst_path = new_parent_path.join(&effective_name);
+        let desired_name = new_name.unwrap_or_else(|| src_entry.name.clone());
+        let (effective_name, dst_path) =
+            resolve_transfer_destination(&new_parent_path, &desired_name, collision)
+                .await
+                .map_err(fx_error_to_napi)?;
 
         tokio::fs::copy(&src_path, &dst_path)
             .await
@@ -1793,6 +1871,93 @@ fn compile_exclude_matchers(
             Ok((root.clone(), matcher))
         })
         .collect()
+}
+
+#[derive(Copy, Clone)]
+enum CollisionPolicy {
+    Error,
+    Rename,
+}
+
+fn transfer_policy(
+    options: Option<&TransferOptionsJs>,
+) -> std::result::Result<(bool, CollisionPolicy), FxError> {
+    let cross_root = options
+        .and_then(|options| options.cross_root)
+        .unwrap_or(false);
+    let collision = match options.and_then(|options| options.collision.as_deref()) {
+        None | Some("error") => CollisionPolicy::Error,
+        Some("rename") => CollisionPolicy::Rename,
+        Some(other) => {
+            return Err(FxError::InvalidInput(format!(
+                "unsupported collision policy: {other}"
+            )));
+        }
+    };
+    Ok((cross_root, collision))
+}
+
+fn configured_root_for_path(roots: &[PathBuf], path: &Path) -> Option<PathBuf> {
+    roots
+        .iter()
+        .filter(|root| path == root.as_path() || path.starts_with(root))
+        .max_by_key(|root| root.components().count())
+        .cloned()
+}
+
+async fn resolve_transfer_destination(
+    parent: &Path,
+    desired_name: &str,
+    collision: CollisionPolicy,
+) -> std::result::Result<(String, PathBuf), FxError> {
+    let desired = parent.join(desired_name);
+    match tokio::fs::symlink_metadata(&desired).await {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok((desired_name.to_string(), desired));
+        }
+        Err(error) => return Err(io_to_fx(error, desired)),
+        Ok(_) if matches!(collision, CollisionPolicy::Error) => {
+            return Err(io_to_fx(
+                std::io::Error::new(
+                    std::io::ErrorKind::AlreadyExists,
+                    "destination already exists",
+                ),
+                desired,
+            ));
+        }
+        Ok(_) => {}
+    }
+
+    let desired_path = Path::new(desired_name);
+    let stem = desired_path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or(desired_name);
+    let extension = desired_path
+        .extension()
+        .and_then(|extension| extension.to_str());
+    for suffix in 1..=10_000u32 {
+        let copy_suffix = if suffix == 1 {
+            " copy".to_string()
+        } else {
+            format!(" copy {suffix}")
+        };
+        let candidate_name = match extension {
+            Some(extension) => format!("{stem}{copy_suffix}.{extension}"),
+            None => format!("{stem}{copy_suffix}"),
+        };
+        let candidate = parent.join(&candidate_name);
+        match tokio::fs::symlink_metadata(&candidate).await {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok((candidate_name, candidate));
+            }
+            Err(error) => return Err(io_to_fx(error, candidate)),
+            Ok(_) => {}
+        }
+    }
+    Err(FxError::InvalidInput(
+        "could not allocate a collision-free destination name".into(),
+    ))
 }
 
 /// Mirror of api.d.ts `WriteFileOptions`.

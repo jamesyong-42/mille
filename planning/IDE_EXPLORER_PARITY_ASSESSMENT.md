@@ -343,8 +343,9 @@ Several features are primitives that require host work rather than complete
 end-user behavior:
 
 - the engine now supports live add/remove/reorder, duplicate-basename identity,
-  and unavailable-root recovery, but the product explorer still needs a root
-  management workflow, custom aliases, and explicit cross-root collision UX;
+  unavailable-root recovery, and explicit cross-root transfer/collision
+  primitives, but the product explorer still needs a root management workflow,
+  custom aliases, and overwrite/merge/skip prompting;
 - `revealPath` exists, but automatic active-editor synchronization is not a
   product setting;
 - a decoration pipeline exists, but Problems, tests, and source-control states

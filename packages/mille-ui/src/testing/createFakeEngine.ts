@@ -65,8 +65,22 @@ export interface FakeEngineCalls {
   create: Array<{ parentId: EntryId; name: string; kind: number }>;
   rename: Array<{ id: EntryId; newName: string }>;
   delete: Array<{ id: EntryId; options: { trash?: boolean; recursive?: boolean } | undefined }>;
-  move: Array<{ id: EntryId; newParentId: EntryId; newName: string | undefined }>;
-  copy: Array<{ id: EntryId; newParentId: EntryId; newName: string | undefined }>;
+  move: Array<{
+    id: EntryId;
+    newParentId: EntryId;
+    newName: string | undefined;
+    options:
+      | { readonly crossRoot?: boolean; readonly collision?: 'error' | 'rename' }
+      | undefined;
+  }>;
+  copy: Array<{
+    id: EntryId;
+    newParentId: EntryId;
+    newName: string | undefined;
+    options:
+      | { readonly crossRoot?: boolean; readonly collision?: 'error' | 'rename' }
+      | undefined;
+  }>;
   setExpanded: Array<{ add: readonly EntryId[]; remove: readonly EntryId[] }>;
   setViewport: Array<{ offset: number; limit: number; overscan: number | undefined }>;
   search: Array<{ query: string; options: SearchOptions | undefined; aborted: boolean }>;
@@ -90,8 +104,18 @@ export interface FakeEngine {
     id: EntryId,
     options?: { trash?: boolean; recursive?: boolean },
   ): Promise<void>;
-  move(id: EntryId, newParentId: EntryId, newName?: string): Promise<Entry>;
-  copy(id: EntryId, newParentId: EntryId, newName?: string): Promise<Entry>;
+  move(
+    id: EntryId,
+    newParentId: EntryId,
+    newName?: string,
+    options?: { readonly crossRoot?: boolean; readonly collision?: 'error' | 'rename' },
+  ): Promise<Entry>;
+  copy(
+    id: EntryId,
+    newParentId: EntryId,
+    newName?: string,
+    options?: { readonly crossRoot?: boolean; readonly collision?: 'error' | 'rename' },
+  ): Promise<Entry>;
   /**
    * Phase 8 — fuzzy search. Returns whatever was scripted via
    * `setSearchResults(query, hits)`. Absent script → `[]`. The returned
@@ -392,8 +416,8 @@ export function createFakeEngine(): FakeEngine {
         decorationVersion: current.decorationVersion,
       });
     },
-    move: async (id, newParentId, newName) => {
-      calls.move.push({ id, newParentId, newName });
+    move: async (id, newParentId, newName, options) => {
+      calls.move.push({ id, newParentId, newName, options });
       const prev = current.getById(id);
       const entry: Entry = prev
         ? { ...prev, parentId: newParentId, name: newName ?? prev.name }
@@ -404,8 +428,8 @@ export function createFakeEngine(): FakeEngine {
       });
       return entry;
     },
-    copy: async (id, newParentId, newName) => {
-      calls.copy.push({ id, newParentId, newName });
+    copy: async (id, newParentId, newName, options) => {
+      calls.copy.push({ id, newParentId, newName, options });
       const prev = current.getById(id);
       const newId = allocId();
       const entry: Entry = prev

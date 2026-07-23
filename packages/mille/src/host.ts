@@ -14,7 +14,7 @@
 // enforced; malformed or wrong-version frames produce an `error` frame.
 // Root and viewport entry records use a shared bincode-compatible encoder.
 
-import { FileExplorer, type Entry, type MirrorSnapshot } from './client.js';
+import { FileExplorer, type Entry, type MirrorSnapshot, type TransferOptions } from './client.js';
 import type { EntryId, ExplorerOptions } from './client.js';
 import { DecorationStore, type Decoration, type DecorationProvider } from './decorations.js';
 import { computeSessionDelta, type SessionView } from './delta.js';
@@ -1080,6 +1080,7 @@ class FileExplorerHostImpl implements FileExplorerHost {
           args.id as EntryId,
           args.newParentId as EntryId,
           args.newName as string | undefined,
+          args.options as TransferOptions | undefined,
         );
       case 'delete':
         return this.explorer.delete(
@@ -1091,6 +1092,7 @@ class FileExplorerHostImpl implements FileExplorerHost {
           args.id as EntryId,
           args.newParentId as EntryId,
           args.newName as string | undefined,
+          args.options as TransferOptions | undefined,
         );
       case 'readFile': {
         const buf = await this.explorer.readFile(args.id as EntryId);

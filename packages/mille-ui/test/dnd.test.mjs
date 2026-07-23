@@ -406,6 +406,42 @@ test('cross-root drop with crossRoot:false is rejected', async () => {
   container.remove();
 });
 
+test('cross-root drop forwards explicit allow and collision policy', async () => {
+  const fx = createFakeEngine();
+  fx.emitDelta(createFakeSnapshot({ rows: multiRootRows(), treeVersion: 1 }));
+
+  const { container, root } = await mountTree({
+    fx,
+    props: { dragDrop: { crossRoot: true, collision: 'rename' } },
+  });
+  const source = rowByEntryId(container, 2);
+  const target = rowByEntryId(container, 10);
+  const dt = createFakeDataTransfer();
+
+  await act(async () => {
+    fireDragEvent(source, 'dragstart', { dataTransfer: dt });
+  });
+  await act(async () => {
+    fireDragEvent(target, 'dragenter', { clientY: 55, dataTransfer: dt });
+    fireDragEvent(target, 'dragover', { clientY: 55, dataTransfer: dt });
+    fireDragEvent(target, 'drop', { clientY: 55, dataTransfer: dt });
+  });
+  await act(async () => {
+    await Promise.resolve();
+  });
+
+  assert.equal(fx.calls.move.length, 1);
+  assert.deepEqual(fx.calls.move[0].options, {
+    crossRoot: true,
+    collision: 'rename',
+  });
+
+  await act(async () => {
+    root.unmount();
+  });
+  container.remove();
+});
+
 test('auto-expand: dwelling 320ms on a collapsed folder calls setExpanded', async () => {
   const rows = [
     makeRow({ id: 1, parentId: null, name: 'root', depth: 0, hasChildren: true, isExpanded: true }),

@@ -129,6 +129,13 @@ export interface Entry {
   readonly isHidden: boolean; // dotfile or platform-hidden
 }
 
+export interface TransferOptions {
+  /** Cross-root transfers are denied unless explicitly enabled. */
+  readonly crossRoot?: boolean;
+  /** Existing destinations fail by default; rename selects a free copy suffix. */
+  readonly collision?: 'error' | 'rename';
+}
+
 // ─── Explorer construction ─────────────────────────────────────────────────
 
 export interface ExplorerOptions {
@@ -576,9 +583,19 @@ export declare class FileExplorer implements Disposable {
   // Mutations
   create(parentId: EntryId, name: string, kind: EntryKind): Promise<Entry>;
   rename(id: EntryId, newName: string): Promise<Entry>;
-  move(id: EntryId, newParentId: EntryId, newName?: string): Promise<Entry>;
+  move(
+    id: EntryId,
+    newParentId: EntryId,
+    newName?: string,
+    options?: TransferOptions,
+  ): Promise<Entry>;
   delete(id: EntryId, options?: { trash?: boolean; recursive?: boolean }): Promise<void>;
-  copy(id: EntryId, newParentId: EntryId, newName?: string): Promise<Entry>;
+  copy(
+    id: EntryId,
+    newParentId: EntryId,
+    newName?: string,
+    options?: TransferOptions,
+  ): Promise<Entry>;
 
   // I/O
   readFile(id: EntryId, signal?: AbortSignal): Promise<Uint8Array>;

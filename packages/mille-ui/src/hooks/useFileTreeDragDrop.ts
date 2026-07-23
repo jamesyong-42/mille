@@ -74,6 +74,8 @@ export interface DragDropOptions {
   readonly externalIn?: DragDropEffect | false;
   /** Allow drops that cross workspace roots. Default `false`. */
   readonly crossRoot?: boolean;
+  /** Existing destination behavior. Default `error`. */
+  readonly collision?: 'error' | 'rename';
   /** Optional validation override — runs before cycle/cross-root checks. */
   readonly onDropValidate?: (
     ctx: DragDropValidateContext,
@@ -138,11 +140,19 @@ interface DragDropEngine {
     id: EntryId,
     newParentId: EntryId,
     newName?: string,
+    options?: {
+      readonly crossRoot?: boolean;
+      readonly collision?: 'error' | 'rename';
+    },
   ): Promise<{ id: EntryId } | unknown>;
   copy(
     id: EntryId,
     newParentId: EntryId,
     newName?: string,
+    options?: {
+      readonly crossRoot?: boolean;
+      readonly collision?: 'error' | 'rename';
+    },
   ): Promise<{ id: EntryId } | unknown>;
   setExpanded(diff: {
     readonly add?: readonly EntryId[];
@@ -268,6 +278,7 @@ export function useFileTreeDragDrop(
     externalOut = true,
     externalIn = 'copy',
     crossRoot = false,
+    collision = 'error',
     onDropValidate,
     onConfirm,
     autoExpandDelayMs = 300,
@@ -707,14 +718,20 @@ export function useFileTreeDragDrop(
       try {
         if (nextEffect === 'copy') {
           for (const id of sourceIds) {
-            await fx.copy(id, targetParentId);
+            await fx.copy(id, targetParentId, undefined, {
+              crossRoot,
+              collision,
+            });
           }
         } else {
           for (const id of sourceIds) {
             // Skip no-op moves (source already has this parent).
             const e = snapshotRef.current.getById(id);
             if (e !== null && e.parentId === targetParentId) continue;
-            await fx.move(id, targetParentId);
+            await fx.move(id, targetParentId, undefined, {
+              crossRoot,
+              collision,
+            });
           }
         }
       } catch {

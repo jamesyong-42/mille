@@ -1026,6 +1026,24 @@ mounts and permission changes. Port refreshes resolve after all attached
 mirrors are current. The default `FileTree` renders unavailable roots as
 disabled, non-draggable folder rows with no disclosure affordance.
 
+Moves and copies deny cross-root transfers unless the call opts in:
+
+```ts
+await fx.move(entryId, destinationFolderId, undefined, {
+  crossRoot: true,
+  collision: 'rename',
+});
+```
+
+`collision: 'error'` is the default and returns `EEXIST` before changing disk.
+`'rename'` chooses the first free deterministic suffix (`file copy.txt`,
+`file copy 2.txt`, …). The same options apply to `copy`. Same-volume directory
+moves preserve the complete known subtree identity; cross-device moves return
+`EUNSUPPORTED` without partial store mutation until the Phase 4 copy/delete
+fallback lands. Recursive directory copy and overwrite/merge prompting also
+remain Phase 4 work. `FileTree` drag/drop defaults to `crossRoot: false` and
+forwards both options when enabled.
+
 Counts, indexes, typeahead, host viewports, and port mirrors use the same leaf
 identity. In roots-only mode the host follows the chain with bounded depth-1
 reads and stops at the first branch; it does not eagerly walk the subtree.

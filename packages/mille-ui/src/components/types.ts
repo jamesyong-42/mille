@@ -403,6 +403,8 @@ export interface DragDropOptions {
   /** @deprecated use `externalIn`. Retained for Phase-3 compatibility. */
   readonly external?: DragDropEffect | false;
   readonly crossRoot?: boolean;
+  /** Destination collision behavior for internal move/copy. Default: error. */
+  readonly collision?: 'error' | 'rename';
   readonly onDropValidate?: (
     ctx: DragDropValidateContext,
   ) => DragDropValidationResult;

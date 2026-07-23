@@ -41,7 +41,7 @@ import {
 } from './protocol.js';
 import type { Disposable, MessagePortLike } from './types.js';
 import type { ExplorerProjectionSettings } from './explorer-settings.js';
-import type { Uri } from './client.js';
+import type { TransferOptions, Uri } from './client.js';
 
 interface PendingRequest {
   resolve: (value: unknown) => void;
@@ -349,9 +349,15 @@ export class PortFileExplorer {
     return this.mutate('rename', { id, newName });
   }
 
-  move(id: number, newParentId: number, newName?: string): Promise<unknown> {
+  move(
+    id: number,
+    newParentId: number,
+    newName?: string,
+    options?: TransferOptions,
+  ): Promise<unknown> {
     const args: Record<string, unknown> = { id, newParentId };
     if (newName !== undefined) args.newName = newName;
+    if (options !== undefined) args.options = options;
     return this.mutate('move', args);
   }
 
@@ -361,9 +367,15 @@ export class PortFileExplorer {
     return this.mutate('delete', args);
   }
 
-  copy(id: number, newParentId: number, newName?: string): Promise<unknown> {
+  copy(
+    id: number,
+    newParentId: number,
+    newName?: string,
+    options?: TransferOptions,
+  ): Promise<unknown> {
     const args: Record<string, unknown> = { id, newParentId };
     if (newName !== undefined) args.newName = newName;
+    if (options !== undefined) args.options = options;
     return this.mutate('copy', args);
   }
 

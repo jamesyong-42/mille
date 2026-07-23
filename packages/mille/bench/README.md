@@ -120,3 +120,16 @@ across 30 measured cycles. It verifies stable root identity, complete stale
 subtree eviction, lazy recovery, and version-free healthy refreshes. Both
 disappearance and recovery enforce a 16 ms p95 gate; fixture size, warmups,
 samples, and budget use `MILLE_ROOT_AVAILABILITY_*`.
+
+## Cross-root subtree move
+
+```sh
+pnpm bench:cross-root
+```
+
+The harness alternates an 8,193-entry directory subtree between two workspace
+roots for 30 measured moves. Each sample includes collision probing, the
+filesystem rename, one identity-preserving immutable store publication,
+complete reverse-path rewrite, and public path verification. It enforces a
+16 ms p95 gate; fixture size, warmups, samples, and budget use
+`MILLE_CROSS_ROOT_*`.

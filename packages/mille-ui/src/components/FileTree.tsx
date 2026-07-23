@@ -813,6 +813,7 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
           ? { externalIn: dragDrop.external }
           : null),
       ...(dragDrop.crossRoot !== undefined ? { crossRoot: dragDrop.crossRoot } : null),
+      ...(dragDrop.collision !== undefined ? { collision: dragDrop.collision } : null),
       ...(dragDrop.onDropValidate !== undefined ? { onDropValidate: dragDrop.onDropValidate } : null),
       ...(dragDrop.onConfirm !== undefined ? { onConfirm: dragDrop.onConfirm } : null),
       ...(dragDrop.autoExpandDelayMs !== undefined ? { autoExpandDelayMs: dragDrop.autoExpandDelayMs } : null),

@@ -25,6 +25,16 @@ pub struct DeleteOptionsJs {
     pub recursive: Option<bool>,
 }
 
+/// Explicit policy for move/copy operations that may cross workspace roots or
+/// encounter an existing destination.
+#[napi(object)]
+pub struct TransferOptionsJs {
+    /// Cross-root transfers are denied unless this is explicitly true.
+    pub cross_root: Option<bool>,
+    /// `"error"` (default) or `"rename"` for a deterministic free suffix.
+    pub collision: Option<String>,
+}
+
 /// Resolve an entry identity through the store's exact bidirectional path
 /// index. Name-based reconstruction is incorrect when workspace roots share a
 /// basename and becomes stale if display aliases are introduced.

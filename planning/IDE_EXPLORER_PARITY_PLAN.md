@@ -811,6 +811,25 @@ cover the contract. The 8,193-entry, 30-sample gate measured disappearance at
 at 0.152/0.265 ms against a 16 ms p95 budget. Phase 3.2 now only needs explicit
 cross-root operation and collision policy.
 
+Cross-root-operation result (2026-07-23): `move` no longer changes disk and
+then fails store reconciliation on every cross-parent operation. The store now
+reparents a file or complete known directory subtree in one immutable
+publication, preserving IDs, descendant links, exact reverse paths, sibling
+order, visibility/size summaries, and retained snapshots. Cross-root transfer
+is denied with `EUNSUPPORTED` unless `{ crossRoot: true }` is explicit in the
+local, port, or drag/drop call. Destination collision is non-destructive:
+`error` is the default and returns `EEXIST` before filesystem mutation, while
+`rename` selects deterministic `copy`, `copy 2`, and later suffixes. A failed
+post-rename store commit attempts filesystem rollback; cross-device rename is
+reported as unsupported instead of leaving a divergent tree. Two-root
+filesystem tests cover deny/allow, collision rollback/suffixing, same-root
+reparent, directory descendant identity, retained snapshots, and two-client
+completion; DnD tests cover policy forwarding. The 8,195-entry, 30-sample
+alternating-root gate measured 13.192 ms median and 14.434 ms p95 against a
+16 ms budget. This completes the Phase 3.2 engine/UI primitive scope. Phase 4
+still owns recursive directory copy, cross-device copy/delete fallback,
+overwrite/merge/skip prompting, progress, cancellation, and undo/recovery.
+
 #### 3.3 Persist navigation state
 
 - Expansion ids/paths per workspace.

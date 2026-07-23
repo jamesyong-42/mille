@@ -54,6 +54,17 @@ test('snapshot-local child ordering is cached without mutating wire order', () =
   assert.deepEqual(wireOrder, [2, 4, 3], 'sorting does not mutate the mirror payload');
 });
 
+test('snapshot-local child ordering compares numeric filename runs naturally', () => {
+  const byId = new Map([
+    [2, entry({ id: 2, name: 'file10.ts', kind: 0 })],
+    [3, entry({ id: 3, name: 'file2.ts', kind: 0 })],
+    [4, entry({ id: 4, name: 'file1.ts', kind: 0 })],
+    [5, entry({ id: 5, name: 'file02.ts', kind: 0 })],
+  ]);
+  const lookup = createSortedChildrenLookup(byId);
+  assert.deepEqual(lookup(1, [2, 3, 4, 5]), [4, 3, 5, 2]);
+});
+
 test('visibleRows: empty mirror returns empty array', () => {
   const snap = new ClientMirrorSnapshot(createMirror());
   const rows = snap.visibleRows({ expanded: new Set(), offset: 0, limit: 100 });

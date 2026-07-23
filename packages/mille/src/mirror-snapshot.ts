@@ -25,6 +25,7 @@ import type {
   VisibleRowsOptions,
 } from './client.js';
 import type { ChildIdList, ClientEntry, MirrorWorking } from './mirror.js';
+import { compareNaturalNames } from './natural-sort.js';
 
 /**
  * Translate a mirror-local ClientEntry (with `null`-holes) into the
@@ -83,7 +84,7 @@ function sortChildrenByName(ids: ChildIdList, byId: Map<number, ClientEntry>): n
     const na = ea?.name ?? '';
     const nb = eb?.name ?? '';
     if (na === nb) return a - b;
-    return na < nb ? -1 : 1;
+    return compareNaturalNames(na, nb);
   });
 }
 

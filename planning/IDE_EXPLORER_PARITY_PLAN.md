@@ -598,6 +598,18 @@ IDE explorer.
 Push sorting/filtering semantics into the engine/snapshot boundary where needed;
 do not implement a second incompatible tree model only in React.
 
+Natural-order foundation (2026-07-22): default name ordering now compares ASCII
+numeric runs by magnitude (`file2` before `file10`) while retaining
+directories-first grouping and deterministic case/leading-zero ties. The same
+comparator is used by native store insertion, metadata reclassification,
+rename, host child-list publication, fresh port snapshots, and mirror fallback
+sorting, so viewport membership cannot disagree with renderer order. Native
+and port correctness tests cover numeric/case boundaries and mutation paths.
+The fail-on-regression wide-folder gate sorts 100,000 generated sibling names
+at 9.43/9.80 ms p50/p95 against a 250 ms p95 ceiling. Configurable case/locale,
+type/mtime modes, folders-on-top, and the serialized override model remain in
+the next Phase 3.1 increments.
+
 #### 3.2 Complete multi-root workspace behavior
 
 - Add, remove, rename-display, and reorder workspace roots.

@@ -31,6 +31,7 @@ import {
 } from './mirror.js';
 import { decodeClientEntries } from './entry-codec.js';
 import { decodeChildLists } from './child-list-codec.js';
+import { compareNaturalNames } from './natural-sort.js';
 
 /**
  * Default ceiling for the client mirror (SPEC §4.9.7). Keeps idle
@@ -263,7 +264,7 @@ export function applySnapshot(
         if (ka !== kb) return ka - kb;
         const na = ea?.name ?? '';
         const nb = eb?.name ?? '';
-        return na === nb ? a - b : na < nb ? -1 : 1;
+        return na === nb ? a - b : compareNaturalNames(na, nb);
       });
       next.children.set(parentId, sorted);
       next.orderedChildren.add(parentId);

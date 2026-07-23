@@ -335,7 +335,7 @@ end-user behavior:
 The current rendered ordering is effectively directories-first, lexical name
 sorting. Missing settings include:
 
-- natural, locale-aware, case-aware sorting;
+- configurable locale-aware and case-aware natural sorting;
 - sort by name, type, or modified time;
 - folders-on-top control;
 - file nesting rules;

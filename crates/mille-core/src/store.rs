@@ -20,6 +20,7 @@ use crate::changes::ChangeSet;
 use crate::entry::{Entry, EntryId, EntryKind};
 use crate::error::FxError;
 use crate::snapshot::{entry_counts_visible, StoreSnapshot, MAX_ANCESTOR_WALK};
+use crate::sort::natural_name_cmp;
 
 /// Rank for sibling ordering: directories (and symlink-to-dir) before files.
 #[inline]
@@ -156,9 +157,10 @@ impl EntryStore {
                         .unwrap_or(1)
                         .cmp(&be.map(|e| sibling_kind_rank(e)).unwrap_or(1))
                         .then_with(|| {
-                            ae.map(|e| e.name.as_str())
-                                .unwrap_or("")
-                                .cmp(be.map(|e| e.name.as_str()).unwrap_or(""))
+                            natural_name_cmp(
+                                ae.map(|e| e.name.as_str()).unwrap_or(""),
+                                be.map(|e| e.name.as_str()).unwrap_or(""),
+                            )
                         })
                 });
                 next.children.insert(parent_id, siblings);
@@ -208,7 +210,9 @@ impl EntryStore {
                         let sib_e = next.entries.get(&sib);
                         let sib_rank = sib_e.map(|e| sibling_kind_rank(e)).unwrap_or(1);
                         let sib_name = sib_e.map(|e| e.name.as_str()).unwrap_or("");
-                        sib_rank.cmp(&kind_rank).then_with(|| sib_name.cmp(&name))
+                        sib_rank
+                            .cmp(&kind_rank)
+                            .then_with(|| natural_name_cmp(sib_name, &name))
                     })
                     .unwrap_or_else(|e| e);
                 siblings.insert(pos, id);
@@ -555,7 +559,7 @@ impl EntryStore {
                         let sib_name = sib_e.map(|e| e.name.as_str()).unwrap_or("");
                         sib_rank
                             .cmp(&kind_rank)
-                            .then_with(|| sib_name.cmp(new_name.as_str()))
+                            .then_with(|| natural_name_cmp(sib_name, new_name.as_str()))
                     })
                     .unwrap_or_else(|e| e);
                 siblings.insert(insert_pos, id);
@@ -799,6 +803,22 @@ mod tests {
         let b = s.insert("/r/b".into(), leaf("b", Some(root))).unwrap();
         let snap = s.snapshot();
         assert_eq!(snap.children_of(root), &[a, b, c]);
+    }
+
+    #[test]
+    fn siblings_use_natural_numeric_order() {
+        let s = EntryStore::new();
+        let root = s.insert("/r".into(), dir("r", None)).unwrap();
+        let ten = s
+            .insert("/r/file10".into(), leaf("file10", Some(root)))
+            .unwrap();
+        let two = s
+            .insert("/r/file2".into(), leaf("file2", Some(root)))
+            .unwrap();
+        let one = s
+            .insert("/r/file1".into(), leaf("file1", Some(root)))
+            .unwrap();
+        assert_eq!(s.snapshot().children_of(root), &[one, two, ten]);
     }
 
     #[test]

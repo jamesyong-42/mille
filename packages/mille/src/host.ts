@@ -30,6 +30,7 @@ import {
   type DecorationsFrameBody,
 } from './protocol.js';
 import type { Disposable, FileExplorerHost, MessagePortLike } from './types.js';
+import { compareNaturalNames } from './natural-sort.js';
 
 /**
  * Project a public `Entry` into the mirror-local `ClientEntry` shape.
@@ -64,7 +65,7 @@ function sortedChildIds(snap: MirrorSnapshot, parentId: number): number[] {
     if (ka !== kb) return ka - kb;
     const na = ea?.name ?? '';
     const nb = eb?.name ?? '';
-    return na === nb ? a - b : na < nb ? -1 : 1;
+    return na === nb ? a - b : compareNaturalNames(na, nb);
   });
 }
 
@@ -609,9 +610,7 @@ class FileExplorerHostImpl implements FileExplorerHost {
         frame('delta', {
           version: delta.version,
           changedIds: liveChangedIds,
-          ...(outEntries.length > 0
-            ? { viewportPatch: encodeClientEntries(outEntries) }
-            : {}),
+          ...(outEntries.length > 0 ? { viewportPatch: encodeClientEntries(outEntries) } : {}),
           childSetChanged: [...childSetChanged],
           ...(childLists.size > 0
             ? session.packedChildLists
@@ -1064,11 +1063,7 @@ class FileExplorerHostImpl implements FileExplorerHost {
     }
   }
 
-  private async dispatchCall(
-    session: Session,
-    method: string,
-    args: unknown[],
-  ): Promise<unknown> {
+  private async dispatchCall(session: Session, method: string, args: unknown[]): Promise<unknown> {
     switch (method) {
       case 'getTreeVersion':
         return this.explorer.getTreeVersion();

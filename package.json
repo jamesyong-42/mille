@@ -18,6 +18,7 @@
     "bench:viewport": "node packages/mille/bench/viewport-retention.mjs",
     "bench:wide-folder": "node packages/mille/bench/wide-folder-order.mjs",
     "bench:natural-sort": "node packages/mille/bench/natural-sort.mjs",
+    "bench:settings": "node packages/mille/bench/explorer-settings.mjs",
     "bench:watch": "node scripts/watch-bench.mjs",
     "bench:watch:soak": "node scripts/watch-soak.mjs",
     "lint": "pnpm -r --if-present lint",

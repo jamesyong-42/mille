@@ -21,9 +21,9 @@ export type EntryId = number;
 
 /** URI for scheme-based provider dispatch. Mirrors VS Code's Uri shape. */
 export interface Uri {
-  readonly scheme: string;       // 'file' | 'memfs' | 'ssh' | 'zip' | ...
-  readonly authority?: string;   // e.g. remote host
-  readonly path: string;         // always POSIX-style
+  readonly scheme: string; // 'file' | 'memfs' | 'ssh' | 'zip' | ...
+  readonly authority?: string; // e.g. remote host
+  readonly path: string; // always POSIX-style
   readonly query?: string;
   readonly fragment?: string;
 }
@@ -31,9 +31,19 @@ export interface Uri {
 // ─── Tagged-union errors ───────────────────────────────────────────────────
 
 export type ErrorCode =
-  | 'EACCES' | 'ENOENT' | 'EEXIST' | 'EISDIR' | 'ENOTDIR'
-  | 'ELOOP'  | 'ENOSPC' | 'EROFS'  | 'EBUSY'  | 'EINVAL'
-  | 'ECANCELED' | 'EUNSUPPORTED' | 'EUNKNOWN';
+  | 'EACCES'
+  | 'ENOENT'
+  | 'EEXIST'
+  | 'EISDIR'
+  | 'ENOTDIR'
+  | 'ELOOP'
+  | 'ENOSPC'
+  | 'EROFS'
+  | 'EBUSY'
+  | 'EINVAL'
+  | 'ECANCELED'
+  | 'EUNSUPPORTED'
+  | 'EUNKNOWN';
 
 /**
  * Typed error for expected filesystem failures. Methods throw this rather
@@ -77,36 +87,36 @@ export declare function buildIdentity(): BuildIdentity;
 
 /** Bitmask. Providers advertise which methods they implement. */
 export const enum Capability {
-  None          = 0,
-  ReadWrite     = 1 << 0,
+  None = 0,
+  ReadWrite = 1 << 0,
   CaseSensitive = 1 << 1,
-  Readonly      = 1 << 2,
-  Trash         = 1 << 3,
-  AtomicWrite   = 1 << 4,
-  Watch         = 1 << 5,
-  Stream        = 1 << 6,
-  Clone         = 1 << 7,
-  Realpath      = 1 << 8,
-  FileLock      = 1 << 9,
+  Readonly = 1 << 2,
+  Trash = 1 << 3,
+  AtomicWrite = 1 << 4,
+  Watch = 1 << 5,
+  Stream = 1 << 6,
+  Clone = 1 << 7,
+  Realpath = 1 << 8,
+  FileLock = 1 << 9,
 }
 
 // ─── Entry record ──────────────────────────────────────────────────────────
 
 export const enum EntryKind {
-  File      = 0,
+  File = 0,
   Directory = 1,
-  Symlink   = 2,
-  Unknown   = 3,
+  Symlink = 2,
+  Unknown = 3,
 }
 
 /** One row in the flat-array model. Produced in Rust, shipped as bincode Buffer. */
 export interface Entry {
   readonly id: EntryId;
-  readonly parentId: EntryId | null;   // null only for roots
+  readonly parentId: EntryId | null; // null only for roots
   readonly name: string;
   readonly kind: EntryKind;
-  readonly size: number;               // bytes; 0 for dirs. JS number is fine up to 8 PB.
-  readonly mtimeMs: number;            // unix ms; JS `number` precision is fine for mtimes
+  readonly size: number; // bytes; 0 for dirs. JS number is fine up to 8 PB.
+  readonly mtimeMs: number; // unix ms; JS `number` precision is fine for mtimes
   readonly ctimeMs: number;
   /** True if the symlink target is a directory (for UI rendering). */
   readonly symlinkTargetIsDir?: boolean;
@@ -114,7 +124,7 @@ export interface Entry {
   readonly pathSegments?: readonly string[];
   readonly isIgnored: boolean;
   readonly isReadonly: boolean;
-  readonly isHidden: boolean;          // dotfile or platform-hidden
+  readonly isHidden: boolean; // dotfile or platform-hidden
 }
 
 // ─── Explorer construction ─────────────────────────────────────────────────
@@ -172,6 +182,45 @@ export interface ExplorerOptions {
    */
   readonly initialWalk?: 'full' | 'roots-only' | 'none';
 }
+
+export type ExplorerSortBy = 'name' | 'type' | 'modified';
+
+export interface ResolvedExplorerSettings {
+  readonly sortBy: ExplorerSortBy;
+  readonly caseSensitive: boolean;
+  readonly locale: string | null;
+  readonly foldersOnTop: boolean;
+  readonly showHiddenFiles: boolean;
+  readonly showIgnoredFiles: boolean;
+  readonly compactFolders: boolean;
+  readonly excludeGlobs: readonly string[];
+  readonly fileNestingPatterns: Readonly<Record<string, readonly string[]>>;
+}
+
+export type ExplorerSettingsOverride = Partial<ResolvedExplorerSettings>;
+
+export interface ExplorerWorkspaceSettings {
+  readonly settings?: ExplorerSettingsOverride;
+  readonly roots?: Readonly<Record<string, ExplorerSettingsOverride>>;
+}
+
+export interface ExplorerSettingsDocument {
+  readonly version: 1;
+  readonly global?: ExplorerSettingsOverride;
+  readonly workspaces?: Readonly<Record<string, ExplorerWorkspaceSettings>>;
+}
+
+export declare const EXPLORER_SETTINGS_VERSION: 1;
+export declare const DEFAULT_EXPLORER_SETTINGS: ResolvedExplorerSettings;
+export declare function parseExplorerSettings(
+  input: string | unknown,
+): ExplorerSettingsDocument | null;
+export declare function serializeExplorerSettings(settings: ExplorerSettingsDocument): string;
+export declare function resolveExplorerSettings(
+  document: ExplorerSettingsDocument | null | undefined,
+  workspaceKey?: string,
+  rootKey?: string,
+): ResolvedExplorerSettings;
 
 // ─── Listing & pagination ──────────────────────────────────────────────────
 
@@ -298,33 +347,55 @@ export interface ChangeNotice {
 }
 
 export type WarningCode =
-  | 'INOTIFY_LIMIT'        // Linux inotify watch count near ceiling
-  | 'FSEVENTS_LIMIT'       // macOS FSEvents path limit hit
-  | 'ENTRY_CAP_REACHED'    // maxCachedEntries exceeded; tail is lazy-only
-  | 'SYMLINK_CYCLE'        // cycle detected; link not descended
-  | 'SNAPSHOT_STALE';      // resume snapshot too old; cold-walking
+  | 'INOTIFY_LIMIT' // Linux inotify watch count near ceiling
+  | 'FSEVENTS_LIMIT' // macOS FSEvents path limit hit
+  | 'ENTRY_CAP_REACHED' // maxCachedEntries exceeded; tail is lazy-only
+  | 'SYMLINK_CYCLE' // cycle detected; link not descended
+  | 'SNAPSHOT_STALE'; // resume snapshot too old; cold-walking
 
 export type FileSystemEvent =
-  | { readonly kind: 'created';  readonly id: EntryId; readonly parentId: EntryId | null; readonly entry: Entry }
-  | { readonly kind: 'changed';  readonly id: EntryId; readonly entry: Entry }
-  | { readonly kind: 'deleted';  readonly id: EntryId; readonly parentId: EntryId | null; readonly path: string }
-  | { readonly kind: 'renamed';  readonly id: EntryId;
-      readonly oldParentId: EntryId | null; readonly newParentId: EntryId | null;
-      readonly oldName: string; readonly newName: string }
-  | { readonly kind: 'error';    readonly path: string; readonly code: ErrorCode; readonly message: string }
-  | { readonly kind: 'warning';  readonly code: WarningCode; readonly detail?: string }
+  | {
+      readonly kind: 'created';
+      readonly id: EntryId;
+      readonly parentId: EntryId | null;
+      readonly entry: Entry;
+    }
+  | { readonly kind: 'changed'; readonly id: EntryId; readonly entry: Entry }
+  | {
+      readonly kind: 'deleted';
+      readonly id: EntryId;
+      readonly parentId: EntryId | null;
+      readonly path: string;
+    }
+  | {
+      readonly kind: 'renamed';
+      readonly id: EntryId;
+      readonly oldParentId: EntryId | null;
+      readonly newParentId: EntryId | null;
+      readonly oldName: string;
+      readonly newName: string;
+    }
+  | {
+      readonly kind: 'error';
+      readonly path: string;
+      readonly code: ErrorCode;
+      readonly message: string;
+    }
+  | { readonly kind: 'warning'; readonly code: WarningCode; readonly detail?: string }
   /** Watcher backlog exceeded; consumer should treat tree as dirty and re-list. */
   | { readonly kind: 'overflow' };
 
 export type EventListener<E> = (event: E) => void;
 
-export interface Disposable { dispose(): void }
+export interface Disposable {
+  dispose(): void;
+}
 
 // ─── Decorations (git/lint/problems overlay) ───────────────────────────────
 
 export interface Decoration {
-  readonly badge?: string;          // 1–2 chars, e.g. 'M', '!'
-  readonly color?: string;          // theme token
+  readonly badge?: string; // 1–2 chars, e.g. 'M', '!'
+  readonly color?: string; // theme token
   readonly tooltip?: string;
   /** Roll up to ancestor folders (e.g. dirty-folder indicator). */
   readonly propagate?: boolean;
@@ -343,7 +414,7 @@ export interface DecorationProvider {
 // Rust). Content search lives in a separate package that consumes this one.
 
 export interface SearchOptions {
-  readonly limit?: number;           // default 100
+  readonly limit?: number; // default 100
   readonly includeIgnored?: boolean;
   readonly kinds?: readonly EntryKind[];
   readonly signal?: AbortSignal;
@@ -360,7 +431,7 @@ export interface SearchHit {
 
 export interface FileSystemProvider {
   readonly scheme: string;
-  readonly capabilities: number;            // bitmask of Capability
+  readonly capabilities: number; // bitmask of Capability
   stat(uri: Uri): Promise<Entry>;
   readDirectory(uri: Uri): Promise<readonly Entry[]>;
   readFile(uri: Uri): Promise<Uint8Array>;
@@ -429,8 +500,15 @@ export declare class FileExplorer implements Disposable {
   prefetch(id: EntryId, options?: { depth?: number; signal?: AbortSignal }): Promise<void>;
 
   // Session state lives with the client; call these to move expansion + viewport.
-  setExpanded(diff: { readonly add?: readonly EntryId[]; readonly remove?: readonly EntryId[] }): void;
-  setViewport(options: { readonly offset: number; readonly limit: number; readonly overscan?: number }): void;
+  setExpanded(diff: {
+    readonly add?: readonly EntryId[];
+    readonly remove?: readonly EntryId[];
+  }): void;
+  setViewport(options: {
+    readonly offset: number;
+    readonly limit: number;
+    readonly overscan?: number;
+  }): void;
 
   // Mutations
   create(parentId: EntryId, name: string, kind: EntryKind): Promise<Entry>;
@@ -465,16 +543,16 @@ export declare class FileExplorer implements Disposable {
    * dimension bumped; consumers subscribing to the scoped variants get a
    * narrower cadence but still read the latest snapshot.
    */
-  on(event: 'change',               listener: EventListener<ChangeNotice>): Disposable;
-  on(event: 'change:tree',          listener: EventListener<ChangeNotice>): Disposable;
-  on(event: 'change:decorations',   listener: EventListener<ChangeNotice>): Disposable;
+  on(event: 'change', listener: EventListener<ChangeNotice>): Disposable;
+  on(event: 'change:tree', listener: EventListener<ChangeNotice>): Disposable;
+  on(event: 'change:decorations', listener: EventListener<ChangeNotice>): Disposable;
 
   // Raw event bus — for imperative consumers (SCM, indexers, audit)
-  on(event: 'event',    listener: EventListener<FileSystemEvent>): Disposable;
-  on(event: 'batch',    listener: EventListener<readonly FileSystemEvent[]>): Disposable;
-  on(event: 'warning',  listener: EventListener<{ code: WarningCode; detail?: string }>): Disposable;
-  on(event: 'error',    listener: EventListener<Error>): Disposable;
-  on(event: 'ready',    listener: EventListener<void>): Disposable;
+  on(event: 'event', listener: EventListener<FileSystemEvent>): Disposable;
+  on(event: 'batch', listener: EventListener<readonly FileSystemEvent[]>): Disposable;
+  on(event: 'warning', listener: EventListener<{ code: WarningCode; detail?: string }>): Disposable;
+  on(event: 'error', listener: EventListener<Error>): Disposable;
+  on(event: 'ready', listener: EventListener<void>): Disposable;
 
   // Decorations — reads live on `MirrorSnapshot.getDecorations(id)`.
   registerDecorationProvider(provider: DecorationProvider): Disposable;

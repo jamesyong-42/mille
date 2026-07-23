@@ -607,8 +607,19 @@ sorting, so viewport membership cannot disagree with renderer order. Native
 and port correctness tests cover numeric/case boundaries and mutation paths.
 The fail-on-regression wide-folder gate sorts 100,000 generated sibling names
 at 9.43/9.80 ms p50/p95 against a 250 ms p95 ceiling. Configurable case/locale,
-type/mtime modes, folders-on-top, and the serialized override model remain in
-the next Phase 3.1 increments.
+type/mtime modes, and folders-on-top remain in the next Phase 3.1 increments.
+
+Settings-schema result (2026-07-22): the public engine package now exposes a
+versioned `ExplorerSettingsDocument` with explicit defaults and global →
+workspace → root resolution for sorting, case/locale, folders-on-top, hidden
+and ignored visibility, compact folders, exclude globs, and file-nesting
+patterns. Parsing migrates the pre-release flat shape, rejects unknown
+versions, sorts serialized keys deterministically, and bounds storage to 128
+workspaces, 64 roots per workspace, 256 globs/patterns, and capped strings.
+The maximum-shape 708,239-byte gate measured parse p50/p95 8.43/11.32 ms,
+1,000 resolved root views 0.46/0.93 ms, and normalized serialization
+7.28/10.00 ms. Feeding resolved sort/visibility values into live native
+configuration is the remaining settings-model work.
 
 #### 3.2 Complete multi-root workspace behavior
 

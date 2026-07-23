@@ -33,6 +33,21 @@ export type { DecorationProvider } from './decorations.js';
 export { createFileExplorerHost } from './host.js';
 export type { FileExplorerHost, MessagePortLike } from './types.js';
 export { connectFileExplorer, PortFileExplorer, PortMirrorSnapshot } from './client-port.js';
+export {
+  EXPLORER_SETTINGS_VERSION,
+  EXPLORER_SETTINGS_LIMITS,
+  DEFAULT_EXPLORER_SETTINGS,
+  parseExplorerSettings,
+  serializeExplorerSettings,
+  resolveExplorerSettings,
+} from './explorer-settings.js';
+export type {
+  ExplorerSortBy,
+  ExplorerSettingsOverride,
+  ExplorerWorkspaceSettings,
+  ExplorerSettingsDocument,
+  ResolvedExplorerSettings,
+} from './explorer-settings.js';
 
 /**
  * Returns the fx-binding version string (the napi-rs crate version).

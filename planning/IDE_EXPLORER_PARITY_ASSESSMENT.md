@@ -341,7 +341,8 @@ sorting. Missing settings include:
 - file nesting rules;
 - configurable compact folders;
 - hidden-file, `files.exclude`, and Git-ignore visibility;
-- per-workspace-root overrides;
+- live application of the new versioned global/workspace/root settings
+  overrides at the native snapshot boundary;
 - same-display-name multi-root disambiguation for the new bounded, versioned,
   durably stored expansion/selection/focus/filter/scroll navigation state.
 

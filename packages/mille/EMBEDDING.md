@@ -21,6 +21,7 @@ For architecture & design, see the monorepo `README.md`.
 7. [Performance tuning](#7-performance-tuning)
 8. [Troubleshooting](#8-troubleshooting)
 9. [What is not in v0.1 (roadmap)](#9-what-is-not-in-v01-roadmap)
+10. [Explorer settings](#10-explorer-settings)
 
 ---
 
@@ -35,9 +36,9 @@ import { FileExplorer } from '@vibecook/mille';
 
 const fx = new FileExplorer({
   roots: ['/absolute/path/to/workspace'],
-  respectIgnore: true,          // parse .gitignore/.ignore/.rgignore
-  followSymlinks: 'smart',      // canonicalize + dedupe; see api.d.ts
-  watchDebounceMs: 75,          // default
+  respectIgnore: true, // parse .gitignore/.ignore/.rgignore
+  followSymlinks: 'smart', // canonicalize + dedupe; see api.d.ts
+  watchDebounceMs: 75, // default
 });
 
 // Constructor does NOT walk the filesystem. Call populateFromRoots()
@@ -78,8 +79,8 @@ The snapshot is the read surface; the explorer is the write surface.
 
 ```ts
 const snap = fx.getSnapshot();
-const entry = snap.getById(42);            // null if unknown
-const count = snap.directChildCount(42);   // null if folder not yet walked
+const entry = snap.getById(42); // null if unknown
+const count = snap.directChildCount(42); // null if folder not yet walked
 const hasKids = snap.hasChildren(42);
 const firstLevelIds = snap.childrenOf(42); // in id-allocation order
 ```
@@ -143,12 +144,7 @@ viewport, knownIds). Four files total: `main.ts`, `fx-host.js`, `preload.ts`,
 
 ```ts
 // main.ts
-import {
-  app,
-  BrowserWindow,
-  MessageChannelMain,
-  utilityProcess,
-} from 'electron';
+import { app, BrowserWindow, MessageChannelMain, utilityProcess } from 'electron';
 import { join } from 'node:path';
 
 app.whenReady().then(async () => {
@@ -269,8 +265,8 @@ declare global {
 async function main(): Promise<void> {
   const port = await window.mille.getFilePort();
   const fx = await connectFileExplorer(port, {
-    mirrorCap: 20_000,   // LRU size for the renderer-side mirror
-    prefetchRows: 200,   // overscan hint for the host
+    mirrorCap: 20_000, // LRU size for the renderer-side mirror
+    prefetchRows: 200, // overscan hint for the host
   });
 
   console.log('tree version', fx.getTreeVersion());
@@ -311,10 +307,7 @@ Hooks live on the `/react` subpath so the main entry stays free of the React
 peer dependency.
 
 ```ts
-import {
-  useFileExplorerSnapshot,
-  useFileExplorerTreeSnapshot,
-} from '@vibecook/mille/react';
+import { useFileExplorerSnapshot, useFileExplorerTreeSnapshot } from '@vibecook/mille/react';
 ```
 
 - `useFileExplorerSnapshot(fx)` — re-renders on tree OR decoration bumps.
@@ -340,10 +333,7 @@ export function TreeView({ fx }: { fx: FileExplorer }): JSX.Element {
   const snap = useFileExplorerSnapshot(fx);
   const [expanded, setExpanded] = useState<ReadonlySet<number>>(() => new Set());
 
-  const count = useMemo(
-    () => snap.visibleRowCount(expanded),
-    [snap, expanded],
-  );
+  const count = useMemo(() => snap.visibleRowCount(expanded), [snap, expanded]);
   const total = count.known + count.pendingExpansions.size;
 
   const parentRef = useRef<HTMLDivElement>(null);
@@ -380,10 +370,7 @@ export function TreeView({ fx }: { fx: FileExplorer }): JSX.Element {
   };
 
   return (
-    <div
-      ref={parentRef}
-      style={{ height: 600, overflow: 'auto', fontFamily: 'monospace' }}
-    >
+    <div ref={parentRef} style={{ height: 600, overflow: 'auto', fontFamily: 'monospace' }}>
       <div
         style={{
           height: virtualizer.getTotalSize(),
@@ -394,11 +381,7 @@ export function TreeView({ fx }: { fx: FileExplorer }): JSX.Element {
         {virtualItems.map((vrow) => {
           const row = rows[vrow.index - windowOffset];
           if (!row) return null;
-          const caret = row.hasChildren
-            ? row.isExpanded
-              ? 'v'
-              : '>'
-            : ' ';
+          const caret = row.hasChildren ? (row.isExpanded ? 'v' : '>') : ' ';
           return (
             <div
               key={row.id}
@@ -485,10 +468,7 @@ import type { DecorationProvider, FileExplorer } from '@vibecook/mille';
 // supports `getStatus(path): 'modified' | 'added' | 'clean' | ...`.
 declare const gitWatcher: {
   getStatus(path: string): Promise<string>;
-  on(
-    event: 'status',
-    listener: (paths: readonly string[]) => void,
-  ): { dispose(): void };
+  on(event: 'status', listener: (paths: readonly string[]) => void): { dispose(): void };
 };
 
 // Map from absolute path -> EntryId. Maintain this alongside tree
@@ -574,9 +554,7 @@ try {
   await fx.rename(entryId, 'new-name.txt');
 } catch (e) {
   if (isFileSystemError(e)) {
-    console.error(
-      `[fs] code=${e.code} path=${e.path ?? '(none)'} message=${e.message}`,
-    );
+    console.error(`[fs] code=${e.code} path=${e.path ?? '(none)'} message=${e.message}`);
     if (e.code === 'EEXIST') {
       // handle collision
     }
@@ -588,21 +566,21 @@ try {
 
 ### 5.1 Error codes
 
-| Code           | Fires when                                                                     |
-| -------------- | ------------------------------------------------------------------------------ |
-| `EACCES`       | Permission denied on read/write/delete/rename.                                 |
-| `ENOENT`       | Path does not exist. Common on stale ids after external deletion.              |
-| `EEXIST`       | Target already exists on create/copy/move without overwrite.                   |
+| Code           | Fires when                                                                    |
+| -------------- | ----------------------------------------------------------------------------- |
+| `EACCES`       | Permission denied on read/write/delete/rename.                                |
+| `ENOENT`       | Path does not exist. Common on stale ids after external deletion.             |
+| `EEXIST`       | Target already exists on create/copy/move without overwrite.                  |
 | `EISDIR`       | Operation expected a file but found a directory (e.g. `readFile` on a dir).   |
-| `ENOTDIR`      | Operation expected a directory but found a file.                               |
-| `ELOOP`        | Symlink cycle detected during traversal or canonicalization.                   |
-| `ENOSPC`       | Write failed — disk full.                                                      |
-| `EROFS`        | Write attempted on a read-only filesystem or mount.                            |
-| `EBUSY`        | Resource locked (Windows: file in use by another process).                     |
+| `ENOTDIR`      | Operation expected a directory but found a file.                              |
+| `ELOOP`        | Symlink cycle detected during traversal or canonicalization.                  |
+| `ENOSPC`       | Write failed — disk full.                                                     |
+| `EROFS`        | Write attempted on a read-only filesystem or mount.                           |
+| `EBUSY`        | Resource locked (Windows: file in use by another process).                    |
 | `EINVAL`       | Bad arguments (invalid name, wrong kind for op, malformed frame on the wire). |
 | `ECANCELED`    | Operation cancelled — disposed explorer, cancelled stream, closed session.    |
 | `EUNSUPPORTED` | Capability not advertised (e.g. stream read on a provider without `Stream`).  |
-| `EUNKNOWN`     | Catch-all for anything the binding couldn't classify.                          |
+| `EUNKNOWN`     | Catch-all for anything the binding couldn't classify.                         |
 
 ### 5.2 PortFileExplorer
 
@@ -670,16 +648,16 @@ declare every supported triple; `npm install` resolves only the ones whose
 
 Supported triples:
 
-| Triple                      | Platform       | Arch   | libc  |
-| --------------------------- | -------------- | ------ | ----- |
-| `darwin-arm64`              | macOS          | arm64  | —     |
-| `darwin-x64`                | macOS          | x64    | —     |
-| `linux-arm64-gnu`           | Linux          | arm64  | glibc |
-| `linux-arm64-musl`          | Linux (Alpine) | arm64  | musl  |
-| `linux-x64-gnu`             | Linux          | x64    | glibc |
-| `linux-x64-musl`            | Linux (Alpine) | x64    | musl  |
-| `win32-arm64-msvc`          | Windows        | arm64  | msvc  |
-| `win32-x64-msvc`            | Windows        | x64    | msvc  |
+| Triple             | Platform       | Arch  | libc  |
+| ------------------ | -------------- | ----- | ----- |
+| `darwin-arm64`     | macOS          | arm64 | —     |
+| `darwin-x64`       | macOS          | x64   | —     |
+| `linux-arm64-gnu`  | Linux          | arm64 | glibc |
+| `linux-arm64-musl` | Linux (Alpine) | arm64 | musl  |
+| `linux-x64-gnu`    | Linux          | x64   | glibc |
+| `linux-x64-musl`   | Linux (Alpine) | x64   | musl  |
+| `win32-arm64-msvc` | Windows        | arm64 | msvc  |
+| `win32-x64-msvc`   | Windows        | x64   | msvc  |
 
 Install simply with:
 
@@ -851,11 +829,7 @@ yet — shape may change.
 ```ts
 // Local-mode (Node, utility process)
 import { FileExplorer, MirrorSnapshot } from '@vibecook/mille';
-import {
-  FileSystemError,
-  isFileSystemError,
-  type ErrorCode,
-} from '@vibecook/mille';
+import { FileSystemError, isFileSystemError, type ErrorCode } from '@vibecook/mille';
 import type {
   Entry,
   EntryId,
@@ -874,21 +848,34 @@ import type {
 
 // UtilityProcess host
 import { createFileExplorerHost } from '@vibecook/mille/host';
-import type {
-  FileExplorerHost,
-  MessagePortLike,
-} from '@vibecook/mille';
+import type { FileExplorerHost, MessagePortLike } from '@vibecook/mille';
 
 // Renderer
-import {
-  connectFileExplorer,
-  PortFileExplorer,
-  PortMirrorSnapshot,
-} from '@vibecook/mille/client';
+import { connectFileExplorer, PortFileExplorer, PortMirrorSnapshot } from '@vibecook/mille/client';
 
 // React
-import {
-  useFileExplorerSnapshot,
-  useFileExplorerTreeSnapshot,
-} from '@vibecook/mille/react';
+import { useFileExplorerSnapshot, useFileExplorerTreeSnapshot } from '@vibecook/mille/react';
 ```
+
+## 10. Explorer settings
+
+Mille exposes a versioned settings document separately from
+`ExplorerOptions`, allowing a host to store global defaults plus workspace and
+root overrides before constructing or reconfiguring an explorer:
+
+```ts
+import {
+  parseExplorerSettings,
+  resolveExplorerSettings,
+  serializeExplorerSettings,
+} from '@vibecook/mille';
+
+const document = parseExplorerSettings(await storage.get('explorer.settings'));
+const settings = resolveExplorerSettings(document, workspaceId, rootId);
+await storage.set('explorer.settings', serializeExplorerSettings(document!));
+```
+
+The resolved shape includes sort mode, case/locale behavior, folders-on-top,
+hidden/ignored visibility, compact folders, exclude globs, and nesting rules.
+The parser migrates the pre-release flat shape and bounds hostile or stale
+workspace data.

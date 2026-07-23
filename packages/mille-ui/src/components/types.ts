@@ -420,6 +420,9 @@ export interface CollisionPromptRequest {
   readonly targetParentId: number;
   readonly desiredName: string;
   readonly remaining: number;
+  /** Only present when a real collision was probed. */
+  readonly status: 'exists' | 'case_conflict';
+  readonly existingName?: string;
 }
 
 export type CollisionPromptResult =
@@ -460,6 +463,8 @@ export interface DragDropOptions {
   readonly onCollision?: (
     request: CollisionPromptRequest,
   ) => CollisionPromptResult | Promise<CollisionPromptResult>;
+  /** Surfaces drop/import failures that would otherwise only reject the promise. */
+  readonly onDropError?: (error: unknown) => void;
   readonly autoExpandDelayMs?: number;
 }
 

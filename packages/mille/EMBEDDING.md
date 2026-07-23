@@ -1063,9 +1063,12 @@ Other policies:
 | `skip` | Leave the destination untouched and succeed |
 | `merge` | For directories, merge children; files overwrite |
 
-The same options apply to `copy`, `move`, and `copyFromPath`. Hosts that need
-UI prompts can use `FileTree` `dragDrop.onCollision` to choose a policy per
-item and optionally `applyToAll` for the rest of a multi-item drop.
+The same options apply to `copy`, `move`, and `copyFromPath`. Destination names
+must be single path components (no `..` / separators). Destination parents are
+containment-checked after symlink resolution so workspace roots cannot be
+escaped. Self-overwrite is rejected. Hosts that need UI prompts can use
+`FileTree` `dragDrop.onCollision` (invoked only when `probeDestination` reports
+a collision) and `onDropError` for failed imports.
 Same-volume directory moves preserve the complete known subtree identity;
 cross-device moves return `EUNSUPPORTED` without partial store mutation until
 the Phase 4 copy/delete fallback lands. Progress, cancellation, and undo

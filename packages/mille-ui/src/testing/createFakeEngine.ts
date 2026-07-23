@@ -156,6 +156,10 @@ export interface FakeEngine {
       readonly collision?: 'error' | 'rename' | 'overwrite' | 'skip' | 'merge';
     },
   ): Promise<Entry>;
+  probeDestination(
+    parentId: EntryId,
+    name: string,
+  ): Promise<{ status: 'free' | 'exists' | 'case_conflict'; existingName?: string; path?: string }>;
   /**
    * Phase 8 — fuzzy search. Returns whatever was scripted via
    * `setSearchResults(query, hits)`. Absent script → `[]`. The returned
@@ -534,6 +538,12 @@ export function createFakeEngine(): FakeEngine {
         decorationVersion: current.decorationVersion,
       });
       return entry;
+    },
+    probeDestination: async (parentId, name) => {
+      // Default free; tests can override by monkey-patching.
+      void parentId;
+      void name;
+      return { status: 'free' as const };
     },
 
     // ─── Phase 8: fuzzy search ────────────────────────────────────

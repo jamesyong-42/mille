@@ -7,7 +7,11 @@
 - **Collision policy expansion** — transfer options and DnD accept
   `overwrite`, `skip`, and `merge` in addition to `error`/`rename`. Case-only
   sibling names collide on case-insensitive volumes. `dragDrop.onCollision`
-  supports per-item prompts with optional apply-to-all.
+  prompts only when `probeDestination` reports a real collision, with optional
+  apply-to-all. `onDropError` surfaces failed drops instead of swallowing them.
+- **Transfer safety** — self-overwrite, path-traversal names, and
+  workspace-escaping symlink parents are rejected; directory recursive copy
+  does not follow directory symlinks.
 - **Real external import via `copyFromPath`** — OS drag-in requires the engine
   `copyFromPath` API and imports file/directory contents instead of creating
   empty placeholder entries. Per-item failures are collected and reported;

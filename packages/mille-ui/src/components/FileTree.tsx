@@ -835,6 +835,7 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
       ...(dragDrop.onDropValidate !== undefined ? { onDropValidate: dragDrop.onDropValidate } : null),
       ...(dragDrop.onConfirm !== undefined ? { onConfirm: dragDrop.onConfirm } : null),
       ...(dragDrop.onCollision !== undefined ? { onCollision: dragDrop.onCollision } : null),
+      ...(dragDrop.onDropError !== undefined ? { onDropError: dragDrop.onDropError } : null),
       ...(dragDrop.autoExpandDelayMs !== undefined ? { autoExpandDelayMs: dragDrop.autoExpandDelayMs } : null),
     };
   }, [dragDrop]);
@@ -2091,9 +2092,17 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
                   onDragLeave: (e) => dnd.handlers.onDragLeave(row.id, e),
                   onDrop: (e) => {
                     const result = dnd.handlers.onDrop(row.id, e);
+                    // Keep the promise rejection observable for hosts that
+                    // await row handlers; also forward via onDropError when set.
                     if (result && typeof result.catch === 'function') {
-                      result.catch(() => {
-                        /* engine errors surface elsewhere */
+                      result.catch((error: unknown) => {
+                        if (typeof dragDrop?.onDropError === 'function') {
+                          try {
+                            dragDrop.onDropError(error);
+                          } catch {
+                            /* host handler must not break React */
+                          }
+                        }
                       });
                     }
                   },

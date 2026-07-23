@@ -91,6 +91,14 @@ export interface VisibleRowCount {
 
 export type CollisionPolicy = 'error' | 'rename' | 'overwrite' | 'skip' | 'merge';
 
+export type DestinationProbeStatus = 'free' | 'exists' | 'case_conflict';
+
+export interface DestinationProbe {
+  readonly status: DestinationProbeStatus;
+  readonly existingName?: string;
+  readonly path?: string;
+}
+
 export interface TransferOptions {
   /** Cross-root transfers are denied unless explicitly enabled. */
   readonly crossRoot?: boolean;
@@ -243,6 +251,10 @@ type NativeFx = {
     newName?: string,
     options?: TransferOptions,
   ): Promise<Entry>;
+  probeDestination(
+    parentId: number,
+    name: string,
+  ): Promise<{ status: string; existingName?: string; path?: string }>;
   readFile(id: number): Promise<Buffer>;
   readText(id: number, encoding?: string): Promise<string>;
   writeFile(id: number, data: Buffer, options?: { atomic?: boolean }): Promise<void>;
@@ -917,6 +929,21 @@ export class FileExplorer {
     options?: TransferOptions,
   ): Promise<Entry> {
     return wrap(this.nativeFx.copyFromPath(sourcePath, newParentId, newName, options));
+  }
+
+  async probeDestination(parentId: EntryId, name: string): Promise<DestinationProbe> {
+    const raw = await wrap(this.nativeFx.probeDestination(parentId, name));
+    const status =
+      raw.status === 'exists' || raw.status === 'case_conflict' || raw.status === 'free'
+        ? raw.status
+        : 'free';
+    return {
+      status,
+      ...(raw.existingName !== undefined && raw.existingName !== null
+        ? { existingName: raw.existingName }
+        : null),
+      ...(raw.path !== undefined && raw.path !== null ? { path: raw.path } : null),
+    };
   }
 
   // ─── I/O ────────────────────────────────────────────────────────────

@@ -131,6 +131,14 @@ export interface Entry {
 
 export type CollisionPolicy = 'error' | 'rename' | 'overwrite' | 'skip' | 'merge';
 
+export type DestinationProbeStatus = 'free' | 'exists' | 'case_conflict';
+
+export interface DestinationProbe {
+  readonly status: DestinationProbeStatus;
+  readonly existingName?: string;
+  readonly path?: string;
+}
+
 export interface TransferOptions {
   /** Cross-root transfers are denied unless explicitly enabled. */
   readonly crossRoot?: boolean;
@@ -630,6 +638,11 @@ export declare class FileExplorer implements Disposable {
     newName?: string,
     options?: TransferOptions,
   ): Promise<Entry>;
+  /**
+   * Preflight a destination name under `parentId` without mutating disk.
+   * Hosts use this to prompt only when a real collision exists.
+   */
+  probeDestination(parentId: EntryId, name: string): Promise<DestinationProbe>;
 
   // I/O
   readFile(id: EntryId, signal?: AbortSignal): Promise<Uint8Array>;

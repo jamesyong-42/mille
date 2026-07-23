@@ -506,6 +506,87 @@ test('external drag-in (file:// URIs) calls fx.copyFromPath with real source pat
   container.remove();
 });
 
+test('onCollision prompts only when probeDestination reports a collision', async () => {
+  const fx = createFakeEngine();
+  fx.emitDelta(createFakeSnapshot({ rows: sampleRows(), treeVersion: 1 }));
+  const prompts = [];
+  fx.probeDestination = async (_parentId, name) => {
+    if (name === 'outside1.txt') {
+      return { status: 'exists', existingName: 'outside1.txt' };
+    }
+    return { status: 'free' };
+  };
+
+  const { container, root } = await mountTree({
+    fx,
+    props: {
+      dragDrop: {
+        onCollision: (request) => {
+          prompts.push(request);
+          return { policy: 'rename', applyToAll: true };
+        },
+      },
+    },
+  });
+  const target = rowByEntryId(container, 3);
+  const dt = createFakeDataTransfer();
+  dt.setData('text/uri-list', 'file:///tmp/outside1.txt\r\nfile:///tmp/outside2.txt');
+
+  await act(async () => { fireDragEvent(target, 'dragenter', { clientY: 55, dataTransfer: dt }); });
+  await act(async () => { fireDragEvent(target, 'dragover', { clientY: 55, dataTransfer: dt }); });
+  await act(async () => { fireDragEvent(target, 'drop', { clientY: 55, dataTransfer: dt }); });
+  await act(async () => { await Promise.resolve(); });
+  await act(async () => { await Promise.resolve(); });
+  await act(async () => { await Promise.resolve(); });
+
+  assert.equal(prompts.length, 1, 'only the colliding item should prompt');
+  assert.equal(prompts[0].desiredName, 'outside1.txt');
+  assert.equal(prompts[0].status, 'exists');
+  // applyToAll reuses rename for the free second path too (engine still gets policy).
+  assert.equal(fx.calls.copyFromPath.length, 2);
+  assert.equal(fx.calls.copyFromPath[0].options?.collision, 'rename');
+  assert.equal(fx.calls.copyFromPath[1].options?.collision, 'rename');
+
+  await act(async () => { root.unmount(); });
+  container.remove();
+});
+
+test('onDropError is invoked when external import fails', async () => {
+  const fx = createFakeEngine();
+  fx.emitDelta(createFakeSnapshot({ rows: sampleRows(), treeVersion: 1 }));
+  fx.copyFromPath = async () => {
+    throw new Error('disk full');
+  };
+  const errors = [];
+
+  const { container, root } = await mountTree({
+    fx,
+    props: {
+      dragDrop: {
+        onDropError: (error) => {
+          errors.push(error);
+        },
+      },
+    },
+  });
+  const target = rowByEntryId(container, 3);
+  const dt = createFakeDataTransfer();
+  dt.setData('text/uri-list', 'file:///tmp/outside1.txt');
+
+  await act(async () => { fireDragEvent(target, 'dragenter', { clientY: 55, dataTransfer: dt }); });
+  await act(async () => { fireDragEvent(target, 'dragover', { clientY: 55, dataTransfer: dt }); });
+  await act(async () => { fireDragEvent(target, 'drop', { clientY: 55, dataTransfer: dt }); });
+  await act(async () => { await Promise.resolve(); });
+  await act(async () => { await Promise.resolve(); });
+  await act(async () => { await Promise.resolve(); });
+
+  assert.equal(errors.length, 1, 'onDropError should surface the import failure');
+  assert.match(String(errors[0]?.message ?? errors[0]), /disk full|external import failed/);
+
+  await act(async () => { root.unmount(); });
+  container.remove();
+});
+
 test('disableDragDrop on the tree → rows are not rendered with draggable attr', async () => {
   const fx = createFakeEngine();
   fx.emitDelta(createFakeSnapshot({ rows: sampleRows(), treeVersion: 1 }));

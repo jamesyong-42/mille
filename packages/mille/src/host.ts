@@ -1185,6 +1185,19 @@ class FileExplorerHostImpl implements FileExplorerHost {
         await this.flushTickNow();
         return version;
       }
+      case 'probeDestination': {
+        const [parentId, name] = args;
+        if (
+          typeof parentId !== 'number' ||
+          !Number.isSafeInteger(parentId) ||
+          parentId < 0 ||
+          typeof name !== 'string' ||
+          name.length === 0
+        ) {
+          throw new Error('probeDestination requires a parent id and non-empty name');
+        }
+        return this.explorer.probeDestination(parentId as EntryId, name);
+      }
       case 'resync': {
         const [id, recursive] = args;
         if (

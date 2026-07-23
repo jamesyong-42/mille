@@ -33,6 +33,9 @@ export type { FileTreeDragIndicatorProps } from './FileTreeDragIndicator.js';
 
 export type {
   AriaRowProps,
+  CollisionPolicy,
+  CollisionPromptRequest,
+  CollisionPromptResult,
   DragDropOptions,
   FileTreeEngine,
   FileTreeProps,

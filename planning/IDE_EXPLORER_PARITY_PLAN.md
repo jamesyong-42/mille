@@ -1067,6 +1067,15 @@ p95 and overwrite at 0.293 / 0.505 ms against a 5 ms ceiling. This completes
 the planned Phase 4.2 engine and DnD policy surface; rich host dialog UX is
 application-specific via `onCollision`.
 
+Safety hardening (2026-07-23): overwrite no longer deletes the source path;
+`newName` must be a single path component and destination parents are
+canonical-containment checked (symlink escape rejected); move+`merge` preserves
+destination-only children; post-merge indexing reconciles metadata; DnD
+`onCollision` prompts only after `probeDestination` reports a collision;
+`onDropError` surfaces import failures; recursive copy refuses to follow
+directory symlinks and detects cycles. Regression coverage lives in
+`transfer-safety.test.mjs` and expanded DnD tests.
+
 #### 4.3 Add progress and cancellation
 
 - Model long operations with ids, progress, cancellation, and completion status.

@@ -87,8 +87,9 @@ export interface DragDropOptions {
    */
   readonly onConfirm?: (message: string) => boolean | Promise<boolean>;
   /**
-   * Per-item collision prompt for batch drops. Return a policy or
-   * `{ policy, applyToAll: true }` to reuse it for remaining items.
+   * Per-item collision prompt for batch drops. Invoked only when the
+   * destination already collides (exists or case-only conflict). Return a
+   * policy or `{ policy, applyToAll: true }` to reuse it for remaining items.
    */
   readonly onCollision?: (
     request: {
@@ -97,6 +98,8 @@ export interface DragDropOptions {
       readonly targetParentId: EntryId;
       readonly desiredName: string;
       readonly remaining: number;
+      readonly status: 'exists' | 'case_conflict';
+      readonly existingName?: string;
     },
   ) =>
     | 'error'
@@ -119,6 +122,11 @@ export interface DragDropOptions {
             readonly applyToAll?: boolean;
           }
       >;
+  /**
+   * Surfaces drop/import failures. Without this, rejections still reject
+   * the `onDrop` promise for hosts that await it.
+   */
+  readonly onDropError?: (error: unknown) => void;
   /** Dwell before an auto-expand fires on a hovered collapsed folder. */
   readonly autoExpandDelayMs?: number;
 }
@@ -204,6 +212,14 @@ interface DragDropEngine {
       readonly collision?: 'error' | 'rename' | 'overwrite' | 'skip' | 'merge';
     },
   ): Promise<unknown>;
+  probeDestination?(
+    parentId: EntryId,
+    name: string,
+  ): Promise<{
+    status: string;
+    existingName?: string;
+    path?: string;
+  }>;
   create?(
     parentId: EntryId,
     name: string,
@@ -318,10 +334,51 @@ export function useFileTreeDragDrop(
     onDropValidate,
     onConfirm,
     onCollision,
+    onDropError,
     autoExpandDelayMs = 300,
   } = options;
 
   type CollisionChoice = 'error' | 'rename' | 'overwrite' | 'skip' | 'merge';
+
+  async function probeCollision(
+    targetParentId: EntryId,
+    desiredName: string,
+  ): Promise<{ status: 'free' | 'exists' | 'case_conflict'; existingName?: string }> {
+    if (typeof fx.probeDestination === 'function') {
+      try {
+        const probe = await fx.probeDestination(targetParentId, desiredName);
+        if (probe.status === 'exists' || probe.status === 'case_conflict') {
+          return {
+            status: probe.status,
+            ...(probe.existingName !== undefined
+              ? { existingName: probe.existingName }
+              : null),
+          };
+        }
+        return { status: 'free' };
+      } catch {
+        // Fall through to snapshot heuristic.
+      }
+    }
+    // Snapshot heuristic when probe is unavailable / children already mirrored.
+    const snap = snapshotRef.current;
+    const maybeChildrenOf = (snap as unknown as {
+      childrenOf?: (id: EntryId) => readonly EntryId[];
+    }).childrenOf;
+    const childIds =
+      typeof maybeChildrenOf === 'function' ? maybeChildrenOf(targetParentId) : [];
+    for (const id of childIds) {
+      const child = snap.getById(id);
+      if (child === null) continue;
+      if (child.name === desiredName) {
+        return { status: 'exists', existingName: child.name };
+      }
+      if (child.name.toLowerCase() === desiredName.toLowerCase()) {
+        return { status: 'case_conflict', existingName: child.name };
+      }
+    }
+    return { status: 'free' };
+  }
 
   async function resolveItemCollision(
     batch: { applied: CollisionChoice | null },
@@ -334,8 +391,15 @@ export function useFileTreeDragDrop(
     },
   ): Promise<CollisionChoice> {
     if (batch.applied !== null) return batch.applied;
+    // Only prompt when the destination actually collides.
+    const probe = await probeCollision(request.targetParentId, request.desiredName);
+    if (probe.status === 'free') return collision;
     if (typeof onCollision !== 'function') return collision;
-    const result = await onCollision(request);
+    const result = await onCollision({
+      ...request,
+      status: probe.status,
+      ...(probe.existingName !== undefined ? { existingName: probe.existingName } : null),
+    });
     if (typeof result === 'string') return result;
     if (result && typeof result === 'object' && typeof result.policy === 'string') {
       if (result.applyToAll === true) {
@@ -344,6 +408,16 @@ export function useFileTreeDragDrop(
       return result.policy;
     }
     return collision;
+  }
+
+  function reportDropError(error: unknown): void {
+    if (typeof onDropError === 'function') {
+      try {
+        onDropError(error);
+      } catch {
+        /* host error handler must not break drop cleanup */
+      }
+    }
   }
 
   const ctx = useFileTreeContext();
@@ -812,14 +886,15 @@ export function useFileTreeDragDrop(
             });
           }
         }
-      } catch {
-        /* swallow — engine errors surface via its own event channel */
+      } catch (error) {
+        reportDropError(error);
+        throw error;
+      } finally {
+        // Clear dragging state even after failure so the UI is not stuck.
+        setDraggingIds(EMPTY_SET);
+        sourceIdsRef.current = EMPTY_SET;
+        isInternalDragRef.current = false;
       }
-
-      // Clear dragging state post-success.
-      setDraggingIds(EMPTY_SET);
-      sourceIdsRef.current = EMPTY_SET;
-      isInternalDragRef.current = false;
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [internal, externalIn, dropPosition, autoExpand],

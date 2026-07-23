@@ -16,6 +16,8 @@ export type { VisibleRow as DecodedVisibleRow } from './decode.js';
 export { FileExplorer, MirrorSnapshot } from './client.js';
 export type {
   CollisionPolicy,
+  DestinationProbe,
+  DestinationProbeStatus,
   Entry,
   EntryId,
   EventName,

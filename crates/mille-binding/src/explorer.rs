@@ -29,6 +29,14 @@ use crate::types::{
 };
 
 #[napi(object)]
+pub struct DestinationProbeJs {
+    /// `"free"`, `"exists"`, or `"case_conflict"`.
+    pub status: String,
+    pub existing_name: Option<String>,
+    pub path: Option<String>,
+}
+
+#[napi(object)]
 pub struct FileNestingRuleJs {
     pub parent_pattern: String,
     pub child_patterns: Vec<String>,
@@ -1339,20 +1347,93 @@ impl FileExplorer {
                 .map(|s| s.to_string())
                 .unwrap_or_default()
         });
-        if new_parent_path.join(&desired_name) == old_path {
+        let destination_root = destination_root.ok_or_else(|| {
+            fx_error_to_napi(FxError::InvalidInput(
+                "move destination is not under a configured root".into(),
+            ))
+        })?;
+        // Containment: parent must resolve inside the workspace root, and the
+        // destination name must be a single non-traversing component.
+        let (contained_parent, root_canon) =
+            assert_parent_contained(&new_parent_path, &destination_root)
+                .await
+                .map_err(fx_error_to_napi)?;
+        let desired_path = join_under_root(
+            &new_parent_path,
+            &contained_parent,
+            &desired_name,
+            &root_canon,
+        )
+        .map_err(fx_error_to_napi)?;
+        if paths_equal(&desired_path, &old_path) || new_parent_path.join(&desired_name) == old_path
+        {
             return Ok(EntryJs::from_core(source.as_ref()));
         }
         let dest = resolve_transfer_destination(&new_parent_path, &desired_name, collision)
             .await
             .map_err(fx_error_to_napi)?;
+        // Re-check containment after collision renaming.
+        join_under_root(
+            &new_parent_path,
+            &contained_parent,
+            &dest.name,
+            &root_canon,
+        )
+        .map_err(fx_error_to_napi)?;
+        if paths_equal(&dest.path, &old_path) {
+            return Ok(EntryJs::from_core(source.as_ref()));
+        }
         if matches!(dest.action, DestAction::Skip) {
             // Destination already holds the name; treat as successful no-op.
             return Ok(EntryJs::from_core(source.as_ref()));
         }
+
+        // Merge for directories preserves destination-only children.
+        if matches!(dest.action, DestAction::Merge)
+            && source.kind == EntryKind::Directory
+        {
+            let dest_meta = tokio::fs::symlink_metadata(&dest.path)
+                .await
+                .map_err(|e| fx_error_to_napi(io_to_fx(e, dest.path.clone())))?;
+            if !(dest_meta.is_dir() && !dest_meta.file_type().is_symlink()) {
+                return Err(fx_error_to_napi(FxError::InvalidInput(
+                    "collision: merge requires a real directory destination".into(),
+                )));
+            }
+            merge_move_tree_on_disk(&old_path, &dest.path)
+                .await
+                .map_err(fx_error_to_napi)?;
+            self.record_intent(old_path.clone(), IntentKind::Delete);
+            self.record_intent(dest.path.clone(), IntentKind::Rename);
+            let _policy_guard = self.policy_gate.lock();
+            // Source identity is gone; drop it and reconcile the merged tree.
+            let _ = self.store.remove_subtree(eid);
+            let config = self.watch_config();
+            crate::watch_runtime::reconcile_directory(
+                &self.store,
+                &config,
+                &dest.path,
+                None,
+            )
+            .map_err(fx_error_to_napi)?;
+            self.reclassify_current_excludes()
+                .map_err(fx_error_to_napi)?;
+            let arc = self.store.get_by_path(&dest.path).ok_or_else(|| {
+                Error::from_reason("merge-move succeeded but destination vanished")
+            })?;
+            return Ok(EntryJs::from_core(arc.as_ref()));
+        }
+
         if matches!(dest.action, DestAction::Overwrite | DestAction::Merge) {
-            // Move cannot merge; replace the destination first.
+            // File merge falls back to overwrite. Never delete the source.
+            if paths_equal(&dest.path, &old_path) {
+                return Ok(EntryJs::from_core(source.as_ref()));
+            }
             if let Some(existing) = self.store.get_by_path(&dest.path) {
                 let existing_id = existing.id;
+                if existing_id == eid {
+                    return Ok(EntryJs::from_core(source.as_ref()));
+                }
                 let existing_kind = existing.kind;
                 let _policy_guard = self.policy_gate.lock();
                 if existing_kind == EntryKind::Directory {
@@ -1504,11 +1585,41 @@ impl FileExplorer {
         }
 
         let desired_name = new_name.unwrap_or_else(|| src_entry.name.clone());
+        let workspace_root = destination_root.clone().ok_or_else(|| {
+            fx_error_to_napi(FxError::InvalidInput(
+                "copy destination is not under a configured root".into(),
+            ))
+        })?;
+        let (contained_parent, root_canon) =
+            assert_parent_contained(&new_parent_path, &workspace_root)
+                .await
+                .map_err(fx_error_to_napi)?;
+        join_under_root(
+            &new_parent_path,
+            &contained_parent,
+            &desired_name,
+            &root_canon,
+        )
+        .map_err(fx_error_to_napi)?;
         let dest = resolve_transfer_destination(&new_parent_path, &desired_name, collision)
             .await
             .map_err(fx_error_to_napi)?;
+        join_under_root(
+            &new_parent_path,
+            &contained_parent,
+            &dest.name,
+            &root_canon,
+        )
+        .map_err(fx_error_to_napi)?;
         let effective_name = dest.name.clone();
         let dst_path = dest.path.clone();
+
+        // Never overwrite/remove the source itself (same path / hardlink).
+        if paths_equal(&dst_path, &src_path) {
+            return Err(fx_error_to_napi(FxError::InvalidInput(
+                "cannot copy a path onto itself".into(),
+            )));
+        }
 
         if matches!(dest.action, DestAction::Skip) {
             if let Some(existing) = self.store.get_by_path(&dst_path) {
@@ -1532,9 +1643,28 @@ impl FileExplorer {
             return Ok(EntryJs::from_core(arc.as_ref()));
         }
 
+        // Directory self/descendant guard before any destructive collision action.
+        if src_entry.kind == EntryKind::Directory
+            && (path_is_self_or_descendant(&dst_path, &src_path))
+        {
+            return Err(fx_error_to_napi(FxError::InvalidInput(
+                "cannot copy a directory into itself or a descendant".into(),
+            )));
+        }
+
         if matches!(dest.action, DestAction::Overwrite) {
+            if paths_equal(&dst_path, &src_path) {
+                return Err(fx_error_to_napi(FxError::InvalidInput(
+                    "cannot overwrite source with itself".into(),
+                )));
+            }
             if let Some(existing) = self.store.get_by_path(&dst_path) {
                 let existing_id = existing.id;
+                if existing_id == eid {
+                    return Err(fx_error_to_napi(FxError::InvalidInput(
+                        "cannot overwrite source with itself".into(),
+                    )));
+                }
                 let existing_kind = existing.kind;
                 let _policy_guard = self.policy_gate.lock();
                 if existing_kind == EntryKind::Directory {
@@ -1547,11 +1677,6 @@ impl FileExplorer {
         }
 
         if src_entry.kind == EntryKind::Directory {
-            if dst_path == src_path || dst_path.starts_with(&src_path) {
-                return Err(fx_error_to_napi(FxError::InvalidInput(
-                    "cannot copy a directory into itself or a descendant".into(),
-                )));
-            }
             let copy_result = if matches!(dest.action, DestAction::Merge) {
                 merge_tree_on_disk(&src_path, &dst_path).await
             } else {
@@ -1564,57 +1689,33 @@ impl FileExplorer {
                 return Err(fx_error_to_napi(error));
             }
             self.record_intent(dst_path.clone(), IntentKind::Create);
-            use mille_core::{populate_store_with_provenance, walk, WalkOptions};
-            let workspace_root = destination_root.ok_or_else(|| {
-                fx_error_to_napi(FxError::InvalidInput(
-                    "copy destination is not under a configured root".into(),
-                ))
-            })?;
-            let new_id = if let Some(existing) = self.store.get_by_path(&dst_path) {
-                existing.id
-            } else {
+            // Authoritatively reconcile the destination subtree so merge
+            // updates existing entries (size/mtime/kind) and drops stale ones.
+            let _policy_guard = self.policy_gate.lock();
+            if self.store.get_by_path(&dst_path).is_none() {
                 let mut root_entry =
                     stat_to_entry(&dst_path, Some(new_parent_eid), effective_name.clone())
                         .await
                         .map_err(fx_error_to_napi)?;
-                let _policy_guard = self.policy_gate.lock();
                 let exclude_matchers = self.current_exclude_matchers().map_err(fx_error_to_napi)?;
                 root_entry.is_excluded =
                     Self::path_is_excluded(&dst_path, &root_entry, &exclude_matchers);
                 self.store
                     .insert(dst_path.clone(), root_entry)
-                    .map_err(fx_error_to_napi)?
-            };
-            let _policy_guard = self.policy_gate.lock();
-            let walked = walk(
-                &dst_path,
-                WalkOptions {
-                    max_depth: None,
-                    follow_symlinks: self.options.follow_symlinks,
-                    include_hidden: true,
-                    include_root: false,
-                    parallelism: self.options.walker_concurrency,
-                },
-            )
-            .map_err(fx_error_to_napi)?;
-            let filtered: Vec<_> = walked
-                .into_iter()
-                .filter(|w| self.store.get_by_path(&w.path).is_none())
-                .collect();
-            if !filtered.is_empty() {
-                populate_store_with_provenance(
-                    &self.store,
-                    &workspace_root,
-                    &filtered,
-                    None,
-                    None,
-                )
-                .map_err(fx_error_to_napi)?;
-                self.reclassify_current_excludes()
                     .map_err(fx_error_to_napi)?;
             }
-            let arc = self.store.get_by_id(new_id).ok_or_else(|| {
-                Error::from_reason("directory copy succeeded but id vanished")
+            let config = self.watch_config();
+            crate::watch_runtime::reconcile_directory(
+                &self.store,
+                &config,
+                &dst_path,
+                None,
+            )
+            .map_err(fx_error_to_napi)?;
+            self.reclassify_current_excludes()
+                .map_err(fx_error_to_napi)?;
+            let arc = self.store.get_by_path(&dst_path).ok_or_else(|| {
+                Error::from_reason("directory copy succeeded but path not indexed")
             })?;
             return Ok(EntryJs::from_core(arc.as_ref()));
         }
@@ -1631,6 +1732,14 @@ impl FileExplorer {
         let _policy_guard = self.policy_gate.lock();
         let exclude_matchers = self.current_exclude_matchers().map_err(fx_error_to_napi)?;
         entry.is_excluded = Self::path_is_excluded(&dst_path, &entry, &exclude_matchers);
+        if let Some(existing) = self.store.get_by_path(&dst_path) {
+            let _ = self.store.update(existing.id, entry);
+            let arc = self
+                .store
+                .get_by_id(existing.id)
+                .ok_or_else(|| Error::from_reason("copy update succeeded but id vanished"))?;
+            return Ok(EntryJs::from_core(arc.as_ref()));
+        }
         let new_id = self
             .store
             .insert(dst_path, entry)
@@ -1703,27 +1812,42 @@ impl FileExplorer {
                 .map(|s| s.to_string())
                 .unwrap_or_else(|| "imported".to_string())
         });
-        if desired_name.is_empty()
-            || desired_name == "."
-            || desired_name == ".."
-            || desired_name.contains('/')
-            || desired_name.contains('\\')
-        {
-            return Err(fx_error_to_napi(FxError::InvalidInput(format!(
-                "invalid destination name: {desired_name}"
-            ))));
-        }
+        validate_entry_name(&desired_name).map_err(fx_error_to_napi)?;
+        let (contained_parent, root_canon) =
+            assert_parent_contained(&new_parent_path, &destination_root)
+                .await
+                .map_err(fx_error_to_napi)?;
+        join_under_root(
+            &new_parent_path,
+            &contained_parent,
+            &desired_name,
+            &root_canon,
+        )
+        .map_err(fx_error_to_napi)?;
 
         let dest = resolve_transfer_destination(&new_parent_path, &desired_name, collision)
             .await
             .map_err(fx_error_to_napi)?;
+        join_under_root(
+            &new_parent_path,
+            &contained_parent,
+            &dest.name,
+            &root_canon,
+        )
+        .map_err(fx_error_to_napi)?;
         let effective_name = dest.name.clone();
         let dst_path = dest.path.clone();
+
+        if paths_equal(&dst_path, &src_path) {
+            return Err(fx_error_to_napi(FxError::InvalidInput(
+                "cannot copy a path onto itself".into(),
+            )));
+        }
 
         // Reject self/descendant cycles for directory sources.
         if src_meta.is_dir() || src_meta.file_type().is_symlink() {
             if let Ok(true) = tokio::fs::metadata(&src_path).await.map(|m| m.is_dir()) {
-                if dst_path == src_path || dst_path.starts_with(&src_path) {
+                if path_is_self_or_descendant(&dst_path, &src_path) {
                     return Err(fx_error_to_napi(FxError::InvalidInput(
                         "cannot copy a directory into itself or a descendant".into(),
                     )));
@@ -1753,6 +1877,11 @@ impl FileExplorer {
         }
 
         if matches!(dest.action, DestAction::Overwrite) {
+            if paths_equal(&dst_path, &src_path) {
+                return Err(fx_error_to_napi(FxError::InvalidInput(
+                    "cannot overwrite source with itself".into(),
+                )));
+            }
             if let Some(existing) = self.store.get_by_path(&dst_path) {
                 let existing_id = existing.id;
                 let existing_kind = existing.kind;
@@ -1801,6 +1930,13 @@ impl FileExplorer {
             let _policy_guard = self.policy_gate.lock();
             let exclude_matchers = self.current_exclude_matchers().map_err(fx_error_to_napi)?;
             entry.is_excluded = Self::path_is_excluded(&dst_path, &entry, &exclude_matchers);
+            if let Some(existing) = self.store.get_by_path(&dst_path) {
+                let _ = self.store.update(existing.id, entry);
+                let arc = self.store.get_by_id(existing.id).ok_or_else(|| {
+                    Error::from_reason("copyFromPath update succeeded but id vanished")
+                })?;
+                return Ok(EntryJs::from_core(arc.as_ref()));
+            }
             let new_id = self
                 .store
                 .insert(dst_path.clone(), entry)
@@ -1812,58 +1948,89 @@ impl FileExplorer {
             return Ok(EntryJs::from_core(arc.as_ref()));
         }
 
-        // Directory: insert the destination root under the real parent, then
-        // walk only descendants. Walk roots report parent_path=None, so using
-        // include_root would attach the imported folder as a spurious root.
-        use mille_core::{populate_store_with_provenance, walk, WalkOptions};
-        let new_id = if let Some(existing) = self.store.get_by_path(&dst_path) {
-            existing.id
-        } else {
+        // Directory: ensure root is indexed, then authoritatively reconcile
+        // so merge updates existing metadata and drops stale descendants.
+        let _policy_guard = self.policy_gate.lock();
+        if self.store.get_by_path(&dst_path).is_none() {
             let mut root_entry = stat_to_entry(&dst_path, Some(new_parent_eid), effective_name)
                 .await
                 .map_err(fx_error_to_napi)?;
-            let _policy_guard = self.policy_gate.lock();
             let exclude_matchers = self.current_exclude_matchers().map_err(fx_error_to_napi)?;
             root_entry.is_excluded =
                 Self::path_is_excluded(&dst_path, &root_entry, &exclude_matchers);
             self.store
                 .insert(dst_path.clone(), root_entry)
-                .map_err(fx_error_to_napi)?
-        };
-        let _policy_guard = self.policy_gate.lock();
-        let walked = walk(
-            &dst_path,
-            WalkOptions {
-                max_depth: None,
-                follow_symlinks: self.options.follow_symlinks,
-                include_hidden: true,
-                include_root: false,
-                parallelism: self.options.walker_concurrency,
-            },
-        )
-        .map_err(fx_error_to_napi)?;
-        let filtered: Vec<_> = walked
-            .into_iter()
-            .filter(|w| self.store.get_by_path(&w.path).is_none())
-            .collect();
-        if !filtered.is_empty() {
-            populate_store_with_provenance(
-                &self.store,
-                &destination_root,
-                &filtered,
-                None,
-                None,
-            )
-            .map_err(fx_error_to_napi)?;
-            self.reclassify_current_excludes()
                 .map_err(fx_error_to_napi)?;
         }
-
-        let arc = self
-            .store
-            .get_by_id(new_id)
-            .ok_or_else(|| Error::from_reason("copyFromPath directory copy succeeded but id vanished"))?;
+        let config = self.watch_config();
+        crate::watch_runtime::reconcile_directory(
+            &self.store,
+            &config,
+            &dst_path,
+            None,
+        )
+        .map_err(fx_error_to_napi)?;
+        self.reclassify_current_excludes()
+            .map_err(fx_error_to_napi)?;
+        let arc = self.store.get_by_path(&dst_path).ok_or_else(|| {
+            Error::from_reason("copyFromPath directory copy succeeded but path not indexed")
+        })?;
         Ok(EntryJs::from_core(arc.as_ref()))
+    }
+
+    /// Preflight a transfer destination without mutating disk or the store.
+    /// Used by hosts/UI to prompt only when a real collision exists.
+    #[napi(js_name = "probeDestination")]
+    pub async fn probe_destination(
+        &self,
+        parent_id: i64,
+        name: String,
+    ) -> Result<DestinationProbeJs> {
+        let parent_eid = EntryId(parent_id as u64);
+        let parent_path = resolve_entry_path(&self.store, parent_eid).ok_or_else(|| {
+            fx_error_to_napi(FxError::InvalidInput(format!(
+                "parent id {parent_id} not found in snapshot"
+            )))
+        })?;
+        let roots = self.roots.read().clone();
+        let root = configured_root_for_path(&roots, &parent_path).ok_or_else(|| {
+            fx_error_to_napi(FxError::InvalidInput(
+                "probeDestination parent is not under a configured root".into(),
+            ))
+        })?;
+        validate_entry_name(&name).map_err(fx_error_to_napi)?;
+        let (contained_parent, root_canon) = assert_parent_contained(&parent_path, &root)
+            .await
+            .map_err(fx_error_to_napi)?;
+        let desired = join_under_root(&parent_path, &contained_parent, &name, &root_canon)
+            .map_err(fx_error_to_napi)?;
+
+        let case_conflict = find_case_conflict(&contained_parent, &name)
+            .await
+            .map_err(fx_error_to_napi)?;
+        match tokio::fs::symlink_metadata(&desired).await {
+            Ok(_) => Ok(DestinationProbeJs {
+                status: "exists".into(),
+                existing_name: Some(name),
+                path: Some(desired.to_string_lossy().into_owned()),
+            }),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                if let Some(actual) = case_conflict {
+                    Ok(DestinationProbeJs {
+                        status: "case_conflict".into(),
+                        existing_name: Some(actual),
+                        path: Some(contained_parent.join(&name).to_string_lossy().into_owned()),
+                    })
+                } else {
+                    Ok(DestinationProbeJs {
+                        status: "free".into(),
+                        existing_name: None,
+                        path: Some(desired.to_string_lossy().into_owned()),
+                    })
+                }
+            }
+            Err(error) => Err(fx_error_to_napi(io_to_fx(error, desired))),
+        }
     }
 
     // ---- File I/O ----------------------------------------------------
@@ -2393,38 +2560,207 @@ fn configured_root_for_path(roots: &[PathBuf], path: &Path) -> Option<PathBuf> {
         .cloned()
 }
 
-/// Recursively copy a file or directory tree on disk. Symlinks are followed so
-/// imported material is self-contained under the destination root.
+/// Reject path components that would escape a single directory entry name.
+fn validate_entry_name(name: &str) -> std::result::Result<(), FxError> {
+    if name.is_empty() || name == "." || name == ".." {
+        return Err(FxError::InvalidInput(format!("invalid destination name: {name}")));
+    }
+    if name.contains('/') || name.contains('\\') || name.contains('\0') {
+        return Err(FxError::InvalidInput(format!(
+            "destination name must be a single path component: {name}"
+        )));
+    }
+    // Reject Windows drive-relative and reserved separators.
+    if name.contains(':') {
+        return Err(FxError::InvalidInput(format!(
+            "destination name must be a single path component: {name}"
+        )));
+    }
+    Ok(())
+}
+
+/// Join `store_parent/name` for store-stable path spelling, while checking
+/// physical containment against canonical `parent_canon` / `root_canon`.
+/// Returning the store spelling keeps EntryStore path indices coherent on
+/// platforms where `/var` and `/private/var` are the same directory.
+fn join_under_root(
+    store_parent: &Path,
+    parent_canon: &Path,
+    name: &str,
+    root_canon: &Path,
+) -> std::result::Result<PathBuf, FxError> {
+    validate_entry_name(name)?;
+    // Reject traversal in the name itself (already covered by validate) and
+    // ensure the store join cannot climb out via odd components.
+    let store_dest = store_parent.join(name);
+    let mut normalized = PathBuf::new();
+    for component in store_dest.components() {
+        match component {
+            Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
+            Component::RootDir => normalized.push(component.as_os_str()),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !normalized.pop() {
+                    return Err(FxError::InvalidInput(
+                        "destination path escapes its parent".into(),
+                    ));
+                }
+            }
+            Component::Normal(part) => normalized.push(part),
+        }
+    }
+    // Physical containment uses canonical parent + name.
+    let physical = parent_canon.join(name);
+    if !(physical == *root_canon || physical.starts_with(root_canon)) {
+        return Err(FxError::InvalidInput(format!(
+            "destination {:?} is not under workspace root {:?}",
+            physical, root_canon
+        )));
+    }
+    // Prefer normalized store spelling when it still lives under the
+    // store parent; otherwise fall back to store_parent/name.
+    if normalized.starts_with(store_parent) || normalized == store_parent.join(name) {
+        Ok(if normalized.as_os_str().is_empty() {
+            store_dest
+        } else {
+            // Keep original store_parent prefix spelling.
+            store_dest
+        })
+    } else {
+        Err(FxError::InvalidInput(
+            "destination path escapes its parent".into(),
+        ))
+    }
+}
+
+/// Ensure a parent directory is a real path contained in a configured root
+/// (symlink destinations that resolve outside the workspace are rejected).
+/// Returns `(parent_canonical, root_canonical)` so callers compare with the
+/// same spelling (important on macOS where `/var` → `/private/var`).
+async fn assert_parent_contained(
+    parent: &Path,
+    root: &Path,
+) -> std::result::Result<(PathBuf, PathBuf), FxError> {
+    let parent_canon = tokio::fs::canonicalize(parent)
+        .await
+        .map_err(|e| io_to_fx(e, parent.to_path_buf()))?;
+    let root_canon = tokio::fs::canonicalize(root)
+        .await
+        .map_err(|e| io_to_fx(e, root.to_path_buf()))?;
+    if !(parent_canon == root_canon || parent_canon.starts_with(&root_canon)) {
+        return Err(FxError::InvalidInput(format!(
+            "destination parent {:?} escapes workspace root {:?}",
+            parent_canon, root_canon
+        )));
+    }
+    Ok((parent_canon, root_canon))
+}
+
+fn paths_equal(a: &Path, b: &Path) -> bool {
+    if a == b {
+        return true;
+    }
+    // Best-effort physical identity when both exist.
+    match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+        (Ok(ca), Ok(cb)) => ca == cb,
+        _ => false,
+    }
+}
+
+/// True when `child` is `ancestor` or a path beneath it, using canonical
+/// forms when available so macOS `/var` vs `/private/var` still matches.
+fn path_is_self_or_descendant(child: &Path, ancestor: &Path) -> bool {
+    if child == ancestor || child.starts_with(ancestor) {
+        return true;
+    }
+    match (std::fs::canonicalize(child), std::fs::canonicalize(ancestor)) {
+        (Ok(c), Ok(a)) => c == a || c.starts_with(&a),
+        (Err(_), Ok(a)) => {
+            // Destination may not exist yet: canonicalize parent and rejoin.
+            match child.parent().and_then(|p| std::fs::canonicalize(p).ok()) {
+                Some(parent) => {
+                    let candidate = parent.join(child.file_name().unwrap_or_default());
+                    candidate == a || candidate.starts_with(&a)
+                }
+                None => false,
+            }
+        }
+        _ => false,
+    }
+}
+
+/// Recursively copy a file or directory tree on disk.
+/// Directory symlinks are *not* followed — they are recreated as symlinks
+/// when the platform supports it, otherwise copied as empty placeholders
+/// is rejected. File symlinks copy link-target contents once.
 async fn copy_tree_on_disk(
     src: &Path,
     dst: &Path,
+) -> std::result::Result<(), FxError> {
+    copy_tree_on_disk_guarded(src, dst, &mut Vec::new()).await
+}
+
+async fn copy_tree_on_disk_guarded(
+    src: &Path,
+    dst: &Path,
+    stack: &mut Vec<PathBuf>,
 ) -> std::result::Result<(), FxError> {
     let meta = tokio::fs::symlink_metadata(src)
         .await
         .map_err(|e| io_to_fx(e, src.to_path_buf()))?;
 
     if meta.file_type().is_symlink() {
-        let target_meta = tokio::fs::metadata(src)
-            .await
-            .map_err(|e| io_to_fx(e, src.to_path_buf()))?;
-        if !target_meta.is_dir() {
-            tokio::fs::copy(src, dst)
-                .await
-                .map_err(|e| io_to_fx(e, dst.to_path_buf()))?;
-            return Ok(());
+        // Never follow directory symlinks (cycle + containment risk).
+        // File symlinks: materialize target content once.
+        match tokio::fs::metadata(src).await {
+            Ok(target) if target.is_dir() => {
+                return Err(FxError::Unsupported(format!(
+                    "refusing to recursively follow directory symlink {:?}",
+                    src
+                )));
+            }
+            Ok(_) => {
+                tokio::fs::copy(src, dst)
+                    .await
+                    .map_err(|e| io_to_fx(e, dst.to_path_buf()))?;
+                return Ok(());
+            }
+            Err(error) => {
+                // Dangling symlink: try to recreate the link shape.
+                let target = tokio::fs::read_link(src)
+                    .await
+                    .map_err(|e| io_to_fx(e, src.to_path_buf()))?;
+                create_symlink(&target, dst).await?;
+                let _ = error;
+                return Ok(());
+            }
         }
-        // Symlink-to-directory: materialize as a real directory tree below.
-    } else if meta.is_file() {
+    }
+
+    if meta.is_file() {
         tokio::fs::copy(src, dst)
             .await
             .map_err(|e| io_to_fx(e, dst.to_path_buf()))?;
         return Ok(());
-    } else if !meta.is_dir() {
+    }
+    if !meta.is_dir() {
         return Err(FxError::Unsupported(format!(
             "cannot copy special file {:?}",
             src
         )));
     }
+
+    // Cycle detection via canonical directory identity.
+    let src_key = tokio::fs::canonicalize(src)
+        .await
+        .unwrap_or_else(|_| src.to_path_buf());
+    if stack.iter().any(|seen| seen == &src_key) {
+        return Err(FxError::InvalidInput(format!(
+            "directory cycle detected while copying {:?}",
+            src
+        )));
+    }
+    stack.push(src_key);
 
     tokio::fs::create_dir(dst)
         .await
@@ -2440,15 +2776,51 @@ async fn copy_tree_on_disk(
         let name = entry.file_name();
         let child_src = entry.path();
         let child_dst = dst.join(&name);
-        // Box the recursive future so the async fn is Sized.
-        Box::pin(copy_tree_on_disk(&child_src, &child_dst)).await?;
+        Box::pin(copy_tree_on_disk_guarded(&child_src, &child_dst, stack)).await?;
     }
+    stack.pop();
     Ok(())
 }
 
+async fn create_symlink(target: &Path, dst: &Path) -> std::result::Result<(), FxError> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::symlink;
+        return tokio::task::spawn_blocking({
+            let target = target.to_path_buf();
+            let dst = dst.to_path_buf();
+            move || symlink(&target, &dst).map_err(|e| io_to_fx(e, dst))
+        })
+        .await
+        .map_err(|e| FxError::InternalBug(format!("symlink task join failed: {e}")))?;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::{symlink_dir, symlink_file};
+        let target = target.to_path_buf();
+        let dst = dst.to_path_buf();
+        let is_dir = tokio::fs::metadata(&target).await.map(|m| m.is_dir()).unwrap_or(false);
+        return tokio::task::spawn_blocking(move || {
+            if is_dir {
+                symlink_dir(&target, &dst).map_err(|e| io_to_fx(e, dst))
+            } else {
+                symlink_file(&target, &dst).map_err(|e| io_to_fx(e, dst))
+            }
+        })
+        .await
+        .map_err(|e| FxError::InternalBug(format!("symlink task join failed: {e}")))?;
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (target, dst);
+        Err(FxError::Unsupported("symlink creation is not supported".into()))
+    }
+}
+
 /// Merge `src` into an existing `dst` directory. Files overwrite; missing
-/// children are created; nested directories merge recursively. If `dst` does
-/// not exist, falls back to a full tree copy.
+/// children are created; nested directories merge recursively. Directory
+/// symlinks are not followed. If `dst` does not exist, falls back to a full
+/// tree copy.
 async fn merge_tree_on_disk(
     src: &Path,
     dst: &Path,
@@ -2456,6 +2828,15 @@ async fn merge_tree_on_disk(
     let src_meta = tokio::fs::symlink_metadata(src)
         .await
         .map_err(|e| io_to_fx(e, src.to_path_buf()))?;
+    if src_meta.file_type().is_symlink() {
+        // Never follow dir symlinks during merge either.
+        if tokio::fs::metadata(src).await.map(|m| m.is_dir()).unwrap_or(false) {
+            return Err(FxError::Unsupported(format!(
+                "refusing to recursively follow directory symlink {:?}",
+                src
+            )));
+        }
+    }
     let src_is_dir = src_meta.is_dir()
         || (src_meta.file_type().is_symlink()
             && tokio::fs::metadata(src)
@@ -2469,13 +2850,9 @@ async fn merge_tree_on_disk(
         }
         Err(error) => return Err(io_to_fx(error, dst.to_path_buf())),
         Ok(dst_meta) => {
-            let dst_is_dir = dst_meta.is_dir()
-                || (dst_meta.file_type().is_symlink()
-                    && tokio::fs::metadata(dst)
-                        .await
-                        .map(|m| m.is_dir())
-                        .unwrap_or(false));
-            if src_is_dir && dst_is_dir {
+            // Prefer real directories only for merge descent (no symlink follow).
+            let dst_is_real_dir = dst_meta.is_dir() && !dst_meta.file_type().is_symlink();
+            if src_is_dir && !src_meta.file_type().is_symlink() && dst_is_real_dir {
                 let mut rd = tokio::fs::read_dir(src)
                     .await
                     .map_err(|e| io_to_fx(e, src.to_path_buf()))?;
@@ -2494,6 +2871,52 @@ async fn merge_tree_on_disk(
             return copy_tree_on_disk(src, dst).await;
         }
     }
+}
+
+/// Move-merge a directory into an existing directory without deleting
+/// destination-only children. Source directory is removed when empty.
+async fn merge_move_tree_on_disk(
+    src: &Path,
+    dst: &Path,
+) -> std::result::Result<(), FxError> {
+    let mut rd = tokio::fs::read_dir(src)
+        .await
+        .map_err(|e| io_to_fx(e, src.to_path_buf()))?;
+    while let Some(entry) = rd
+        .next_entry()
+        .await
+        .map_err(|e| io_to_fx(e, src.to_path_buf()))?
+    {
+        let name = entry.file_name();
+        let child_src = entry.path();
+        let child_dst = dst.join(&name);
+        let src_meta = tokio::fs::symlink_metadata(&child_src)
+            .await
+            .map_err(|e| io_to_fx(e, child_src.clone()))?;
+        let src_is_dir = src_meta.is_dir() && !src_meta.file_type().is_symlink();
+        match tokio::fs::symlink_metadata(&child_dst).await {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                tokio::fs::rename(&child_src, &child_dst)
+                    .await
+                    .map_err(|e| io_to_fx(e, child_src.clone()))?;
+            }
+            Err(error) => return Err(io_to_fx(error, child_dst)),
+            Ok(dst_meta) => {
+                let dst_is_dir = dst_meta.is_dir() && !dst_meta.file_type().is_symlink();
+                if src_is_dir && dst_is_dir {
+                    Box::pin(merge_move_tree_on_disk(&child_src, &child_dst)).await?;
+                    let _ = tokio::fs::remove_dir(&child_src).await;
+                } else {
+                    remove_path_best_effort(&child_dst).await;
+                    tokio::fs::rename(&child_src, &child_dst)
+                        .await
+                        .map_err(|e| io_to_fx(e, child_src.clone()))?;
+                }
+            }
+        }
+    }
+    let _ = tokio::fs::remove_dir(src).await;
+    Ok(())
 }
 
 async fn remove_path_best_effort(path: &Path) {

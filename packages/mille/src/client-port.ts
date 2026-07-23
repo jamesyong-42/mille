@@ -409,6 +409,17 @@ export class PortFileExplorer {
     return this.mutate('copyFromPath', args);
   }
 
+  async probeDestination(
+    parentId: number,
+    name: string,
+  ): Promise<{ status: string; existingName?: string; path?: string }> {
+    const result = await this.call('probeDestination', [parentId, name]);
+    if (result === null || typeof result !== 'object') {
+      throw new FileSystemError('EUNKNOWN', 'invalid probeDestination response');
+    }
+    return result as { status: string; existingName?: string; path?: string };
+  }
+
   async readFile(id: number): Promise<Uint8Array> {
     const data = (await this.mutate('readFile', { id })) as number[];
     return Uint8Array.from(data);

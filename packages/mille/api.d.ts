@@ -514,6 +514,14 @@ export declare class FileExplorer implements Disposable {
     settings: ExplorerProjectionSettings,
   ): TreeVersion | Promise<TreeVersion>;
 
+  /**
+   * Atomically reorder the current workspace roots by stable identity.
+   * `ids` must contain every current root exactly once. Local explorers
+   * return synchronously; port explorers resolve after every attached
+   * mirror has received the ordered root list.
+   */
+  reorderRoots(ids: readonly EntryId[]): TreeVersion | Promise<TreeVersion>;
+
   /** Async URI → entry. May return null if the URI isn't under a known root. */
   getByUri(uri: Uri): Promise<Entry | null>;
   /**

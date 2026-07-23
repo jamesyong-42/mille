@@ -88,15 +88,15 @@ interface Session {
   /** Whether the handshake frame has been observed. */
   handshook: boolean;
   /**
-   * Phase B1 — the last root-id set this session has been told about.
+   * Phase B1 — the last ordered root-id list this session has been told about.
    * Populated with the ids shipped in the handshake's snapshot; the
    * per-tick delta builder compares the host's current roots against
-   * this and re-ships the full list when the set changed. Kept per
+   * this and re-ships the full list when membership or order changed. Kept per
    * session because sessions can attach at different phases of the
    * walker lifecycle — session A may have handshaken empty while B
    * handshook after a root was added.
    */
-  lastRootSet: Set<number>;
+  lastRootIds: number[];
   /** Teardown for the message listener + port. Replaced during attach. */
   detach: () => void;
 }
@@ -314,7 +314,7 @@ class FileExplorerHostImpl implements FileExplorerHost {
       knownIds: new Set<number>(),
       nextReqId: 1,
       handshook: false,
-      lastRootSet: new Set<number>(),
+      lastRootIds: [],
       detach: () => {
         /* replaced below */
       },
@@ -456,7 +456,7 @@ class FileExplorerHostImpl implements FileExplorerHost {
     // Phase B1 — check whether any session's root view is out of date.
     // Root changes usually show up in the ChangeSet too (the walker
     // adds the root entry to the native store), but we guard
-    // independently so a stray root-set change without an attendant
+    // independently so a stray root-list change without an attendant
     // ChangeSet still reaches the wire.
     let rootsChangedAnySession = false;
     if (
@@ -470,10 +470,9 @@ class FileExplorerHostImpl implements FileExplorerHost {
         .getSnapshot()
         .roots()
         .map((e) => e.id);
-      const currentRootSet = new Set(currentRootIds);
       for (const session of this.sessions.values()) {
         if (!session.handshook) continue;
-        if (!setsEqual(currentRootSet, session.lastRootSet)) {
+        if (!arraysEqual(currentRootIds, session.lastRootIds)) {
           rootsChangedAnySession = true;
           break;
         }
@@ -504,8 +503,6 @@ class FileExplorerHostImpl implements FileExplorerHost {
     // (native snapshot is a cached view) and we want every attached
     // session to see the same root picture on any given tick.
     const currentRootIds = snap.roots().map((e) => e.id);
-    const currentRootSet = new Set(currentRootIds);
-
     for (const session of this.sessions.values()) {
       if (!session.handshook) continue;
       const view: SessionView = {
@@ -514,18 +511,18 @@ class FileExplorerHostImpl implements FileExplorerHost {
       };
       const delta = computeSessionDelta(cs, view);
 
-      // Phase B1 — has the root set changed for this session since last
-      // tick? Compare by id content (not reference). If so, we'll ship
+      // Phase B1 — has the ordered root list changed for this session since
+      // last tick? Compare by id and position. If so, we'll ship
       // the full current list on this delta; the client replaces its
       // `working.roots` verbatim. Also ensure every current root id is
       // in `knownIds` so the below changedIds/childSetChanged filter
       // doesn't silently drop the root Entry's ClientEntry payload —
       // root entries otherwise would be treated as "unknown to session"
       // and stay off the wire.
-      const rootsChangedForSession = !setsEqual(currentRootSet, session.lastRootSet);
+      const rootsChangedForSession = !arraysEqual(currentRootIds, session.lastRootIds);
       if (rootsChangedForSession) {
         for (const id of currentRootIds) session.knownIds.add(id);
-        session.lastRootSet = new Set(currentRootSet);
+        session.lastRootIds = [...currentRootIds];
       }
 
       // Bundle the ClientEntry payloads for every id whose record
@@ -775,11 +772,10 @@ class FileExplorerHostImpl implements FileExplorerHost {
       if (c !== null) directChildCounts[String(e.id)] = c;
       session.knownIds.add(e.id);
     }
-    // Phase B1 — seed lastRootSet with whatever we just shipped so the
-    // per-tick delta builder only re-emits `roots` when the set
-    // actually changes post-handshake (walker discovering a root, a
-    // caller adding a root at runtime, etc.).
-    session.lastRootSet = new Set(roots);
+    // Phase B1 — seed lastRootIds with whatever we just shipped so the
+    // per-tick delta builder only re-emits `roots` when membership or order
+    // changes post-handshake (walker discovery, live reorder, etc.).
+    session.lastRootIds = [...roots];
     this.send(
       session,
       frame('snapshot', {
@@ -1147,6 +1143,20 @@ class FileExplorerHostImpl implements FileExplorerHost {
         await this.flushTickNow();
         return version;
       }
+      case 'reorderRoots': {
+        const ids = args[0];
+        if (
+          !Array.isArray(ids) ||
+          !ids.every((id) => typeof id === 'number' && Number.isSafeInteger(id) && id >= 0)
+        ) {
+          throw new Error('reorderRoots requires an array of non-negative integer ids');
+        }
+        const version = this.explorer.reorderRoots(ids as EntryId[]);
+        // The RPC is a synchronization point: every attached mirror has the
+        // new order before the initiating client observes completion.
+        await this.flushTickNow();
+        return version;
+      }
       case 'resolvePath': {
         const path = args[0];
         if (typeof path !== 'string') throw new Error('resolvePath requires a string path');
@@ -1237,14 +1247,13 @@ class FileExplorerHostImpl implements FileExplorerHost {
 }
 
 /**
- * Phase B1 — content equality for two number sets. Fast path when sizes
- * differ; otherwise one-pass `.has` check. Used by the per-session
- * delta builder to decide whether to re-ship `roots`.
+ * Phase B1 / 3.2 — ordered equality for root-id lists. Position matters:
+ * a pure reorder must re-ship `roots` even though membership is unchanged.
  */
-function setsEqual(a: ReadonlySet<number>, b: ReadonlySet<number>): boolean {
-  if (a.size !== b.size) return false;
-  for (const v of a) {
-    if (!b.has(v)) return false;
+function arraysEqual(a: readonly number[], b: readonly number[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let index = 0; index < a.length; index += 1) {
+    if (a[index] !== b[index]) return false;
   }
   return true;
 }

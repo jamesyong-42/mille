@@ -146,12 +146,24 @@ export interface AriaRowProps {
   readonly 'aria-expanded'?: boolean;
 }
 
+/** Context supplied when deriving a presentation-only workspace root label. */
+export interface RootLabelContext {
+  /** Position in the snapshot's current ordered root list. */
+  readonly index: number;
+  /** Zero-based position among roots with the same filesystem basename. */
+  readonly duplicateIndex: number;
+  /** Number of current roots with the same filesystem basename. */
+  readonly duplicateCount: number;
+}
+
 /**
  * Props passed to the row renderer. Phase 4 will add more focus /
  * selection / keyboard handlers; Phase 10 will populate decorations.
  */
 export interface FileTreeRowProps {
   readonly row: VisibleRow;
+  /** Presentation-only name override; commands continue using `row.name`. */
+  readonly displayName?: string;
   readonly depth: number;
   readonly selected: boolean;
   readonly focused: boolean;
@@ -416,6 +428,15 @@ export interface FileTreeProps {
   readonly style?: CSSProperties;
   readonly rowRenderer?: ComponentType<FileTreeRowProps>;
   readonly stickyRoots?: boolean;
+  /**
+   * Derive a presentation-only label for each workspace root. The callback
+   * is re-evaluated against the current root order. Entry names, filesystem
+   * paths, command targets, and persisted navigation paths are unchanged.
+   *
+   * By default, duplicate basenames render as `workspace (1)`,
+   * `workspace (2)`, while unique roots retain their basename.
+   */
+  readonly rootLabel?: (root: Entry, context: RootLabelContext) => string;
   /** One-time path-based state restored lazily after the first root arrives. */
   readonly initialNavigationState?: FileTreeNavigationState | string | null;
   /** Debounced observer for hosts that persist state to workspace storage. */

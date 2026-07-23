@@ -113,6 +113,48 @@ impl EntryStore {
             .map(|path| path.value().to_path_buf())
     }
 
+    /// Atomically replace the display order of the current workspace roots.
+    ///
+    /// `roots` must be an exact permutation of the published root ids. Root
+    /// identity, paths, entries, and child order are left untouched. Passing
+    /// the current order is a no-op and does not advance the tree version.
+    pub fn reorder_roots(&self, roots: &[EntryId]) -> Result<u64, FxError> {
+        let _guard = self.write_lock.lock();
+        let current = self.inner.load_full();
+
+        if roots.len() != current.roots.len() {
+            return Err(FxError::InvalidInput(format!(
+                "root order must contain exactly {} ids",
+                current.roots.len()
+            )));
+        }
+        let requested: HashSet<EntryId> = roots.iter().copied().collect();
+        let existing: HashSet<EntryId> = current.roots.iter().copied().collect();
+        if requested.len() != roots.len() || requested != existing {
+            return Err(FxError::InvalidInput(
+                "root order must be an exact permutation of current root ids".into(),
+            ));
+        }
+        if roots == current.roots.as_slice() {
+            return Ok(current.tree_version);
+        }
+
+        let mut next = (*current).clone();
+        next.roots.clear();
+        next.roots.extend_from_slice(roots);
+        let prev_tree_version = next.tree_version;
+        next.tree_version += 1;
+        let new_tree_version = next.tree_version;
+        self.inner.store(Arc::new(next));
+        self.record_mutation(prev_tree_version, new_tree_version, |changes| {
+            // Root rows themselves are unchanged, but marking their ids gives
+            // the coalescer a bounded structural signal. The host separately
+            // compares the ordered root vector and includes it in the delta.
+            changes.changed_ids.extend(roots.iter().copied());
+        });
+        Ok(new_tree_version)
+    }
+
     /// Snapshot the path index below `root`. The returned paths include
     /// `root` itself when it is known. Watch reconciliation uses this to
     /// compare a bounded disk walk with the authoritative in-memory view.
@@ -989,6 +1031,49 @@ mod tests {
         // Lazy-expand contract: unvisited directories report has_children so
         // the UI shows a chevron and setExpanded can fire a depth-1 walk.
         assert!(snap.has_children(root));
+    }
+
+    #[test]
+    fn reorder_roots_is_atomic_and_preserves_retained_snapshots() {
+        let s = EntryStore::new();
+        let a = s.insert("/a".into(), dir("a", None)).unwrap();
+        let b = s.insert("/b".into(), dir("b", None)).unwrap();
+        let c = s.insert("/c".into(), dir("c", None)).unwrap();
+        let retained = s.snapshot();
+        s.take_pending_changes();
+        let previous_version = s.tree_version();
+
+        let version = s.reorder_roots(&[c, a, b]).unwrap();
+        assert_eq!(version, previous_version + 1);
+        assert_eq!(s.snapshot().roots(), &[c, a, b]);
+        assert_eq!(retained.roots(), &[a, b, c]);
+
+        let changes = s.take_pending_changes();
+        assert_eq!(changes.from_version, previous_version);
+        assert_eq!(changes.to_version, version);
+        assert_eq!(changes.changed_ids, HashSet::from([a, b, c]));
+
+        assert_eq!(s.reorder_roots(&[c, a, b]).unwrap(), version);
+        assert_eq!(s.tree_version(), version);
+        assert!(s.take_pending_changes().is_empty());
+    }
+
+    #[test]
+    fn reorder_roots_rejects_non_permutations_without_publishing() {
+        let s = EntryStore::new();
+        let a = s.insert("/a".into(), dir("a", None)).unwrap();
+        let b = s.insert("/b".into(), dir("b", None)).unwrap();
+        let child = s.insert("/a/child".into(), leaf("child", Some(a))).unwrap();
+        s.take_pending_changes();
+        let version = s.tree_version();
+
+        for invalid in [&[a][..], &[a, a][..], &[a, child][..]] {
+            let err = s.reorder_roots(invalid).unwrap_err();
+            assert_eq!(err.code(), crate::error::ErrorCode::EINVAL);
+            assert_eq!(s.tree_version(), version);
+            assert_eq!(s.snapshot().roots(), &[a, b]);
+            assert!(s.take_pending_changes().is_empty());
+        }
     }
 
     #[test]

@@ -182,9 +182,9 @@ export interface InboundDelta {
   decorationsJson?: string;
   /**
    * Phase B1 — the full current root-id list on the host. Shipped only
-   * when the set changed since the previous delta (by content). When
+   * when membership or order changed since the previous delta. When
    * present, the reducer replaces `next.roots` with this list; absent
-   * means the root set is unchanged (common case). No dedicated
+   * means the ordered root list is unchanged (common case). No dedicated
    * version bump — root churn rides the delta's `version` field.
    */
   roots?: number[];

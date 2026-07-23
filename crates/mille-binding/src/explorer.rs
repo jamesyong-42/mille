@@ -672,6 +672,35 @@ impl FileExplorer {
         Ok(version)
     }
 
+    /// Atomically reorder the current workspace roots by stable EntryId.
+    ///
+    /// The input must be an exact permutation. No filesystem paths or entry
+    /// records change; this publishes a new immutable snapshot solely so
+    /// local subscribers and remote mirrors observe the new display order.
+    #[napi(js_name = "reorderRoots")]
+    pub fn reorder_roots(&self, ids: Vec<i64>) -> Result<u32> {
+        let roots: Vec<EntryId> = ids.into_iter().map(|id| EntryId(id as u64)).collect();
+        let previous_version = self.store.tree_version() as u32;
+        let version = self.store.reorder_roots(&roots).map_err(fx_error_to_napi)? as u32;
+        if version == previous_version {
+            return Ok(version);
+        }
+        let changed_ids: Vec<i64> = roots.iter().map(|id| id.0 as i64).collect();
+        let notice = || ChangeNoticeJs {
+            tree_version: version,
+            decoration_version: 0,
+            tree_changed: true,
+            decorations_changed: false,
+            changed_ids: changed_ids.clone(),
+            child_set_changed: Vec::new(),
+            decoration_changed_ids: Vec::new(),
+            coarse_subtrees: Vec::new(),
+        };
+        self.events.emit_change(Channel::Change, notice());
+        self.events.emit_change(Channel::ChangeTree, notice());
+        Ok(version)
+    }
+
     /// Drain the store's pending ChangeSet, atomically resetting it. Called
     /// once per coalescer tick (Phase 7.6) to feed the per-session delta
     /// diff. Empty ChangeSets are cheap — fields are zero-length vecs and

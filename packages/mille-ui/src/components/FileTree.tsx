@@ -147,6 +147,7 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
     style,
     rowRenderer,
     stickyRoots = true,
+    rootLabel,
     initialNavigationState,
     onNavigationStateChange,
     navigationStateDebounceMs = 150,
@@ -189,6 +190,26 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
   // This avoids painting transient intermediate filesystem states without
   // delaying the store itself or any non-React consumers.
   const snapshot = useDeferredValue(latestSnapshot);
+  const rootDisplayNames = useMemo(() => {
+    const roots = snapshot.roots();
+    const duplicateCounts = new Map<string, number>();
+    for (const root of roots) {
+      duplicateCounts.set(root.name, (duplicateCounts.get(root.name) ?? 0) + 1);
+    }
+    const duplicateIndexes = new Map<string, number>();
+    const labels = new Map<EntryId, string>();
+    roots.forEach((root, index) => {
+      const duplicateCount = duplicateCounts.get(root.name) ?? 1;
+      const duplicateIndex = duplicateIndexes.get(root.name) ?? 0;
+      duplicateIndexes.set(root.name, duplicateIndex + 1);
+      labels.set(
+        root.id,
+        rootLabel?.(root, { index, duplicateIndex, duplicateCount }) ??
+          (duplicateCount > 1 ? `${root.name} (${duplicateIndex + 1})` : root.name),
+      );
+    });
+    return labels;
+  }, [rootLabel, snapshot]);
   const commandsHandle = ctx.commands;
   const initialNavigationStateRef = useRef<FileTreeNavigationState | null>(
     parseFileTreeNavigationState(initialNavigationState),
@@ -1737,6 +1758,9 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
 
           const rowProps: FileTreeRowProps = {
             row,
+            ...(depth === 0
+              ? { displayName: rootDisplayNames.get(row.id) ?? row.name }
+              : null),
             depth,
             selected: isSelected,
             focused: isFocused,

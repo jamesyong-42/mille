@@ -248,3 +248,81 @@ test('duplicate root names receive stable ordinal display labels', async () => {
   });
   container.remove();
 });
+
+test('rootLabel aliases follow live root order without changing entry names', async () => {
+  const fx = createFakeEngine();
+  const alpha = makeRow({ id: 21, parentId: null, name: 'workspace', depth: 0 });
+  const beta = makeRow({ id: 22, parentId: null, name: 'workspace', depth: 0 });
+  const seen = [];
+  const rootLabel = (rootEntry, context) => {
+    seen.push({ id: rootEntry.id, name: rootEntry.name, ...context });
+    return `${context.index + 1}. ${rootEntry.id === alpha.id ? 'Primary' : 'Secondary'}`;
+  };
+  fx.emitDelta(
+    createFakeSnapshot({
+      rows: [alpha, beta],
+      roots: [alpha, beta],
+      treeVersion: 1,
+    }),
+  );
+
+  const { container, root } = mount();
+  const obs = makeObservers();
+  await act(async () => {
+    root.render(
+      createElement(FileTree, {
+        fx,
+        ariaLabel: 'Root aliases',
+        rootLabel,
+        rowHeight: 22,
+        overscan: 10,
+        __testObserveElementRect: obs.observeElementRect,
+        __testObserveElementOffset: obs.observeElementOffset,
+      }),
+    );
+  });
+  assert.deepEqual(
+    Array.from(container.querySelectorAll('[data-mille-row-name]')).map(
+      (element) => element.textContent,
+    ),
+    ['1. Primary', '2. Secondary'],
+  );
+  assert.deepEqual(
+    seen.slice(-2),
+    [
+      { id: 21, name: 'workspace', index: 0, duplicateIndex: 0, duplicateCount: 2 },
+      { id: 22, name: 'workspace', index: 1, duplicateIndex: 1, duplicateCount: 2 },
+    ],
+  );
+
+  seen.length = 0;
+  await act(async () => {
+    fx.emitDelta(
+      createFakeSnapshot({
+        rows: [beta, alpha],
+        roots: [beta, alpha],
+        treeVersion: 2,
+      }),
+    );
+  });
+  assert.deepEqual(
+    Array.from(container.querySelectorAll('[data-mille-row-name]')).map(
+      (element) => element.textContent,
+    ),
+    ['1. Secondary', '2. Primary'],
+  );
+  assert.deepEqual(
+    seen.slice(-2),
+    [
+      { id: 22, name: 'workspace', index: 0, duplicateIndex: 0, duplicateCount: 2 },
+      { id: 21, name: 'workspace', index: 1, duplicateIndex: 1, duplicateCount: 2 },
+    ],
+  );
+  assert.equal(alpha.name, 'workspace');
+  assert.equal(beta.name, 'workspace');
+
+  await act(async () => {
+    root.unmount();
+  });
+  container.remove();
+});

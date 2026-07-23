@@ -28,7 +28,7 @@
 import { basename, join as joinPath, sep as pathSep } from 'node:path';
 
 import { native } from './native.js';
-import { wrap } from './errors.js';
+import { wrap, wrapSync } from './errors.js';
 import { decodeBulkRows, type VisibleRow as DecodedRow } from './decode.js';
 import type { ChangeSet } from './delta.js';
 import { DecorationStore, type DecorationProvider } from './decorations.js';
@@ -187,6 +187,7 @@ type NativeFx = {
   getSnapshot(): NativeSnapshot;
   takePendingChanges(): NativeChangeSet;
   updateProjectionSettings(settings: NativeProjectionSettings): number;
+  reorderRoots(ids: number[]): number;
   populateFromRoots(): Promise<number>;
   // Phase B2 — bounded-depth walk of a single path. Older native builds
   // (pre-v0.2) may not ship this method; the TS wrapper guards with
@@ -453,6 +454,14 @@ export class FileExplorer {
    */
   updateProjectionSettings(settings: ExplorerProjectionSettings): number {
     return this.nativeFx.updateProjectionSettings(encodeProjectionSettings(settings));
+  }
+
+  /**
+   * Atomically reorder the current workspace roots by stable identity.
+   * The input must contain every current root exactly once.
+   */
+  reorderRoots(ids: readonly EntryId[]): number {
+    return wrapSync(() => this.nativeFx.reorderRoots([...ids]));
   }
 
   get capabilities(): number {

@@ -304,6 +304,18 @@ export class PortFileExplorer {
     return result;
   }
 
+  /**
+   * Atomically reorder all workspace roots. Resolves only after the host has
+   * published the ordered root list to every attached client mirror.
+   */
+  async reorderRoots(ids: readonly number[]): Promise<number> {
+    const result = await this.call('reorderRoots', [[...ids]]);
+    if (typeof result !== 'number') {
+      throw new FileSystemError('EUNKNOWN', 'invalid reorderRoots response');
+    }
+    return result;
+  }
+
   // ─── Mutations ────────────────────────────────────────────────────
 
   create(parentId: number, name: string, kind: number): Promise<unknown> {

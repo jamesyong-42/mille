@@ -127,6 +127,7 @@ export type {
   FileTreeNavigationRestoreResult,
   FileTreeRowProps,
   FileTreeSnapshotLike,
+  RootLabelContext,
   IndentGuidesProps,
   LoadingBadgeProps,
   MergedDecoration,

@@ -8,8 +8,8 @@
 // the tree stayed blank because `snap.roots()` returned nothing.
 //
 // B1 makes the fix by piggybacking the **full** current root-id list on
-// delta frames whenever the host's root set differs from the per-session
-// `lastRootSet`. This test exercises the codepath end-to-end:
+// delta frames whenever the host's ordered root list differs from the
+// per-session `lastRootIds`. This test exercises the codepath end-to-end:
 //
 //   1. Host created with a root path but `populateFromRoots` NOT yet run.
 //   2. Client attaches → handshake delivers snapshot with `roots: []`.
@@ -26,10 +26,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { MessageChannel } from 'node:worker_threads';
 
-import {
-  createFileExplorerHost,
-  connectFileExplorer,
-} from '../dist/index.js';
+import { createFileExplorerHost, connectFileExplorer } from '../dist/index.js';
 
 function tempRoot() {
   return mkdtempSync(join(tmpdir(), 'mille-port-roots-'));
@@ -55,8 +52,11 @@ test('delta ships roots after late populate — client mirror learns root post-h
 
     // Host created but NOT populated — snap.roots() returns [] at this point.
     const host = await createFileExplorerHost({ roots: [dir] });
-    assert.equal(host.local.getSnapshot().roots().length, 0,
-      'pre-populate: host has no roots in snapshot');
+    assert.equal(
+      host.local.getSnapshot().roots().length,
+      0,
+      'pre-populate: host has no roots in snapshot',
+    );
 
     const { port1, port2 } = new MessageChannel();
     host.attachPort(port1);
@@ -84,7 +84,7 @@ test('delta ships roots after late populate — client mirror learns root post-h
     // Kick off the walk. The walker adds the root entry (+ hello.txt)
     // to the native store, which surfaces on the next tick as a
     // ChangeSet containing the root id. Because the host's root set
-    // (just-populated [rootId]) differs from the session's lastRootSet
+    // (just-populated [rootId]) differs from the session's lastRootIds
     // (seeded as [] at handshake), the delta body carries `roots`.
     await host.local.populateFromRoots();
 
@@ -105,10 +105,7 @@ test('delta ships roots after late populate — client mirror learns root post-h
     const rootDeltas = observedDeltaFrames.filter(
       (b) => Array.isArray(b.roots) && b.roots.length > 0,
     );
-    assert.ok(
-      rootDeltas.length >= 1,
-      `at least one delta carried roots; saw ${rootDeltas.length}`,
-    );
+    assert.ok(rootDeltas.length >= 1, `at least one delta carried roots; saw ${rootDeltas.length}`);
     assert.deepEqual(
       rootDeltas[0].roots,
       [hostRootId],
@@ -116,7 +113,7 @@ test('delta ships roots after late populate — client mirror learns root post-h
     );
 
     // Subsequent stable ticks must not repeat `roots` — the per-session
-    // `lastRootSet` now matches the host's roots, so absence is correct.
+    // `lastRootIds` now matches the host's roots, so absence is correct.
     // Grab the count of observed "root-carrying" deltas, wait through
     // several tick boundaries with no state change, and verify no new
     // root-carrying deltas land.
@@ -145,8 +142,8 @@ test('handshake after populate still works — roots arrive in the snapshot, nev
   // Regression guard: the old happy-path (populate-then-handshake) must
   // still deliver roots via `snapshot.roots`, and the host must NOT then
   // also emit a redundant `roots` field on the first delta — the
-  // per-session `lastRootSet` is seeded from the snapshot roots, so the
-  // set-equality check at tick time should say "no change".
+  // per-session `lastRootIds` is seeded from the snapshot roots, so the
+  // ordered-list equality check at tick time should say "no change".
   const dir = tempRoot();
   try {
     writeFileSync(join(dir, 'a.txt'), 'a');

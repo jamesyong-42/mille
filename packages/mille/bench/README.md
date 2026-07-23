@@ -80,3 +80,18 @@ Every sample must return only the intended root's child. It reports
 identity-to-path resolution plus bounded depth-1 list latency and enforces a
 default 5 ms p95 gate. Sample count and budget use
 `MILLE_MULTI_ROOT_SAMPLES` and `MILLE_MULTI_ROOT_P95_BUDGET_MS`.
+
+## Live workspace-root reorder
+
+```sh
+pnpm bench:root-reorder
+```
+
+The harness indexes 32 configured roots with 1,024 files each (32,800 entries)
+and alternates their full order for 100 measured samples. Each sample includes
+the native immutable-snapshot publish plus a public `roots()` observation and
+verifies exact order and tree version. It separately measures idempotent
+same-order calls and enforces a default 8 ms reorder p95 gate. Root count,
+entries per root, samples, and budget use `MILLE_ROOT_REORDER_ROOTS`,
+`MILLE_ROOT_REORDER_ENTRIES_PER_ROOT`, `MILLE_ROOT_REORDER_SAMPLES`, and
+`MILLE_ROOT_REORDER_P95_BUDGET_MS`.

@@ -752,9 +752,25 @@ paths but renders duplicate roots as stable configured-order labels
 (`workspace (1)`, `workspace (2)`), leaving unique names unchanged. The
 500-sample end-to-end gate alternated bounded lists between both roots at
 0.077 ms median, 0.129 ms p95, and 0.555 ms maximum against a 5 ms p95 budget;
-the direct medium-fixture identity lookup measured 43.562 ns. Dynamic
-add/remove/reorder, custom display aliases, cross-root operation policy, and
-unavailable-root states remain.
+the direct medium-fixture identity lookup measured 43.562 ns.
+
+Root-presentation/order result (2026-07-23): `FileTree.rootLabel` now derives
+presentation-only aliases from a stable root entry plus its current index and
+duplicate-name context. The default duplicate labels are computed once per
+snapshot instead of rescanning the root list in every root-row hook. Aliases
+never modify entry names, filesystem paths, command targets, or persisted
+navigation paths. `reorderRoots` accepts an exact permutation of current root
+IDs, atomically publishes one immutable snapshot, and treats an identical
+order as a version/event-free no-op; malformed, missing, duplicated, and
+non-root IDs fail with `EINVAL` without partial state. The host now compares
+ordered root vectors rather than sets, fixing the otherwise invisible
+same-membership reorder, and a port call resolves only after every attached
+mirror has received the new order. Rust, local N-API, two-client port, retained
+snapshot, invalid/no-op, and UI alias/reorder tests cover the contract. The
+32-root, 32,800-entry, 100-sample end-to-end gate measured 1.003 ms median and
+2.577 ms p95 for publish plus public snapshot observation against an 8 ms p95
+budget; same-order no-op measured 0.003/0.005 ms median/p95. Dynamic
+add/remove, cross-root operation policy, and unavailable-root states remain.
 
 #### 3.3 Persist navigation state
 
@@ -784,7 +800,8 @@ schema/500 KB record ceiling, retains the 32 most recently updated workspaces,
 recovers from corrupt files, and never performs disk I/O on the renderer
 thread. Its worst-case 32-workspace gate produced a 5,687,497-byte file, save
 p50/p95 8.56/20.01 ms in the main process, and cold load+lookup 16.70 ms.
-Same-display-name multi-root disambiguation remains paired with Phase 3.2.
+Same-display-name roots now use Phase 3.2 identity and labels without changing
+the root-qualified paths stored in navigation state.
 
 #### 3.4 Follow the editor
 

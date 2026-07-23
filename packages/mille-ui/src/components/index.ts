@@ -40,6 +40,7 @@ export type {
   FileTreeNavigationRestoreResult,
   FileTreeRowProps,
   FileTreeSnapshotLike,
+  RootLabelContext,
   MergedDecoration,
   VirtualizerOffsetObserver,
   VirtualizerRectObserver,

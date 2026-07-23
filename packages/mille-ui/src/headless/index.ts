@@ -217,6 +217,7 @@ export type {
   FileTreeProps,
   FileTreeRowProps,
   FileTreeSnapshotLike,
+  RootLabelContext,
   MergedDecoration,
   VirtualizerOffsetObserver,
   VirtualizerRectObserver,

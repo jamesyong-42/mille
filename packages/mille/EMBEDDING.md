@@ -964,6 +964,37 @@ descendants of a newly un-excluded directory remain bounded and hydrate when it
 is expanded. Existing snapshots remain immutable. On a port client, the
 promise resolves only after every attached mirror has received the new
 projection.
+
+Workspace-root display labels and ordering are independent from filesystem
+identity. Give `FileTree` a presentation-only resolver when product names
+should differ from directory basenames:
+
+```tsx
+<FileTree
+  fx={fx}
+  ariaLabel="Files"
+  rootLabel={(root, { index, duplicateIndex, duplicateCount }) =>
+    duplicateCount > 1
+      ? `${index + 1}. ${root.name} (${duplicateIndex + 1})`
+      : `${index + 1}. ${root.name}`
+  }
+/>
+```
+
+Without a resolver, duplicate basenames render as `workspace (1)`,
+`workspace (2)`. The underlying `Entry.name` and indexed path are unchanged.
+To change live display order, pass every current root ID exactly once:
+
+```ts
+const roots = fx.getSnapshot().roots();
+await fx.reorderRoots(roots.map((root) => root.id).reverse());
+```
+
+An identical order is a version-free no-op. Invalid permutations reject
+atomically. A local explorer returns synchronously; a port explorer resolves
+after all attached mirrors have received the new ordered root list. Retained
+snapshots keep their original order.
+
 Counts, indexes, typeahead, host viewports, and port mirrors use the same leaf
 identity. In roots-only mode the host follows the chain with bounded depth-1
 reads and stops at the first branch; it does not eagerly walk the subtree.

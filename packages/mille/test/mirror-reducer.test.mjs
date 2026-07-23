@@ -194,6 +194,21 @@ test('applyDelta updates existing entries (changedIds)', () => {
   assert.equal(state.byId.get(1).name, 'old');
 });
 
+test('applyDelta replaces root order without mutating the retained mirror', () => {
+  const state = createMirror();
+  state.roots = [1, 2, 3];
+  const next = applyDelta(
+    state,
+    emptyDelta({
+      version: 2,
+      roots: [3, 1, 2],
+    }),
+  );
+
+  assert.deepEqual(next.roots, [3, 1, 2]);
+  assert.deepEqual(state.roots, [1, 2, 3]);
+});
+
 test('applyDelta atomically replaces the projection policy', () => {
   const state = createMirror();
   const initialProjectionVersion = state.projectionVersion;

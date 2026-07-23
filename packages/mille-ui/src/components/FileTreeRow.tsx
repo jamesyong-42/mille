@@ -160,6 +160,7 @@ export function areFileTreeRowPropsEqual(
 ): boolean {
   return (
     visibleRowsEqual(prev.row, next.row) &&
+    prev.displayName === next.displayName &&
     prev.depth === next.depth &&
     prev.selected === next.selected &&
     prev.focused === next.focused &&

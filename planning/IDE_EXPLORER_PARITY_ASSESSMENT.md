@@ -30,15 +30,15 @@ layers of work:
 The scores below are directional, not a claim of mathematical precision. A
 mature IDE explorer is the 10/10 reference point.
 
-| Area                                 | Score | Current assessment                                                                                                                                                        |
-| ------------------------------------ | ----: | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Filesystem and renderer architecture |   8.7 | Strong native walker, roots-only handshake, binary ordered lazy hydration, bounded viewport mirror, windowed React rendering, exact positions, and ID-only projections    |
-| Core tree interaction                |   7.4 | Windowed navigation, scalable multi-selection, reliable deep reveal, resilient inline rename, create/delete, clipboard, filtering, context menus, and drag/drop           |
-| Visual behavior                      |   7.4 | Viewport, focus, selection, and rename drafts survive churn; animation is row-scoped, storm-bounded, and reduced-motion aware; broader theme/sticky-root scenarios remain |
-| Accessibility                        |   6.0 | Good ARIA tree semantics and keyboard tests; no real assistive-technology matrix                                                                                          |
-| Reliability and recovery             |   5.5 | Deterministic soak gates converge, but repeated Electron watcher stalls and direct native startup misses remain unresolved; crash/platform stress also remains            |
-| Performance confidence               |   7.6 | Binary-wire, bounded-hydration, windowed 500,000-row UI, Criterion, and Electron gates cover payload, paint, projection, selection, navigation, retention, and eviction   |
-| Explorer workflow breadth            |   3.5 | Important workspace, settings, editor, source-control, history, and remote-filesystem behavior is absent or host-only                                                     |
+| Area                                 | Score | Current assessment                                                                                                                                                            |
+| ------------------------------------ | ----: | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Filesystem and renderer architecture |   8.8 | Strong native walker, roots-only handshake, packed ordered lazy hydration, bounded viewport mirror, windowed React rendering, exact positions, and ID-only projections        |
+| Core tree interaction                |   7.4 | Windowed navigation, scalable multi-selection, reliable deep reveal, resilient inline rename, create/delete, clipboard, filtering, context menus, and drag/drop               |
+| Visual behavior                      |   7.4 | Viewport, focus, selection, and rename drafts survive churn; animation is row-scoped, storm-bounded, and reduced-motion aware; broader theme/sticky-root scenarios remain     |
+| Accessibility                        |   6.0 | Good ARIA tree semantics and keyboard tests; no real assistive-technology matrix                                                                                              |
+| Reliability and recovery             |   5.5 | Deterministic soak gates converge, but repeated Electron watcher stalls and direct native startup misses remain unresolved; crash/platform stress also remains                |
+| Performance confidence               |   7.8 | Million-sibling structure, binary-wire, bounded-hydration, windowed 500,000-row UI, Criterion, and Electron gates cover payload, paint, projection, navigation, and retention |
+| Explorer workflow breadth            |   3.5 | Important workspace, settings, editor, source-control, history, and remote-filesystem behavior is absent or host-only                                                         |
 
 As a reusable tree widget, Mille is approximately **6.5-7/10**. As a complete
 IDE explorer experience, it is approximately **5/10**.
@@ -119,6 +119,15 @@ to 1,920 bytes (**84.4%**). Binary encode p50/p95 was 0.048/0.093 ms and reducer
 decode+apply p50/p95/max was 0.74/1.06/2.60 ms. A MessageChannel clone+decode
 gate processed 2,000 binary patches in 43.19 ms versus 55.18 ms for JSON, a
 **21.7% improvement**.
+
+Expanded child order now uses a packed binary channel too. Normal allocator IDs
+remain as zero-copy `Uint32Array` views in the renderer rather than a cloned JS
+array, and structural identities no longer duplicate themselves in the
+session's hydrated-record set. The million-sibling gate retains the complete
+order in 4,000,024 bytes (**4.000 bytes/id**) with zero full records hydrated;
+packed reducer application measured 0.02 ms median versus 2.44 ms for the
+legacy cloned-array path (**99.1% lower**). Encoding remains an O(n), 22.59 ms
+median host cost at that deliberately extreme width.
 
 React now materializes only the mounted virtual range during normal rendering:
 the 500,000-row gate measured 38 rows initially, 48 after a 1,000-row scroll,
@@ -212,11 +221,12 @@ scrolling. On the 500,000-row gate, revealing row 400,000 used one path query,
 one exact-position query, and 38 complete row records; the current run reported
 36.86 ms and the preceding five-run median was 35.61 ms. The direct lazy-native
 and lazy host/port regression paths pass, with the port round trip measured at
-26.38 ms. Current UI validation is 316/316 tests.
+26.38 ms. Current UI validation is 318/318 tests.
 
-Remaining scaling gaps are O(n) ordered-id metadata for an extremely wide
-expanded folder and replacing exact-position/prefix traversals with maintained
-rank and name indexes if large native traces show that cost is material.
+The renderer still retains one compact identity per child of an expanded folder;
+eliminating that O(n) cardinality requires a paged/ranked projection protocol,
+not another representation tweak. Maintained rank and name indexes should land
+only if large native traces show their O(n) traversals are material.
 
 ## What is already strong
 

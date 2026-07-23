@@ -58,6 +58,19 @@ test('changedIds for a session that knows nothing is empty', () => {
   assert.deepEqual(delta.changedIds, []);
 });
 
+test('structural child identities do not count as hydrated changed records', () => {
+  const rootId = 1;
+  const viewportId = 2;
+  const offscreenStructuralId = 500_000;
+  const cs = emptyChangeSet();
+  cs.changedIds = [offscreenStructuralId];
+  cs.childSetChanged = [rootId];
+  cs.toVersion = 2;
+  const delta = computeSessionDelta(cs, view([rootId], [rootId, viewportId]));
+  assert.deepEqual(delta.changedIds, [], 'offscreen structural child stays unhydrated');
+  assert.deepEqual(delta.childSetChanged, [rootId], 'expanded parent order still refreshes');
+});
+
 test('childSetChanged passes parents present in expanded set', () => {
   const cs = emptyChangeSet({ childSetChanged: [10, 20, 30] });
   const delta = computeSessionDelta(cs, view([10, 30], []));

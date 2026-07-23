@@ -496,6 +496,24 @@ bounded-miss regressions. Remaining Phase 2.4 work is wide-folder ordered-id
 metadata and evaluating that maintained rank/index structure from real native
 traces.
 
+Fourteenth packed-wide-folder result (2026-07-22): authoritative expanded-child
+order now crosses the host boundary in one packed buffer and stays in the
+renderer as zero-copy typed-array views. IDs in the normal u32 allocator range
+use exactly four bytes each, with a safe-f64 fallback for larger IDs; the legacy
+JS-array field remains a negotiated protocol-v1 compatibility fallback.
+Expansion no longer
+duplicates every structural child ID in the session's hydrated-record set, so
+an offscreen rename refreshes order without promoting that row to a full Entry
+payload. The new million-sibling gate retains 1,000,000 identities in 4,000,024
+bytes (**4.000 bytes/id**), hydrates zero full records, and measured packed
+reducer application at 0.02 ms median versus 2.44 ms for the legacy cloned
+array (**99.1% lower**). Encoding the million identities measured 22.59 ms
+median and remains an O(n) expansion-time host cost. The 50,000-entry viewport
+harness still holds the 4,096-record cap; its confirmation run reported
+decode+apply p50/p95/max 0.64/0.95/2.59 ms. The remaining Phase 2.4 decision is
+whether real traces justify replacing the renderer's necessarily O(n) identity
+index and native O(n) rank/name traversals with a paged maintained index.
+
 #### 2.5 Define state under deletion and errors
 
 - Move focus to the nearest logical sibling or parent when the focused row is

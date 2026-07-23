@@ -42,6 +42,8 @@ export interface HandshakeMsg {
     options: {
       prefetchRows?: number;
       mirrorCap?: number;
+      /** Client can decode packed authoritative child-order buffers. */
+      packedChildLists?: boolean;
     };
   };
 }
@@ -185,6 +187,8 @@ export interface DeltaMsg {
     directChildCounts: Record<string, number>;
     /** Complete child-id arrays in authoritative display order. */
     childLists?: Record<string, number[]>;
+    /** Packed authoritative child identities; preferred over childLists. */
+    childListsBin?: ArrayBuffer;
     /** Bincode-compatible viewport-refill ClientEntry records. */
     viewportPatch?: ArrayBuffer;
     /** Authoritative ids covered by this viewport patch. */

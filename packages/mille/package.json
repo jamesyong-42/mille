@@ -52,6 +52,7 @@
     "typecheck": "tsc --noEmit",
     "test": "node --test --test-concurrency=4 test/*.test.mjs",
     "bench:viewport": "node bench/viewport-retention.mjs",
+    "bench:wide-folder": "node bench/wide-folder-order.mjs",
     "bench:watch:soak": "node bench/watch-soak.mjs",
     "artifacts": "napi artifacts",
     "prepublishOnly": "napi prepublish -t npm"

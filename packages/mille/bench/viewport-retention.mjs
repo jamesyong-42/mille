@@ -6,6 +6,7 @@ import { MessageChannel } from 'node:worker_threads';
 
 import { createMirror } from '../dist/mirror.js';
 import { applyDelta, applySnapshot } from '../dist/mirror-reducer.js';
+import { encodeChildLists } from '../dist/child-list-codec.js';
 import { decodeClientEntries, encodeClientEntries } from '../dist/entry-codec.js';
 
 function numberOption(name, fallback) {
@@ -71,6 +72,9 @@ state.expanded.add(0);
 const initialViewportIds = Array.from({ length: viewportSize }, (_, index) => index + 1);
 const initialViewportPayload = encodeClientEntries(initialViewportIds.map((id) => entries[id]));
 const structureStarted = performance.now();
+const childListsBin = encodeChildLists(
+  new Map([[0, Array.from({ length: entryCount }, (_, index) => index + 1)]]),
+);
 state = applyDelta(
   state,
   {
@@ -79,7 +83,7 @@ state = applyDelta(
     viewportPatch: initialViewportPayload,
     viewportIds: initialViewportIds,
     childSetChanged: [0],
-    childLists: { 0: Array.from({ length: entryCount }, (_, index) => index + 1) },
+    childListsBin,
     removedIds: [],
     directChildCounts: { 0: entryCount },
     coarseSubtrees: [],
@@ -90,6 +94,7 @@ state = applyDelta(
 );
 const structureMs = performance.now() - structureStarted;
 assert.equal(state.children.get(0)?.length, entryCount, 'complete structural ids retained');
+assert.ok(state.children.get(0) instanceof Uint32Array, 'structural ids use packed u32 storage');
 assert.ok(state.orderedChildren.has(0), 'child order is authoritative');
 
 const encodeLatencies = [];

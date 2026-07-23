@@ -144,7 +144,7 @@ export class PortFileExplorer {
       frame('handshake', {
         version: PROTOCOL_VERSION,
         clientId: `c-${Math.random().toString(36).slice(2, 10)}`,
-        options: options ?? {},
+        options: { ...options, packedChildLists: true },
       }),
     );
   }

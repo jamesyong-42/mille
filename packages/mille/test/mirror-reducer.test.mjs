@@ -13,6 +13,7 @@ import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
 import { createMirror } from '../dist/mirror.js';
 import { applySnapshot, applyDelta, hydrateLookupEntries } from '../dist/mirror-reducer.js';
+import { encodeChildLists } from '../dist/child-list-codec.js';
 import { encodeClientEntries } from '../dist/entry-codec.js';
 
 function entry(overrides = {}) {
@@ -143,6 +144,23 @@ test('applyDelta decodes binary viewport entries', () => {
   );
   assert.equal(next.byId.get(8).name, 'binary-row');
   assert.deepEqual([...next.viewportIds], [8]);
+});
+
+test('applyDelta retains packed authoritative child order without copying', () => {
+  const childListsBin = encodeChildLists(new Map([[7, [11, 9, 13]]]));
+  const next = applyDelta(
+    createMirror(),
+    emptyDelta({
+      version: 6,
+      childSetChanged: [7],
+      childListsBin,
+    }),
+  );
+  const ids = next.children.get(7);
+  assert.ok(ids instanceof Uint32Array);
+  assert.deepEqual(Array.from(ids), [11, 9, 13]);
+  assert.equal(ids.buffer, childListsBin);
+  assert.ok(next.orderedChildren.has(7));
 });
 
 test('applyDelta updates existing entries (changedIds)', () => {

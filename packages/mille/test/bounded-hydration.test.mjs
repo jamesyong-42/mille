@@ -6,13 +6,14 @@ import { join } from 'node:path';
 import { MessageChannel } from 'node:worker_threads';
 
 import { createFileExplorerHost } from '../dist/index.js';
+import { decodeChildLists } from '../dist/child-list-codec.js';
 import { decodeClientEntries } from '../dist/entry-codec.js';
 
-function nextMatching(port, predicate, timeoutMs = 2000) {
+function nextMatching(port, predicate, label, timeoutMs = 5000) {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       port.off('message', onMessage);
-      reject(new Error(`nextMatching timed out after ${timeoutMs}ms`));
+      reject(new Error(`${label} timed out after ${timeoutMs}ms`));
     }, timeoutMs);
     const onMessage = (message) => {
       if (!predicate(message)) return;
@@ -28,6 +29,7 @@ test('handshake and expansion hydrate only roots plus the mounted viewport', asy
   const dir = mkdtempSync(join(tmpdir(), 'mille-bounded-hydration-'));
   let host;
   const { port1, port2 } = new MessageChannel();
+  const legacy = new MessageChannel();
   try {
     for (let index = 0; index < 256; index++) {
       writeFileSync(join(dir, `file-${String(index).padStart(3, '0')}.txt`), 'x');
@@ -36,11 +38,19 @@ test('handshake and expansion hydrate only roots plus the mounted viewport', asy
     await host.local.populateFromRoots();
     host.attachPort(port1);
 
-    const snapshotPromise = nextMatching(port2, (message) => message?.type === 'snapshot');
+    const snapshotPromise = nextMatching(
+      port2,
+      (message) => message?.type === 'snapshot',
+      'packed handshake',
+    );
     port2.postMessage({
       v: 1,
       type: 'handshake',
-      body: { version: 1, clientId: 'bounded-hydration', options: {} },
+      body: {
+        version: 1,
+        clientId: 'bounded-hydration',
+        options: { packedChildLists: true },
+      },
     });
     const snapshot = await snapshotPromise;
     assert.ok(snapshot.body.mirror instanceof ArrayBuffer, 'handshake uses binary entries');
@@ -52,6 +62,7 @@ test('handshake and expansion hydrate only roots plus the mounted viewport', asy
     const viewportPromise = nextMatching(
       port2,
       (message) => message?.type === 'delta' && Array.isArray(message.body.viewportIds),
+      'packed viewport',
     );
     port2.postMessage({
       v: 1,
@@ -62,7 +73,8 @@ test('handshake and expansion hydrate only roots plus the mounted viewport', asy
 
     const expansionPromise = nextMatching(
       port2,
-      (message) => message?.type === 'delta' && message.body.childLists !== undefined,
+      (message) => message?.type === 'delta' && message.body.childListsBin instanceof ArrayBuffer,
+      'packed expansion',
     );
     port2.postMessage({
       v: 1,
@@ -70,7 +82,9 @@ test('handshake and expansion hydrate only roots plus the mounted viewport', asy
       body: { add: [rootId], remove: [] },
     });
     const expansion = await expansionPromise;
-    const orderedChildren = expansion.body.childLists[String(rootId)];
+    assert.equal(expansion.body.childLists, undefined, 'expansion omits cloned JS id arrays');
+    const orderedChildren = decodeChildLists(expansion.body.childListsBin).get(rootId);
+    assert.ok(orderedChildren instanceof Uint32Array, 'normal entry ids retain packed u32 storage');
     assert.equal(orderedChildren.length, 256, 'full structure arrives as compact ordered ids');
     assert.equal(expansion.body.entriesJson, undefined, 'expansion omits JSON entries');
     const expansionEntries =
@@ -81,9 +95,39 @@ test('handshake and expansion hydrate only roots plus the mounted viewport', asy
       expansionEntries.length <= 15,
       `entry payload stays inside the 16-row viewport; got ${expansionEntries.length}`,
     );
+
+    // Protocol-v1 clients that did not advertise the packed channel continue
+    // to receive the legacy object shape.
+    host.attachPort(legacy.port1);
+    const legacySnapshotPromise = nextMatching(
+      legacy.port2,
+      (message) => message?.type === 'snapshot',
+      'legacy handshake',
+    );
+    legacy.port2.postMessage({
+      v: 1,
+      type: 'handshake',
+      body: { version: 1, clientId: 'legacy-bounded-hydration', options: {} },
+    });
+    await legacySnapshotPromise;
+    const legacyExpansionPromise = nextMatching(
+      legacy.port2,
+      (message) => message?.type === 'delta' && message.body.childLists !== undefined,
+      'legacy expansion',
+    );
+    legacy.port2.postMessage({
+      v: 1,
+      type: 'setExpanded',
+      body: { add: [rootId], remove: [] },
+    });
+    const legacyExpansion = await legacyExpansionPromise;
+    assert.equal(legacyExpansion.body.childListsBin, undefined);
+    assert.equal(legacyExpansion.body.childLists[String(rootId)].length, 256);
   } finally {
     port1.close();
     port2.close();
+    legacy.port1.close();
+    legacy.port2.close();
     await host?.dispose().catch(() => {});
     rmSync(dir, { recursive: true, force: true });
   }

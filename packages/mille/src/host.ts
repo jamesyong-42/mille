@@ -20,6 +20,7 @@ import { DecorationStore, type Decoration, type DecorationProvider } from './dec
 import { computeSessionDelta, type SessionView } from './delta.js';
 import { isFileSystemError } from './errors.js';
 import { encodeClientEntries } from './entry-codec.js';
+import { encodeChildLists } from './child-list-codec.js';
 import type { ClientEntry } from './mirror.js';
 import {
   frame,
@@ -81,9 +82,11 @@ interface Session {
   viewportIds: Set<number>;
   /** Fallback row budget used when expansion precedes the first viewport. */
   prefetchRows: number;
+  /** Whether this client advertised the packed child-order wire channel. */
+  packedChildLists: boolean;
   /**
-   * Entry ids this session has already been told about. Phase 7.5 uses
-   * this to filter deltas down to the rows the client actually knows —
+   * Entry ids whose full records this session has already received.
+   * Phase 7.5 uses this to filter deltas down to hydrated rows —
    * new entries outside the client's viewport stay off the wire until
    * the viewport moves to cover them.
    */
@@ -315,6 +318,7 @@ class FileExplorerHostImpl implements FileExplorerHost {
       viewport: { offset: 0, limit: 0, overscan: 0 },
       viewportIds: new Set<number>(),
       prefetchRows: 100,
+      packedChildLists: false,
       knownIds: new Set<number>(),
       nextReqId: 1,
       handshook: false,
@@ -556,16 +560,13 @@ class FileExplorerHostImpl implements FileExplorerHost {
       }
       const childSetChanged = new Set(delta.childSetChanged);
       for (const rootId of coarse) childSetChanged.add(rootId);
-      const childLists: Record<string, number[]> = {};
+      const childLists = new Map<number, readonly number[]>();
       for (const parentId of childSetChanged) {
         const pc = snap.directChildCount(parentId);
         if (pc !== null) outDirectChildCounts[String(parentId)] = pc;
         if (!session.expanded.has(parentId)) continue;
         const kids = sortedChildIds(snap, parentId);
-        childLists[String(parentId)] = kids;
-        for (const kidId of kids) {
-          session.knownIds.add(kidId);
-        }
+        childLists.set(parentId, kids);
       }
 
       // Phase B1 — also ensure any fresh root id's ClientEntry actually
@@ -612,7 +613,11 @@ class FileExplorerHostImpl implements FileExplorerHost {
             ? { viewportPatch: encodeClientEntries(outEntries) }
             : {}),
           childSetChanged: [...childSetChanged],
-          childLists,
+          ...(childLists.size > 0
+            ? session.packedChildLists
+              ? { childListsBin: encodeChildLists(childLists) }
+              : { childLists: Object.fromEntries(childLists) }
+            : {}),
           ...(viewportPatch !== null ? { viewportIds: viewportPatch.viewportIds } : {}),
           removedIds,
           directChildCounts: outDirectChildCounts,
@@ -733,8 +738,12 @@ class FileExplorerHostImpl implements FileExplorerHost {
     this.ensureTick();
   }
 
-  private handleHandshake(session: Session, body: { options?: { prefetchRows?: number } }): void {
+  private handleHandshake(
+    session: Session,
+    body: { options?: { prefetchRows?: number; packedChildLists?: boolean } },
+  ): void {
     session.handshook = true;
+    session.packedChildLists = body.options?.packedChildLists === true;
     const requestedPrefetch = body.options?.prefetchRows;
     session.prefetchRows =
       requestedPrefetch !== undefined && Number.isFinite(requestedPrefetch)
@@ -827,7 +836,7 @@ class FileExplorerHostImpl implements FileExplorerHost {
       }
     }
 
-    const childLists: Record<string, number[]> = {};
+    const childLists = new Map<number, readonly number[]>();
     const newDirectChildCounts: Record<string, number> = {};
     const childSetIds: number[] = [];
     for (const id of body.add ?? []) {
@@ -835,12 +844,9 @@ class FileExplorerHostImpl implements FileExplorerHost {
       const childCount = snap.directChildCount(id);
       if (kids.length > 0 || childCount === 0) {
         childSetIds.push(id);
-        childLists[String(id)] = kids;
+        childLists.set(id, kids);
       }
       if (childCount !== null) newDirectChildCounts[String(id)] = childCount;
-      for (const kidId of kids) {
-        session.knownIds.add(kidId);
-      }
     }
 
     const viewportPatch = this.collectViewportPatch(session, snap);
@@ -855,7 +861,11 @@ class FileExplorerHostImpl implements FileExplorerHost {
           ? { viewportPatch: encodeClientEntries(viewportPatch.entries) }
           : {}),
         childSetChanged: childSetIds,
-        childLists,
+        ...(childLists.size > 0
+          ? session.packedChildLists
+            ? { childListsBin: encodeChildLists(childLists) }
+            : { childLists: Object.fromEntries(childLists) }
+          : {}),
         viewportIds: viewportPatch.viewportIds,
         removedIds: [],
         directChildCounts: newDirectChildCounts,

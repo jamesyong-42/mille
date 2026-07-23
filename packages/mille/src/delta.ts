@@ -40,7 +40,7 @@ export interface ReparentEntry {
 export interface SessionView {
   /** Folders this session has expanded. */
   expanded: Set<number>;
-  /** Ids this session has already been told about. */
+  /** Ids whose full Entry records this session has already received. */
   knownIds: Set<number>;
 }
 

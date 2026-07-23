@@ -30,6 +30,7 @@ import {
   type MirrorWorking,
 } from './mirror.js';
 import { decodeClientEntries } from './entry-codec.js';
+import { decodeChildLists } from './child-list-codec.js';
 
 /**
  * Default ceiling for the client mirror (SPEC §4.9.7). Keeps idle
@@ -147,6 +148,8 @@ export interface InboundDelta {
   directChildCounts: Record<string, number>;
   /** Complete authoritative child-id arrays keyed by parent id. */
   childLists?: Record<string, number[]>;
+  /** Packed authoritative child identities keyed by parent id. */
+  childListsBin?: ArrayBuffer | Uint8Array;
   /** Subtrees flagged coarse (SPEC §4.9.9 / wave 2 7.7). */
   coarseSubtrees: number[];
   /** Subtrees flipped volatile / resynced (7.9, SPEC §4.9.10). */
@@ -242,15 +245,17 @@ export function applySnapshot(
     // child lists leak through — snapshot is authoritative.
     for (const e of entries) {
       if (e.parentId === null) continue;
-      const list = next.children.get(e.parentId);
-      if (list === undefined) {
+      const existing = next.children.get(e.parentId);
+      if (existing === undefined) {
         next.children.set(e.parentId, [e.id]);
+      } else if (Array.isArray(existing)) {
+        existing.push(e.id);
       } else {
-        list.push(e.id);
+        next.children.set(e.parentId, [...existing, e.id]);
       }
     }
     for (const [parentId, ids] of next.children) {
-      ids.sort((a, b) => {
+      const sorted = Array.from(ids).sort((a, b) => {
         const ea = next.byId.get(a);
         const eb = next.byId.get(b);
         const ka = ea && (ea.kind === 1 || ea.symlinkTargetIsDir === true) ? 0 : 1;
@@ -260,6 +265,7 @@ export function applySnapshot(
         const nb = eb?.name ?? '';
         return na === nb ? a - b : na < nb ? -1 : 1;
       });
+      next.children.set(parentId, sorted);
       next.orderedChildren.add(parentId);
     }
   }
@@ -307,13 +313,21 @@ export function applyDelta(
   // parent we discover as we merge entries — an entry whose parentId
   // doesn't already have that id in `children[parent]` is a new child.
   const parentsToRebuild = new Set<number>(msg.childSetChanged ?? []);
-  const incomingChildLists = msg.childLists ?? {};
+  const incomingChildLists =
+    msg.childListsBin !== undefined
+      ? decodeChildLists(msg.childListsBin)
+      : new Map(
+          Object.entries(msg.childLists ?? {}).map(([parentId, ids]) => [
+            Number(parentId),
+            [...ids],
+          ]),
+        );
   const entries = decodeDeltaEntryPayload(msg);
-  if (entries.length > 0 || Object.keys(incomingChildLists).length > 0) {
+  if (entries.length > 0 || incomingChildLists.size > 0) {
     next.projectionVersion += 1;
   }
-  for (const key of Object.keys(incomingChildLists)) {
-    parentsToRebuild.delete(Number(key));
+  for (const parentId of incomingChildLists.keys()) {
+    parentsToRebuild.delete(parentId);
   }
 
   // Add / update entries.
@@ -376,9 +390,8 @@ export function applyDelta(
     }
   }
 
-  for (const [key, ids] of Object.entries(incomingChildLists)) {
-    const parentId = Number(key);
-    next.children.set(parentId, [...ids]);
+  for (const [parentId, ids] of incomingChildLists) {
+    next.children.set(parentId, ids);
     next.orderedChildren.add(parentId);
     next.pendingExpansions.delete(parentId);
   }

@@ -57,6 +57,9 @@ export interface ClientEntry {
   isHidden: boolean;
 }
 
+/** Packed or legacy authoritative child identities for one expanded folder. */
+export type ChildIdList = number[] | Uint32Array | Float64Array;
+
 /**
  * Mutable working state. The reducer (8.3) produces a new
  * MirrorWorking via cloneMirror() + mutations; the snapshot wrapper
@@ -66,7 +69,7 @@ export interface MirrorWorking {
   /** Every entry the client has been told about. */
   byId: Map<number, ClientEntry>;
   /** Known-to-the-client child lists for expanded folders. */
-  children: Map<number, number[]>;
+  children: Map<number, ChildIdList>;
   /** Parents whose child arrays are already in authoritative display order. */
   orderedChildren: Set<number>;
   /** Direct-child counts for every folder (even un-expanded ones). */

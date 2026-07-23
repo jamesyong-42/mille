@@ -24,7 +24,7 @@ import type {
   VisibleRowCount,
   VisibleRowsOptions,
 } from './client.js';
-import type { ClientEntry, MirrorWorking } from './mirror.js';
+import type { ChildIdList, ClientEntry, MirrorWorking } from './mirror.js';
 
 /**
  * Translate a mirror-local ClientEntry (with `null`-holes) into the
@@ -72,8 +72,8 @@ function isExpandableEntry(e: ClientEntry): boolean {
   return e.kind === 1 || e.symlinkTargetIsDir === true;
 }
 
-function sortChildrenByName(ids: number[], byId: Map<number, ClientEntry>): number[] {
-  return [...ids].sort((a, b) => {
+function sortChildrenByName(ids: ChildIdList, byId: Map<number, ClientEntry>): number[] {
+  return Array.from(ids).sort((a, b) => {
     const ea = byId.get(a);
     const eb = byId.get(b);
     // Directories and symlink-to-dir (pnpm links) sort above files.
@@ -99,9 +99,9 @@ function sortChildrenByName(ids: number[], byId: Map<number, ClientEntry>): numb
 export function createSortedChildrenLookup(
   byId: Map<number, ClientEntry>,
   orderedParents: ReadonlySet<number> = new Set(),
-): (parentId: number, ids: number[]) => readonly number[] {
-  const cache = new Map<number, readonly number[]>();
-  return (parentId, ids) => {
+): (parentId: number, ids: ChildIdList) => ChildIdList {
+  const cache = new Map<number, ChildIdList>();
+  return (parentId, ids: ChildIdList) => {
     if (orderedParents.has(parentId)) return ids;
     const cached = cache.get(parentId);
     if (cached !== undefined) return cached;
@@ -149,7 +149,7 @@ function isVisibleEntry(e: ClientEntry, includeIgnored: boolean): boolean {
 export class ClientMirrorSnapshot {
   /** @internal */
   private readonly state: MirrorWorking;
-  private readonly sortedChildrenFor: (parentId: number, ids: number[]) => readonly number[];
+  private readonly sortedChildrenFor: (parentId: number, ids: ChildIdList) => ChildIdList;
 
   constructor(state: MirrorWorking) {
     this.state = state;

@@ -66,13 +66,31 @@ function dedupeById(entries) {
   return [...seen.values()];
 }
 
+// A tree fixture must not contain parent cycles. Keep only parent references
+// to entries that appeared earlier in the generated order, which permits
+// arbitrary depth and sibling shapes while making every component a DAG.
+// Without this normalization an unlucky property seed can make visibleRows'
+// intentionally allocation-free DFS loop forever and OOM the test worker.
+function acyclicEntries(entries) {
+  const out = [];
+  const priorIds = new Set();
+  for (const entry of dedupeById(entries)) {
+    out.push({
+      ...entry,
+      parentId: entry.parentId !== null && priorIds.has(entry.parentId) ? entry.parentId : null,
+    });
+    priorIds.add(entry.id);
+  }
+  return out;
+}
+
 // Snapshot-frame arbitrary. `roots` is drawn from the generated
 // entries so visibleRows won't emit placeholder rows (which break
 // invariant 3).
 const snapshotArb = fc
   .record({
     version: fc.nat(1_000_000),
-    entries: fc.array(entryArb, { maxLength: 24 }).map(dedupeById),
+    entries: fc.array(entryArb, { maxLength: 24 }).map(acyclicEntries),
     countsExtra: fc.dictionary(fc.integer({ min: 1, max: ID_POOL }).map(String), fc.nat(20), {
       maxKeys: 8,
     }),

@@ -121,6 +121,125 @@ test('P0: undo-create refuses to delete an unrelated replacement', async () => {
   }
 });
 
+test('P0: undo-create refuses same-size empty file replacement (inode identity)', async () => {
+  const { sandbox, root } = fixture();
+  const fx = new FileExplorer({ roots: [root], settings, watchDebounceMs: 60_000 });
+  try {
+    await fx.populateFromRoots();
+    const rootId = await idAt(fx, root);
+    await fx.create(rootId, 'empty.txt', 0);
+    // Replace empty with a different empty file — size matches, identity does not.
+    rmSync(join(root, 'empty.txt'));
+    writeFileSync(join(root, 'empty.txt'), '');
+    await assert.rejects(fx.undo(), (error) => error?.code === 'EINVAL');
+    assert.equal(existsSync(join(root, 'empty.txt')), true);
+    assert.equal(fx.canUndo(), true);
+  } finally {
+    await fx.dispose();
+    rmSync(sandbox, { recursive: true, force: true });
+  }
+});
+
+test('P0: undo-create refuses non-empty directory (descendant guard)', async () => {
+  const { sandbox, root } = fixture();
+  const fx = new FileExplorer({ roots: [root], settings, watchDebounceMs: 60_000 });
+  try {
+    await fx.populateFromRoots();
+    const rootId = await idAt(fx, root);
+    const dir = await fx.create(rootId, 'newdir', 1);
+    // Externally add valuable content after create.
+    writeFileSync(join(root, 'newdir', 'valuable.txt'), 'KEEP ME');
+    await assert.rejects(fx.undo(), (error) => error?.code === 'EINVAL');
+    assert.equal(readFileSync(join(root, 'newdir', 'valuable.txt'), 'utf8'), 'KEEP ME');
+    assert.equal(fx.canUndo(), true);
+    void dir;
+  } finally {
+    await fx.dispose();
+    rmSync(sandbox, { recursive: true, force: true });
+  }
+});
+
+test('P0: undo-rename refuses when destination was replaced', async () => {
+  const { sandbox, root } = fixture();
+  const fx = new FileExplorer({ roots: [root], settings, watchDebounceMs: 60_000 });
+  try {
+    await fx.populateFromRoots();
+    const rootId = await idAt(fx, root);
+    const created = await fx.create(rootId, 'orig.txt', 0);
+    await fx.rename(created.id, 'renamed.txt');
+    // Replace the renamed path with an unrelated file.
+    rmSync(join(root, 'renamed.txt'));
+    writeFileSync(join(root, 'renamed.txt'), 'IMPOSTOR');
+    await assert.rejects(fx.undo(), (error) => error?.code === 'EINVAL');
+    assert.equal(readFileSync(join(root, 'renamed.txt'), 'utf8'), 'IMPOSTOR');
+    // Must not have moved the impostor to orig.txt.
+    assert.equal(existsSync(join(root, 'orig.txt')), false);
+    assert.equal(fx.canUndo(), true);
+  } finally {
+    await fx.dispose();
+    rmSync(sandbox, { recursive: true, force: true });
+  }
+});
+
+test('P0: soft-delete refuses symlink-hijacked recycle base', async () => {
+  const { sandbox, root } = fixture();
+  // Plant a symlink at $TMPDIR/mille-recycle itself pointing outside.
+  // ensure_managed_recycle_base must remove the hijack and use a real dir.
+  const pool = join(tmpdir(), 'mille-recycle');
+  const external = join(sandbox, 'evil-target');
+  mkdirSync(external, { recursive: true });
+  let poolBackup = null;
+  try {
+    if (existsSync(pool)) {
+      poolBackup = join(sandbox, 'mille-recycle-backup');
+      const { renameSync } = await import('node:fs');
+      try {
+        renameSync(pool, poolBackup);
+      } catch {
+        /* fall through */
+      }
+    }
+    const { symlinkSync, lstatSync, rmSync: rm } = await import('node:fs');
+    try {
+      rm(pool, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
+    symlinkSync(external, pool);
+
+    const fx = new FileExplorer({ roots: [root], settings, watchDebounceMs: 60_000 });
+    try {
+      await fx.populateFromRoots();
+      const noteId = await idAt(fx, join(root, 'note.txt'));
+      await fx.delete(noteId);
+      assert.equal(existsSync(join(root, 'note.txt')), false);
+      const st = lstatSync(pool);
+      assert.equal(st.isSymbolicLink(), false, 'recycle pool must not remain a symlink');
+      const evilNames = readdirSync(external);
+      assert.equal(
+        evilNames.includes('note.txt'),
+        false,
+        `workspace file must not land in symlink target; found ${evilNames.join(',')}`,
+      );
+      await fx.undo();
+      assert.equal(readFileSync(join(root, 'note.txt'), 'utf8'), 'hello');
+    } finally {
+      await fx.dispose();
+    }
+  } finally {
+    try {
+      const { renameSync, rmSync: rm } = await import('node:fs');
+      rm(pool, { recursive: true, force: true });
+      if (poolBackup && existsSync(poolBackup)) {
+        renameSync(poolBackup, pool);
+      }
+    } catch {
+      /* best-effort cleanup */
+    }
+    rmSync(sandbox, { recursive: true, force: true });
+  }
+});
+
 test('P0: overwrite-move is reported non-undoable', async () => {
   const { sandbox, root } = fixture();
   const fx = new FileExplorer({ roots: [root], settings, watchDebounceMs: 60_000 });

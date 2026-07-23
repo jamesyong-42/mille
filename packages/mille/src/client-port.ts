@@ -41,7 +41,14 @@ import {
 } from './protocol.js';
 import type { Disposable, MessagePortLike } from './types.js';
 import type { ExplorerProjectionSettings } from './explorer-settings.js';
-import type { ResyncOptions, TransferOptions, Uri } from './client.js';
+import type {
+  ResyncOptions,
+  TransferOptions,
+  UndoDescriptor,
+  UndoResult,
+  Uri,
+} from './client.js';
+import { normalizeUndoDescriptor, normalizeUndoResult } from './client.js';
 
 interface PendingRequest {
   resolve: (value: unknown) => void;
@@ -486,22 +493,27 @@ export class PortFileExplorer {
     return result === true;
   }
 
+  /**
+   * Port undo inspection is async (RPC). Local `FileExplorer.canUndo` is
+   * sync — hosts must not treat the two surfaces as interchangeable.
+   */
   async canUndo(): Promise<boolean> {
     const result = await this.call('canUndo', []);
     return result === true;
   }
 
-  async peekUndo(): Promise<unknown> {
-    return this.call('peekUndo', []);
+  async peekUndo(): Promise<UndoDescriptor | null> {
+    return normalizeUndoDescriptor(await this.call('peekUndo', []));
   }
 
-  async lastMutation(): Promise<unknown> {
-    return this.call('lastMutation', []);
+  async lastMutation(): Promise<UndoDescriptor | null> {
+    return normalizeUndoDescriptor(await this.call('lastMutation', []));
   }
 
   /** Undo is a mutation: serialized and flushed to all mirrors before resolve. */
-  undo(): Promise<unknown> {
-    return this.mutate('undo', {});
+  async undo(): Promise<UndoResult | null> {
+    const raw = await this.mutate('undo', {});
+    return normalizeUndoResult(raw);
   }
 
   async readFile(id: number): Promise<Uint8Array> {

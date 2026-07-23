@@ -4,19 +4,17 @@
 // pipeline. Pattern mirrors `git/provider.ts`:
 //
 //   1. Fetches an initial diagnostics snapshot.
-//   2. Resolves workspace-relative paths → `EntryId` via `fx.getByUri`.
+//   2. Resolves workspace-relative paths → Entry via getByUri, or
+//      resolvePath + snapshot fallback (PortFileExplorer).
 //   3. Builds leaf decorations (badge = problem count, color = max
-//      severity) and optional ancestor aggregates (sum of descendant
-//      counts, color = max severity among descendants).
-//   4. Registers a `DecorationProvider` whose `provide(entry)` is an
-//      O(1) map lookup.
-//   5. Subscribes to `client.onChange`; each firing re-fetches via the
-//      batcher and publishes `onDidChange(ids)`.
+//      severity) and optional ancestor aggregates.
+//   4. Registers a DecorationProvider whose provide(entry) is O(1).
+//   5. Subscribes to client.onChange; batcher + generation token prevent
+//      stale fetches from overwriting newer state.
 //
-// Merge precedence with other providers (SCM, agent-rules, …) follows
-// the engine / UI "later providers win on overlapping fields" rule
-// (see `mergeDecorations`). Hosts that want diagnostic badges to win
-// over SCM letters should register diagnostics *after* SCM.
+// Merge precedence with other providers follows later-wins on overlapping
+// fields (see mergeDecorations). Register diagnostics after SCM when
+// problem badges should win.
 
 import type {
   Decoration,
@@ -49,21 +47,31 @@ interface SnapshotLike {
 }
 
 /**
- * Subset of `FileExplorer` the companion actually touches. Narrow so
- * tests can hand in a scripted fake without stubbing the full engine.
+ * Subset of FileExplorer the companion touches.
+ *
+ * Path resolution order:
+ *   1. `getByUri` when present (in-process engine)
+ *   2. `resolvePath(absolutePath)` + snapshot.getById (PortFileExplorer)
+ *
+ * Advertising PortFileExplorer without either method is a type error at
+ * the call site for scripted fakes; the factory also no-ops path
+ * resolution rather than silently pretending badges work.
  */
 export interface FileExplorerLike {
   getSnapshot(): SnapshotLike;
   getByUri?(uri: Uri): Promise<Entry | null> | Entry | null;
+  /**
+   * Absolute path → entry id. Port clients expose this even when
+   * `getByUri` is absent.
+   */
+  resolvePath?(
+    path: string,
+  ): Promise<EntryId | number | null> | EntryId | number | null;
   registerDecorationProvider(
     provider: EngineDecorationProvider,
   ): { dispose(): void };
 }
 
-/**
- * Engine-level `DecorationProvider` shape. Re-declared locally so the
- * companion doesn't force a runtime dependency direction.
- */
 export interface EngineDecorationProvider {
   readonly id: string;
   onDidChange(
@@ -76,62 +84,55 @@ export interface EngineDecorationProvider {
 
 export interface RegisterDiagnosticsDecorationsOptions {
   /**
-   * Accepts either the real in-process `FileExplorer`, a port-backed
-   * `PortFileExplorer`, or a scripted `FileExplorerLike` fake.
+   * In-process `FileExplorer`, port-backed `PortFileExplorer` (uses
+   * `resolvePath`), or a scripted `FileExplorerLike` fake.
    */
   readonly fx: FileExplorer | PortFileExplorer | FileExplorerLike;
   readonly client: DiagnosticsClient;
   /**
-   * Absolute workspace root. Passed through to `client.getDiagnostics`
-   * and used as the base for `fx.getByUri` lookups.
+   * Absolute workspace root. Passed to `client.getDiagnostics` and used
+   * as the base for path resolution.
    */
   readonly rootPath: string;
   /** Provider id. Default: `'diagnostics'`. */
   readonly providerId?: string;
   /**
    * When `true` (default), each leaf with diagnostics propagates
-   * aggregate counts up its ancestor chain so folders surface problem
-   * totals.
+   * aggregate counts up its ancestor chain.
    */
   readonly propagateToParent?: boolean;
-  /** URI scheme passed to `fx.getByUri`. Default: `'file'`. */
+  /** URI scheme for `getByUri`. Default: `'file'`. */
   readonly uriScheme?: string;
   /** Forwarded to the batcher; exposed for tests. */
   readonly batchOptions?: BatchOptions;
+  /**
+   * Max concurrent path resolutions. Default: `16`. Sequential resolution
+   * of hundreds of paths is too slow for port RPC; this bounds fan-out.
+   */
+  readonly resolveConcurrency?: number;
   /**
    * Cap for the badge numeral. Counts above this render as
    * `"${badgeCap}+"`. Default: `99`.
    */
   readonly badgeCap?: number;
   /**
-   * Override the default color per severity. Returning `undefined`
-   * falls through to the built-in palette.
+   * Called when a background recompute fails (initial fetch or batched
+   * onChange). Explicit `refresh()` still rejects to its caller.
+   * Default: `console.warn`.
    */
+  onError?(error: unknown): void;
   colorFor?(severity: DiagnosticSeverity, aggregated: boolean): string | undefined;
-  /**
-   * Override the badge text. Default is the formatted problem count
-   * (`"3"`, `"99+"`). Returning `undefined` falls through to the default.
-   */
   badgeFor?(
     counts: DiagnosticCounts,
     severity: DiagnosticSeverity,
     aggregated: boolean,
   ): string | undefined;
-  /**
-   * Override the tooltip. Default is a human summary like
-   * `"2 errors, 1 warning"`.
-   */
   tooltipFor?(
     counts: DiagnosticCounts,
     severity: DiagnosticSeverity,
     aggregated: boolean,
     leafDiagnostics: readonly Diagnostic[] | null,
   ): string | undefined;
-  /**
-   * When the provider should register somewhere other than
-   * `fx.registerDecorationProvider` (e.g. `FileExplorerHost` exposes
-   * its own decoration store), supply a custom registrar.
-   */
   readonly registrar?: (provider: EngineDecorationProvider) => Disposable;
 }
 
@@ -140,18 +141,12 @@ interface Disposable {
 }
 
 export interface DiagnosticsDecorationsHandle {
-  /** Tear down subscriptions and unregister from the engine. */
   dispose(): void;
-  /** Force an immediate diagnostics fetch + publish. */
   refresh(): Promise<void>;
 }
 
 // ─── Defaults ─────────────────────────────────────────────────────────
 
-/**
- * VS Code-ish problems palette. Exported so consumers can compose with
- * their own `colorFor` override.
- */
 export const DEFAULT_DIAGNOSTIC_COLORS: Readonly<
   Record<DiagnosticSeverity, string>
 > = Object.freeze({
@@ -161,10 +156,6 @@ export const DEFAULT_DIAGNOSTIC_COLORS: Readonly<
   hint: 'var(--mille-decoration-hint, #8b949e)',
 });
 
-/**
- * Muted palette for ancestor aggregate badges so folders read as
- * "problems below" rather than "I am the problem".
- */
 export const MUTED_DIAGNOSTIC_COLORS: Readonly<
   Record<DiagnosticSeverity, string>
 > = Object.freeze({
@@ -174,25 +165,16 @@ export const MUTED_DIAGNOSTIC_COLORS: Readonly<
   hint: 'var(--mille-decoration-hint-muted, #6c6c6c)',
 });
 
+const DEFAULT_RESOLVE_CONCURRENCY = 16;
+
 // ─── Pure helpers (exported for tests) ────────────────────────────────
 
-/**
- * Format a problem count for the badge glyph. Caps at `badgeCap` with a
- * trailing `+` (VS Code Problems explorer convention).
- */
-export function formatDiagnosticBadge(
-  total: number,
-  badgeCap = 99,
-): string {
+export function formatDiagnosticBadge(total: number, badgeCap = 99): string {
   if (total <= 0) return '';
   if (total > badgeCap) return `${badgeCap}+`;
   return String(total);
 }
 
-/**
- * Build a human-readable tooltip from per-severity counts.
- * Example: `"2 errors, 1 warning"`.
- */
 export function formatDiagnosticTooltip(counts: DiagnosticCounts): string {
   const parts: string[] = [];
   if (counts.error > 0) {
@@ -212,12 +194,66 @@ export function formatDiagnosticTooltip(counts: DiagnosticCounts): string {
   return parts.join(', ');
 }
 
-// ─── Implementation ───────────────────────────────────────────────────
+/**
+ * Validate a workspace-relative diagnostic path before joining to root.
+ * Rejects absolute paths, traversal (`..`), backslashes, NULs, and empty
+ * segments so custom `FileExplorerLike` implementations cannot be tricked
+ * into decorating outside the workspace.
+ */
+export function isSafeWorkspaceRelativePath(path: string): boolean {
+  if (typeof path !== 'string' || path.length === 0) return false;
+  if (path.includes('\0')) return false;
+  if (path.includes('\\')) return false;
+  // Absolute POSIX or Windows drive.
+  if (path.startsWith('/') || path.startsWith('~')) return false;
+  if (/^[a-zA-Z]:/.test(path)) return false;
+  const segments = path.split('/');
+  for (const seg of segments) {
+    if (seg === '' || seg === '.' || seg === '..') return false;
+  }
+  return true;
+}
+
+export function decorationEquals(
+  a: Decoration | null | undefined,
+  b: Decoration | null | undefined,
+): boolean {
+  if (a === b) return true;
+  if (a == null || b == null) return false;
+  return (
+    a.badge === b.badge &&
+    a.color === b.color &&
+    a.tooltip === b.tooltip &&
+    a.propagate === b.propagate
+  );
+}
 
 /**
- * Register a diagnostics decoration provider on the given engine.
- * Returns a handle with `dispose()` and `refresh()`.
+ * Map pool: run `worker` over `items` with at most `concurrency` in flight.
  */
+export async function mapPool<T, R>(
+  items: readonly T[],
+  concurrency: number,
+  worker: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  if (items.length === 0) return [];
+  const limit = Math.max(1, Math.min(concurrency, items.length));
+  const results = new Array<R>(items.length);
+  let next = 0;
+  async function run(): Promise<void> {
+    while (next < items.length) {
+      const i = next;
+      next += 1;
+      results[i] = await worker(items[i] as T, i);
+    }
+  }
+  const runners = Array.from({ length: limit }, () => run());
+  await Promise.all(runners);
+  return results;
+}
+
+// ─── Implementation ───────────────────────────────────────────────────
+
 export function registerDiagnosticsDecorations(
   options: RegisterDiagnosticsDecorationsOptions,
 ): DiagnosticsDecorationsHandle {
@@ -229,7 +265,9 @@ export function registerDiagnosticsDecorations(
     propagateToParent = true,
     uriScheme = 'file',
     batchOptions,
+    resolveConcurrency = DEFAULT_RESOLVE_CONCURRENCY,
     badgeCap = 99,
+    onError,
     colorFor,
     badgeFor,
     tooltipFor,
@@ -239,6 +277,15 @@ export function registerDiagnosticsDecorations(
   const listeners = new Set<(ids: readonly EntryId[]) => void>();
   let disposed = false;
   let decoratedIds = new Set<EntryId>();
+  /** Monotonic generation so overlapping recomputes discard stale results. */
+  let generation = 0;
+
+  const reportError =
+    onError ??
+    ((error: unknown) => {
+      // eslint-disable-next-line no-console
+      console.warn('[mille-ui/diagnostics] recompute failed:', error);
+    });
 
   function resolveColor(
     severity: DiagnosticSeverity,
@@ -281,17 +328,18 @@ export function registerDiagnosticsDecorations(
       if (override !== undefined) return override;
     }
     const summary = formatDiagnosticTooltip(counts);
-    // For leaves with a single diagnostic and a message, append it so
-    // hover is actionable without opening Problems.
     if (
       !aggregated &&
       leafDiagnostics !== null &&
       leafDiagnostics.length === 1
     ) {
       const only = leafDiagnostics[0];
-      if (only !== undefined && only.message !== undefined && only.message.length > 0) {
-        const prefix =
-          only.source !== undefined ? `${only.source}: ` : '';
+      if (
+        only !== undefined &&
+        only.message !== undefined &&
+        only.message.length > 0
+      ) {
+        const prefix = only.source !== undefined ? `${only.source}: ` : '';
         return summary.length > 0
           ? `${summary}\n${prefix}${only.message}`
           : `${prefix}${only.message}`;
@@ -321,9 +369,6 @@ export function registerDiagnosticsDecorations(
       leafDiagnostics,
     );
 
-    // Leaves advertise propagate so hosts/engine that honor the flag
-    // can bubble; we still do our own ancestor aggregation for count
-    // accuracy (engine propagate would only copy a single badge).
     return {
       badge,
       ...(color !== undefined ? { color } : {}),
@@ -332,56 +377,94 @@ export function registerDiagnosticsDecorations(
     };
   }
 
-  function makeUri(workspaceRelative: string): Uri {
+  function absolutePathFor(workspaceRelative: string): string {
     const trimmedRoot = rootPath.replace(/\/+$/, '');
-    const trimmedRel = workspaceRelative.replace(/^\/+/, '');
-    const joined =
-      trimmedRel.length === 0
-        ? trimmedRoot
-        : `${trimmedRoot}/${trimmedRel}`;
-    return { scheme: uriScheme, path: joined };
+    return `${trimmedRoot}/${workspaceRelative}`;
+  }
+
+  function makeUri(workspaceRelative: string): Uri {
+    return { scheme: uriScheme, path: absolutePathFor(workspaceRelative) };
   }
 
   async function resolvePathToEntry(
     workspaceRelative: string,
   ): Promise<Entry | null> {
-    const uri = makeUri(workspaceRelative);
+    if (!isSafeWorkspaceRelativePath(workspaceRelative)) {
+      return null;
+    }
     const handle = fx as FileExplorerLike;
-    if (typeof handle.getByUri !== 'function') {
-      return null;
+
+    // Prefer getByUri (local engine).
+    if (typeof handle.getByUri === 'function') {
+      try {
+        const maybe = handle.getByUri(makeUri(workspaceRelative));
+        const entry = isPromise(maybe) ? await maybe : maybe;
+        if (entry != null) return entry;
+      } catch {
+        // Fall through to resolvePath.
+      }
     }
-    try {
-      const maybe = handle.getByUri(uri);
-      const entry = isPromise(maybe) ? await maybe : maybe;
-      return entry ?? null;
-    } catch {
-      return null;
+
+    // PortFileExplorer (and fakes) expose resolvePath(absolute).
+    if (typeof handle.resolvePath === 'function') {
+      try {
+        const abs = absolutePathFor(workspaceRelative);
+        const maybe = handle.resolvePath(abs);
+        const id = isPromise(maybe) ? await maybe : maybe;
+        if (id == null) return null;
+        return handle.getSnapshot().getById(id as EntryId);
+      } catch {
+        return null;
+      }
     }
+
+    return null;
   }
 
   async function recompute(): Promise<void> {
     if (disposed) return;
-    const statusMap = await client.getDiagnostics(rootPath);
-    if (disposed) return;
+    const myGen = ++generation;
+
+    let statusMap: ReadonlyMap<string, readonly Diagnostic[]>;
+    try {
+      statusMap = await client.getDiagnostics(rootPath);
+    } catch (error) {
+      if (disposed || myGen !== generation) return;
+      throw error;
+    }
+    if (disposed || myGen !== generation) return;
+
+    const entries = [...statusMap.entries()].filter(
+      ([path, diags]) =>
+        diags.length > 0 && isSafeWorkspaceRelativePath(path),
+    );
+
+    const resolved = await mapPool(
+      entries,
+      resolveConcurrency,
+      async ([path, diags]) => {
+        if (disposed || myGen !== generation) {
+          return null;
+        }
+        const entry = await resolvePathToEntry(path);
+        if (entry === null) return null;
+        const counts = countDiagnostics(diags);
+        const decoration = buildDecoration(counts, false, diags);
+        if (decoration === null) return null;
+        return { id: entry.id, counts, decoration };
+      },
+    );
+
+    if (disposed || myGen !== generation) return;
 
     const next = new Map<EntryId, Decoration>();
-    // Track leaf counts for ancestor roll-up.
     const leafCounts: Array<{ id: EntryId; counts: DiagnosticCounts }> = [];
-
-    for (const [path, diags] of statusMap) {
-      if (diags.length === 0) continue;
-      const resolved = await resolvePathToEntry(path);
-      if (resolved === null) continue;
-      const counts = countDiagnostics(diags);
-      const decoration = buildDecoration(counts, false, diags);
-      if (decoration === null) continue;
-      next.set(resolved.id, decoration);
-      leafCounts.push({ id: resolved.id, counts });
+    for (const item of resolved) {
+      if (item === null) continue;
+      next.set(item.id, item.decoration);
+      leafCounts.push({ id: item.id, counts: item.counts });
     }
 
-    // Ancestor aggregation: sum descendant counts. Multiple leaves under
-    // the same folder accumulate. A folder that is itself a leaf with
-    // diagnostics keeps its own leaf decoration (do not clobber).
     if (propagateToParent && leafCounts.length > 0) {
       const snapshot = fx.getSnapshot();
       const ancestorCounts = new Map<EntryId, DiagnosticCounts>();
@@ -389,7 +472,6 @@ export function registerDiagnosticsDecorations(
       for (const leaf of leafCounts) {
         let cursor = snapshot.getById(leaf.id);
         if (cursor === null) continue;
-        // napi-rs maps Rust Option::None to JS undefined; loose == null.
         let parentId = cursor.parentId;
         while (parentId != null) {
           const existing = ancestorCounts.get(parentId) ?? ZERO_COUNTS;
@@ -401,34 +483,52 @@ export function registerDiagnosticsDecorations(
       }
 
       for (const [id, counts] of ancestorCounts) {
-        // Do not clobber a real leaf decoration with an aggregate.
         if (next.has(id)) continue;
         const decoration = buildDecoration(counts, true, null);
         if (decoration !== null) next.set(id, decoration);
       }
     }
 
-    // Diff: every id that was in the previous set OR the new set may
-    // have changed.
-    const changed = new Set<EntryId>();
-    for (const id of decoratedIds) changed.add(id);
-    for (const id of next.keys()) changed.add(id);
+    if (disposed || myGen !== generation) return;
+
+    // Value-diff: only notify ids whose decoration actually changed.
+    const changed: EntryId[] = [];
+    for (const id of decoratedIds) {
+      if (!decorationEquals(decorations.get(id), next.get(id) ?? null)) {
+        changed.push(id);
+      }
+    }
+    for (const [id, dec] of next) {
+      if (!decoratedIds.has(id) || !decorationEquals(decorations.get(id), dec)) {
+        if (!changed.includes(id)) changed.push(id);
+      }
+    }
 
     decorations = next;
     decoratedIds = new Set(next.keys());
 
-    if (changed.size > 0 && listeners.size > 0) {
-      const ids = Array.from(changed);
-      for (const l of [...listeners]) l(ids);
+    if (changed.length > 0 && listeners.size > 0) {
+      for (const l of [...listeners]) l(changed);
     }
   }
 
-  // Batcher coalesces client.onChange storms. A single sentinel id is
-  // enqueued per notification so any burst produces exactly one recompute.
+  async function recomputeBackground(): Promise<void> {
+    try {
+      await recompute();
+    } catch (error) {
+      if (disposed) return;
+      try {
+        reportError(error);
+      } catch {
+        /* ignore error-handler failures */
+      }
+    }
+  }
+
   const SENTINEL: EntryId = -1;
   const batcher = createBatcher(
     () => {
-      void recompute();
+      void recomputeBackground();
     },
     batchOptions,
   );
@@ -460,14 +560,13 @@ export function registerDiagnosticsDecorations(
     batcher.enqueue(SENTINEL);
   });
 
-  // Kick off initial fetch. Fire-and-forget; `refresh()` returns a
-  // promise for callers that need to await readiness.
-  void recompute();
+  void recomputeBackground();
 
   return {
     dispose(): void {
       if (disposed) return;
       disposed = true;
+      generation += 1; // invalidate in-flight
       try {
         unsubscribe();
       } catch {
@@ -486,6 +585,7 @@ export function registerDiagnosticsDecorations(
     async refresh(): Promise<void> {
       if (disposed) return;
       batcher.cancel();
+      // Explicit refresh surfaces errors to the caller.
       await recompute();
     },
   };

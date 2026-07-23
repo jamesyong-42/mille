@@ -14,7 +14,10 @@ export { FileContextMenu } from './FileContextMenu.js';
 export type { FileContextMenuProps } from './FileContextMenu.js';
 export { ContextMenuItem } from './ContextMenuItem.js';
 export type { ContextMenuItemProps } from './ContextMenuItem.js';
-export { FileDecorations } from './FileDecorations.js';
+export {
+  FileDecorations,
+  decorationAccessibleLabel,
+} from './FileDecorations.js';
 export type { FileDecorationsProps } from './FileDecorations.js';
 
 // Phase 8 — filter + search.

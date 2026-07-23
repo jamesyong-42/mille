@@ -28,8 +28,11 @@ export type {
 export {
   DEFAULT_DIAGNOSTIC_COLORS,
   MUTED_DIAGNOSTIC_COLORS,
+  decorationEquals,
   formatDiagnosticBadge,
   formatDiagnosticTooltip,
+  isSafeWorkspaceRelativePath,
+  mapPool,
   registerDiagnosticsDecorations,
 } from './provider.js';
 

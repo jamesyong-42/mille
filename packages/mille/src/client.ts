@@ -116,7 +116,8 @@ function normalizeUndoKind(value: unknown): UndoKind | null {
   return null;
 }
 
-function normalizeUndoDescriptor(raw: unknown): UndoDescriptor | null {
+/** Normalize a wire/native undo descriptor into the public shape. */
+export function normalizeUndoDescriptor(raw: unknown): UndoDescriptor | null {
   if (raw === null || raw === undefined || typeof raw !== 'object') return null;
   const obj = raw as Record<string, unknown>;
   const kind = normalizeUndoKind(obj.kind);
@@ -129,6 +130,23 @@ function normalizeUndoDescriptor(raw: unknown): UndoDescriptor | null {
     undoable: Boolean(obj.undoable),
     ...(typeof reason === 'string' && reason.length > 0 ? { reason } : null),
     timestampMs: Number(obj.timestampMs ?? obj.timestamp_ms ?? 0),
+  };
+}
+
+/** Normalize a wire/native undo result into the public shape. */
+export function normalizeUndoResult(raw: unknown): UndoResult | null {
+  if (raw === null || raw === undefined || typeof raw !== 'object') return null;
+  const obj = raw as Record<string, unknown>;
+  const kind = normalizeUndoKind(obj.kind);
+  if (kind === null) return null;
+  const entryId = obj.entryId ?? obj.entry_id;
+  return {
+    id: Number(obj.id),
+    kind,
+    label: String(obj.label ?? ''),
+    ...(entryId !== undefined && entryId !== null
+      ? { entryId: Number(entryId) }
+      : null),
   };
 }
 

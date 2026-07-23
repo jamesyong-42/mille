@@ -43,6 +43,39 @@ const BADGE_STYLE: CSSProperties = {
   background: 'var(--mille-decoration-badge-bg, transparent)',
 };
 
+/**
+ * Accessible label for a decoration overlay. Prefers the host-supplied
+ * tooltip (diagnostics already format "2 errors, 1 warning"); falls
+ * back to letter/badge glyphs so bare SCM letters remain named.
+ */
+export function decorationAccessibleLabel(
+  decorations: MergedDecoration,
+): string | undefined {
+  if (decorations.tooltip !== undefined && decorations.tooltip.length > 0) {
+    // Use the first line only — multi-line tooltips may append source
+    // messages that are noisy for AT; the first line is the summary.
+    const first = decorations.tooltip.split('\n')[0]?.trim();
+    if (first !== undefined && first.length > 0) return first;
+  }
+  const parts: string[] = [];
+  if (decorations.letter !== undefined) {
+    parts.push(`status ${decorations.letter}`);
+  }
+  if (decorations.badge !== undefined) {
+    // Numeric badges (diagnostics) read as "N problems".
+    if (/^\d+\+?$/.test(decorations.badge)) {
+      parts.push(
+        decorations.badge === '1'
+          ? '1 problem'
+          : `${decorations.badge} problems`,
+      );
+    } else {
+      parts.push(`badge ${decorations.badge}`);
+    }
+  }
+  return parts.length > 0 ? parts.join(', ') : undefined;
+}
+
 function FileDecorationsImpl(props: FileDecorationsProps): ReactElement | null {
   const { decorations, className } = props;
   const { badge, letter, color, tooltip } = decorations;
@@ -64,18 +97,24 @@ function FileDecorationsImpl(props: FileDecorationsProps): ReactElement | null {
     ? { ...BADGE_STYLE, color }
     : BADGE_STYLE;
 
+  const accessibleLabel = decorationAccessibleLabel(decorations);
+
   return (
     <span
       className={className ? `mille-decorations ${className}` : 'mille-decorations'}
       data-mille-decorations=""
       style={WRAPPER_STYLE}
       {...(tooltip !== undefined ? { title: tooltip } : null)}
+      {...(accessibleLabel !== undefined
+        ? { 'aria-label': accessibleLabel, role: 'img' }
+        : null)}
     >
       {letter !== undefined ? (
         <span
           className="mille-decoration-letter"
           data-mille-decoration-letter={letter}
           style={letterStyle}
+          aria-hidden="true"
         >
           {letter}
         </span>
@@ -85,8 +124,28 @@ function FileDecorationsImpl(props: FileDecorationsProps): ReactElement | null {
           className="mille-decoration-badge"
           data-mille-decoration-badge={badge}
           style={badgeStyle}
+          aria-hidden="true"
         >
           {badge}
+        </span>
+      ) : null}
+      {/* Visually hidden duplicate for AT that ignore aria-label on generic spans. */}
+      {accessibleLabel !== undefined ? (
+        <span
+          className="mille-decoration-sr-only"
+          style={{
+            position: 'absolute',
+            width: 1,
+            height: 1,
+            padding: 0,
+            margin: -1,
+            overflow: 'hidden',
+            clip: 'rect(0, 0, 0, 0)',
+            whiteSpace: 'nowrap',
+            border: 0,
+          }}
+        >
+          {accessibleLabel}
         </span>
       ) : null}
     </span>

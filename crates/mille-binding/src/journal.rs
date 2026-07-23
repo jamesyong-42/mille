@@ -3,6 +3,12 @@
 //! Tracks create / rename / move / soft-delete operations so `undo()` can
 //! reverse the most recent **undoable** action. Permanent deletes and other
 //! non-undoable mutations are recorded in `last_mutation` for reporting.
+//!
+//! Undo identity is stronger than size alone: we journal filesystem object
+//! identity (device + inode / file index) plus size, timestamps, and kind so
+//! replacing a created/renamed entry with an unrelated same-size file cannot
+//! be undone as if it were the original. Directory create-undo refuses when
+//! the directory has gained descendants.
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
@@ -13,14 +19,78 @@ use napi_derive::napi;
 
 const DEFAULT_CAPACITY: usize = 64;
 
+/// On-disk identity of a path at journal time.
+///
+/// `dev` + `ino` identify the filesystem object (Unix inode / Windows file
+/// index). Size and timestamps are secondary guards; directories do not rely
+/// on size for content safety — undo-create requires an empty directory.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct FsIdentity {
+    pub size: u64,
+    pub mtime_ms: i64,
+    pub ctime_ms: i64,
+    /// 0 = file, 1 = directory (symlink-to-dir is not create-journaled as dir).
+    pub kind: u8,
+    pub dev: u64,
+    pub ino: u64,
+}
+
+impl FsIdentity {
+    /// Capture identity from `std::fs::Metadata` (prefer `symlink_metadata`).
+    pub fn from_metadata(meta: &std::fs::Metadata, kind: u8) -> Self {
+        let (dev, ino) = file_id_from_metadata(meta);
+        let mtime_ms = meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        let ctime_ms = creation_ms(meta);
+        Self {
+            size: meta.len(),
+            mtime_ms,
+            ctime_ms,
+            kind,
+            dev,
+            ino,
+        }
+    }
+
+    /// True when `disk` is still the same journaled object (and, for files,
+    /// has not grown / shrunk). Directories ignore size for matching because
+    /// directory "size" is platform-defined; emptiness is checked separately.
+    pub fn matches_disk(&self, disk: &FsIdentity) -> bool {
+        if self.kind != disk.kind {
+            return false;
+        }
+        // Prefer filesystem object identity when available.
+        if self.ino != 0 || self.dev != 0 {
+            if self.dev != disk.dev || self.ino != disk.ino {
+                return false;
+            }
+            // Same inode: still refuse if file length changed (in-place write).
+            if self.kind == 0 && self.size != disk.size {
+                return false;
+            }
+            return true;
+        }
+        // Fallback when platform cannot supply a stable file id: require size
+        // and both timestamps. Weaker than inode, but better than size alone.
+        if self.size != disk.size {
+            return false;
+        }
+        if self.mtime_ms != disk.mtime_ms || self.ctime_ms != disk.ctime_ms {
+            return false;
+        }
+        true
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct CreateIdentity {
     pub entry_id: EntryId,
     pub path: PathBuf,
-    pub size: u64,
-    pub mtime_ms: i64,
-    pub ctime_ms: i64,
-    pub kind: u8, // 0 file, 1 dir
+    pub fs: FsIdentity,
 }
 
 #[derive(Clone, Debug)]
@@ -32,11 +102,15 @@ pub(crate) enum JournalKind {
         entry_id: EntryId,
         old_path: PathBuf,
         new_path: PathBuf,
+        /// Identity of the entry at `new_path` after the rename.
+        fs: FsIdentity,
     },
     Move {
         entry_id: EntryId,
         old_path: PathBuf,
         new_path: PathBuf,
+        /// Identity of the entry at `new_path` after the move.
+        fs: FsIdentity,
     },
     /// Soft-delete into managed recycle directory outside the workspace.
     SoftDelete {
@@ -168,7 +242,13 @@ impl OperationJournal {
         self.push_undoable(JournalKind::Create { identity }, format!("Create {name}"))
     }
 
-    pub fn push_rename(&mut self, entry_id: EntryId, old_path: PathBuf, new_path: PathBuf) -> u64 {
+    pub fn push_rename(
+        &mut self,
+        entry_id: EntryId,
+        old_path: PathBuf,
+        new_path: PathBuf,
+        fs: FsIdentity,
+    ) -> u64 {
         let old_name = old_path
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
@@ -182,12 +262,19 @@ impl OperationJournal {
                 entry_id,
                 old_path,
                 new_path,
+                fs,
             },
             format!("Rename {old_name} → {new_name}"),
         )
     }
 
-    pub fn push_move(&mut self, entry_id: EntryId, old_path: PathBuf, new_path: PathBuf) -> u64 {
+    pub fn push_move(
+        &mut self,
+        entry_id: EntryId,
+        old_path: PathBuf,
+        new_path: PathBuf,
+        fs: FsIdentity,
+    ) -> u64 {
         let name = old_path
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
@@ -197,6 +284,7 @@ impl OperationJournal {
                 entry_id,
                 old_path,
                 new_path,
+                fs,
             },
             format!("Move {name}"),
         )
@@ -272,6 +360,8 @@ impl JournalEntry {
     }
 }
 
+// ─── Managed recycle base (outside workspace, symlink-safe) ───────────
+
 /// Deterministic recycle root outside any workspace: `$TMPDIR/mille-recycle/<hash>/`.
 pub(crate) fn managed_recycle_base(workspace_root: &Path) -> PathBuf {
     use std::collections::hash_map::DefaultHasher;
@@ -284,21 +374,192 @@ pub(crate) fn managed_recycle_base(workspace_root: &Path) -> PathBuf {
         .join(format!("{hash:016x}"))
 }
 
-/// Ensure `path` is under `base` after canonicalizing both when possible.
+/// Create or open the managed recycle base without following a hijacked
+/// symlink, canonicalize it, restrict permissions, and verify it does not
+/// live under any workspace root.
+///
+/// Returns the **canonical** absolute path of the base directory.
+pub(crate) fn ensure_managed_recycle_base(
+    workspace_root: &Path,
+    workspace_roots: &[PathBuf],
+) -> Result<PathBuf, String> {
+    let temp = std::env::temp_dir();
+    let pool = temp.join("mille-recycle");
+
+    // Create the pool directory carefully: refuse if the path is a symlink.
+    ensure_real_directory(&pool).map_err(|e| format!("recycle pool: {e}"))?;
+
+    let base = managed_recycle_base(workspace_root);
+    ensure_real_directory(&base).map_err(|e| format!("recycle base: {e}"))?;
+
+    // Restrict permissions so other local users cannot plant payloads.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&pool, std::fs::Permissions::from_mode(0o700));
+        let _ = std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o700));
+    }
+
+    // Canonicalize after creation; fail closed if we cannot.
+    let canon_base = std::fs::canonicalize(&base)
+        .map_err(|e| format!("cannot canonicalize recycle base: {e}"))?;
+    let canon_temp = std::fs::canonicalize(&temp)
+        .map_err(|e| format!("cannot canonicalize temp dir: {e}"))?;
+
+    if !(canon_base == canon_temp || canon_base.starts_with(&canon_temp)) {
+        return Err(format!(
+            "managed recycle base escaped temp dir: {:?}",
+            canon_base
+        ));
+    }
+
+    // Must not live under a workspace root (canonical).
+    for r in workspace_roots {
+        let Ok(canon_root) = std::fs::canonicalize(r) else {
+            // Also check lexical containment as a belt-and-suspenders guard.
+            if path_is_under_lexical(&canon_base, r) {
+                return Err(
+                    "managed recycle base must not live under a workspace root".into(),
+                );
+            }
+            continue;
+        };
+        if canon_base == canon_root || canon_base.starts_with(&canon_root) {
+            return Err("managed recycle base must not live under a workspace root".into());
+        }
+    }
+
+    // Final symlink check on the canonical path's own metadata.
+    let meta = std::fs::symlink_metadata(&canon_base)
+        .map_err(|e| format!("recycle base metadata: {e}"))?;
+    if meta.file_type().is_symlink() || !meta.is_dir() {
+        return Err("managed recycle base is not a real directory".into());
+    }
+
+    Ok(canon_base)
+}
+
+/// Ensure `path` exists as a real (non-symlink) directory.
+///
+/// If a symlink is present at `path`, it is removed and replaced with a
+/// fresh directory so a hijacker cannot redirect soft-trash.
+fn ensure_real_directory(path: &Path) -> Result<(), String> {
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_symlink() => {
+            // Remove the hijack attempt. `remove_file` works for file and
+            // directory symlinks on Unix; fall back to remove_dir.
+            if std::fs::remove_file(path).is_err() {
+                let _ = std::fs::remove_dir(path);
+            }
+            std::fs::create_dir(path).map_err(|e| format!("create after symlink remove: {e}"))?;
+        }
+        Ok(meta) if meta.is_dir() => {
+            // Already a real directory.
+        }
+        Ok(_) => {
+            return Err(format!("path exists and is not a directory: {:?}", path));
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            // Create parents as real dirs too when missing.
+            if let Some(parent) = path.parent() {
+                if !parent.as_os_str().is_empty() {
+                    ensure_real_directory(parent)?;
+                }
+            }
+            std::fs::create_dir(path).map_err(|e| format!("create_dir: {e}"))?;
+        }
+        Err(e) => return Err(format!("symlink_metadata: {e}")),
+    }
+
+    // Re-check: refuse if something raced us into a symlink.
+    let meta = std::fs::symlink_metadata(path).map_err(|e| format!("recheck: {e}"))?;
+    if meta.file_type().is_symlink() {
+        return Err(format!("path is a symlink after create: {:?}", path));
+    }
+    if !meta.is_dir() {
+        return Err(format!("path is not a directory: {:?}", path));
+    }
+    Ok(())
+}
+
+/// Lexical-only prefix check (no I/O). Prefer `path_is_under` for security.
+fn path_is_under_lexical(path: &Path, base: &Path) -> bool {
+    path == base || path.starts_with(base)
+}
+
+/// Ensure `path` is under `base` using **canonical** paths.
+///
+/// Does **not** trust a bare lexical `starts_with` alone — a symlink at
+/// `base` would otherwise make any child appear "under" base while landing
+/// outside. When canonicalization of `path` fails (not yet fully created),
+/// we canonicalize the parent and re-join the file name.
 pub(crate) fn path_is_under(path: &Path, base: &Path) -> bool {
-    if path == base || path.starts_with(base) {
-        return true;
+    let Ok(canon_base) = std::fs::canonicalize(base) else {
+        return false;
+    };
+    // Base itself must not be a symlink masquerading after canonicalize
+    // (canonicalize resolves the final component on most platforms).
+    if let Ok(meta) = std::fs::symlink_metadata(base) {
+        if meta.file_type().is_symlink() {
+            return false;
+        }
     }
-    match (std::fs::canonicalize(path), std::fs::canonicalize(base)) {
-        (Ok(p), Ok(b)) => p == b || p.starts_with(b),
-        (Err(_), Ok(b)) => path
-            .parent()
-            .and_then(|parent| std::fs::canonicalize(parent).ok())
-            .map(|parent| {
-                let candidate = parent.join(path.file_name().unwrap_or_default());
-                candidate == b || candidate.starts_with(&b)
-            })
-            .unwrap_or(false),
-        _ => false,
+
+    if let Ok(canon_path) = std::fs::canonicalize(path) {
+        return canon_path == canon_base || canon_path.starts_with(&canon_base);
     }
+
+    // Path may not exist yet (destination of rename). Check parent.
+    path.parent()
+        .and_then(|parent| std::fs::canonicalize(parent).ok())
+        .map(|parent| {
+            let candidate = parent.join(path.file_name().unwrap_or_default());
+            candidate == canon_base || candidate.starts_with(&canon_base)
+        })
+        .unwrap_or(false)
+}
+
+// ─── Platform file identity helpers ───────────────────────────────────
+
+fn file_id_from_metadata(meta: &std::fs::Metadata) -> (u64, u64) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        return (meta.dev(), meta.ino());
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        let dev = meta.volume_serial_number().unwrap_or(0) as u64;
+        let ino = meta.file_index().unwrap_or(0);
+        return (dev, ino);
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = meta;
+        (0, 0)
+    }
+}
+
+fn creation_ms(meta: &std::fs::Metadata) -> i64 {
+    meta.created()
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+/// Async helper: read identity for a path via symlink_metadata.
+pub(crate) async fn capture_fs_identity(
+    path: &Path,
+    kind: u8,
+) -> Result<FsIdentity, std::io::Error> {
+    let meta = tokio::fs::symlink_metadata(path).await?;
+    Ok(FsIdentity::from_metadata(&meta, kind))
+}
+
+/// True when a directory has no entries (`.` / `..` excluded by read_dir).
+pub(crate) async fn directory_is_empty(path: &Path) -> Result<bool, std::io::Error> {
+    let mut rd = tokio::fs::read_dir(path).await?;
+    Ok(rd.next_entry().await?.is_none())
 }

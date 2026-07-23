@@ -27,6 +27,9 @@ const {
   addCounts,
   ZERO_COUNTS,
   DIAGNOSTIC_SEVERITY_RANK,
+  isSafeWorkspaceRelativePath,
+  decorationEquals,
+  mapPool,
 } = await import('../dist/diagnostics.js');
 
 // ─── Fake engine / snapshot ───────────────────────────────────────────
@@ -420,6 +423,11 @@ test('batcher coalesces 3 rapid onChange calls into 1 recompute', async () => {
     didChangeCount += 1;
   });
 
+  // Change payload so the coalesced recompute produces a value-diff notify.
+  client.setDiagnostics([
+    { path: 'src/a.ts', severity: 'error' },
+    { path: 'src/a.ts', severity: 'warning' },
+  ]);
   client.fire();
   await sleep(5);
   client.fire();
@@ -440,6 +448,7 @@ test('batcher coalesces 3 rapid onChange calls into 1 recompute', async () => {
     1,
     `3 fires must yield 1 onDidChange; got ${didChangeCount}`,
   );
+  assert.equal(provider.provide({ id: 3 }).badge, '2');
 
   sub.dispose();
   handle.dispose();
@@ -627,7 +636,235 @@ test('single diagnostic leaf tooltip includes message', async () => {
   handle.dispose();
 });
 
-// ─── Test 13: clearing diagnostics notifies previous ids ──────────────
+// ─── Test 13: path validation ─────────────────────────────────────────
+
+test('isSafeWorkspaceRelativePath rejects traversal and absolute paths', () => {
+  assert.equal(isSafeWorkspaceRelativePath('src/a.ts'), true);
+  assert.equal(isSafeWorkspaceRelativePath('a'), true);
+  assert.equal(isSafeWorkspaceRelativePath('../other/secret.ts'), false);
+  assert.equal(isSafeWorkspaceRelativePath('/abs/path.ts'), false);
+  assert.equal(isSafeWorkspaceRelativePath('C:\\windows\\x'), false);
+  assert.equal(isSafeWorkspaceRelativePath('foo\\bar'), false);
+  assert.equal(isSafeWorkspaceRelativePath('a/../../b'), false);
+  assert.equal(isSafeWorkspaceRelativePath(''), false);
+  assert.equal(isSafeWorkspaceRelativePath('a/\0b'), false);
+});
+
+test('traversal diagnostic paths are not decorated', async () => {
+  const { fx } = createFakeEngineForDiagnostics(sampleRows());
+  // Plant an "outside" entry the fake engine would resolve if given a
+  // crafted URI — but the provider must reject the path first.
+  const client = createFakeDiagnosticsClient([
+    { path: '../other-root/secret.ts', severity: 'error' },
+    { path: 'src/a.ts', severity: 'warning' },
+  ]);
+  const handle = registerDiagnosticsDecorations({
+    fx,
+    client,
+    rootPath: '/ROOT',
+    propagateToParent: false,
+  });
+  await waitFor(() => client.getDiagnosticsCalls >= 1);
+  await nextTick();
+  await nextTick();
+  const { providers } = fx._stats();
+  const provider = providers[0];
+  assert.ok(provider.provide({ id: 3 }), 'safe path still decorated');
+  // No way to get an outside id decorated via traversal.
+  handle.dispose();
+});
+
+// ─── Test 14: resolvePath fallback (port surface) ─────────────────────
+
+test('resolvePath fallback works when getByUri is absent', async () => {
+  const rows = sampleRows();
+  const byId = new Map();
+  const byAbs = new Map();
+  for (const r of rows) {
+    const entry = {
+      id: r.id,
+      parentId: r.parentId,
+      name: r.path.split('/').pop() ?? '',
+      kind: r.kind ?? 0,
+    };
+    byId.set(r.id, entry);
+    byAbs.set(`/ROOT/${r.path}`.replace(/\/$/, ''), entry);
+    if (r.path === '') byAbs.set('/ROOT', entry);
+  }
+  const registered = [];
+  const fx = {
+    getSnapshot: () => ({ getById: (id) => byId.get(id) ?? null }),
+    // no getByUri
+    resolvePath: async (abs) => byAbs.get(abs)?.id ?? null,
+    registerDecorationProvider: (p) => {
+      registered.push(p);
+      return { dispose() {} };
+    },
+  };
+  const client = createFakeDiagnosticsClient([
+    { path: 'src/a.ts', severity: 'error' },
+  ]);
+  const handle = registerDiagnosticsDecorations({
+    fx,
+    client,
+    rootPath: '/ROOT',
+    propagateToParent: false,
+  });
+  await waitFor(() => client.getDiagnosticsCalls >= 1);
+  await nextTick();
+  await nextTick();
+  const dec = registered[0].provide({ id: 3 });
+  assert.ok(dec, 'must decorate via resolvePath fallback');
+  assert.equal(dec.badge, '1');
+  handle.dispose();
+});
+
+// ─── Test 15: generation token prevents stale overwrite ───────────────
+
+test('stale recompute does not overwrite newer decorations', async () => {
+  const { fx } = createFakeEngineForDiagnostics(sampleRows());
+  let call = 0;
+  const listeners = new Set();
+  const client = {
+    async getDiagnostics() {
+      call += 1;
+      const n = call;
+      if (n === 1) {
+        // Slow initial fetch.
+        await sleep(80);
+        return new Map([
+          ['src/a.ts', [{ path: 'src/a.ts', severity: 'error' }]],
+        ]);
+      }
+      // Fast newer fetch with two diags.
+      return new Map([
+        [
+          'src/a.ts',
+          [
+            { path: 'src/a.ts', severity: 'error' },
+            { path: 'src/a.ts', severity: 'warning' },
+          ],
+        ],
+      ]);
+    },
+    onChange(cb) {
+      listeners.add(cb);
+      return () => listeners.delete(cb);
+    },
+  };
+  const handle = registerDiagnosticsDecorations({
+    fx,
+    client,
+    rootPath: '/ROOT',
+    propagateToParent: false,
+    batchOptions: { debounceMs: 5, maxWaitMs: 20 },
+  });
+  // Kick a second refresh while first is in flight.
+  await sleep(10);
+  await handle.refresh();
+  // Wait for the slow first fetch to finish (if still running).
+  await sleep(100);
+  await nextTick();
+  const { providers } = fx._stats();
+  const dec = providers[0].provide({ id: 3 });
+  assert.ok(dec);
+  assert.equal(
+    dec.badge,
+    '2',
+    `stale fetch must not regress badge; got ${dec.badge}`,
+  );
+  handle.dispose();
+});
+
+// ─── Test 16: background rejection does not crash ─────────────────────
+
+test('background getDiagnostics rejection is swallowed via onError', async () => {
+  const { fx } = createFakeEngineForDiagnostics(sampleRows());
+  const errors = [];
+  let calls = 0;
+  const client = {
+    async getDiagnostics() {
+      calls += 1;
+      throw new Error('lsp down');
+    },
+    onChange() {
+      return () => {};
+    },
+  };
+  const handle = registerDiagnosticsDecorations({
+    fx,
+    client,
+    rootPath: '/ROOT',
+    onError: (e) => errors.push(e),
+  });
+  await sleep(30);
+  assert.ok(calls >= 1);
+  assert.ok(errors.length >= 1, 'onError must receive the failure');
+  // Explicit refresh still rejects.
+  await assert.rejects(() => handle.refresh(), /lsp down/);
+  handle.dispose();
+});
+
+// ─── Test 17: no-op refresh does not notify ───────────────────────────
+
+test('unchanged snapshot does not notify onDidChange', async () => {
+  const { fx } = createFakeEngineForDiagnostics(sampleRows());
+  const client = createFakeDiagnosticsClient([
+    { path: 'src/a.ts', severity: 'error' },
+  ]);
+  const handle = registerDiagnosticsDecorations({
+    fx,
+    client,
+    rootPath: '/ROOT',
+    propagateToParent: false,
+  });
+  await waitFor(() => client.getDiagnosticsCalls >= 1);
+  await nextTick();
+  await nextTick();
+
+  let notifies = 0;
+  const { providers } = fx._stats();
+  providers[0].onDidChange(() => {
+    notifies += 1;
+  });
+
+  await handle.refresh();
+  assert.equal(notifies, 0, 'value-identical refresh must not notify');
+  handle.dispose();
+});
+
+// ─── Test 18: mapPool concurrency ─────────────────────────────────────
+
+test('mapPool respects concurrency bound', async () => {
+  let inFlight = 0;
+  let maxInFlight = 0;
+  const items = Array.from({ length: 20 }, (_, i) => i);
+  await mapPool(items, 4, async (n) => {
+    inFlight += 1;
+    maxInFlight = Math.max(maxInFlight, inFlight);
+    await sleep(5);
+    inFlight -= 1;
+    return n * 2;
+  });
+  assert.ok(maxInFlight <= 4, `max in-flight ${maxInFlight}`);
+  assert.ok(maxInFlight >= 2, 'should use parallel workers');
+});
+
+test('decorationEquals compares decoration fields', () => {
+  assert.equal(
+    decorationEquals(
+      { badge: '1', color: 'red', tooltip: 'x' },
+      { badge: '1', color: 'red', tooltip: 'x' },
+    ),
+    true,
+  );
+  assert.equal(
+    decorationEquals({ badge: '1' }, { badge: '2' }),
+    false,
+  );
+});
+
+// ─── Test 19: clearing diagnostics notifies previous ids ──────────────
 
 test('clearing diagnostics removes badges and notifies previous ids', async () => {
   const { fx } = createFakeEngineForDiagnostics(sampleRows());

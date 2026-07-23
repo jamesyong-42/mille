@@ -809,7 +809,33 @@ export interface ClientOptions {
   readonly mirrorCap?: number;
 }
 
+/**
+ * Connect a port-backed explorer client. Returns a `PortFileExplorer`, not
+ * the in-process `FileExplorer`: mutation/inspection methods that are
+ * synchronous on local (e.g. `canUndo` / `peekUndo` / `lastMutation`) are
+ * async over the wire, and path resolution uses `resolvePath` rather than
+ * a full local store.
+ */
 export declare function connectFileExplorer(
   port: MessagePortLike,
   options?: ClientOptions,
-): Promise<FileExplorer>;
+): Promise<PortFileExplorer>;
+
+/**
+ * Port-backed explorer surface. Mirrors most of `FileExplorer` but several
+ * methods are async RPC. Prefer this type over `FileExplorer` when typing
+ * `connectFileExplorer` results.
+ */
+export interface PortFileExplorer {
+  readonly ready: Promise<void>;
+  dispose(): Promise<void>;
+  getSnapshot(): MirrorSnapshot;
+  resolvePath(path: string): Promise<number | null>;
+  canUndo(): Promise<boolean>;
+  peekUndo(): Promise<UndoDescriptor | null>;
+  lastMutation(): Promise<UndoDescriptor | null>;
+  undo(): Promise<UndoResult | null>;
+  // Remaining methods match FileExplorer's async surface; see runtime class
+  // in `src/client-port.ts` for the full list.
+  [key: string]: unknown;
+}

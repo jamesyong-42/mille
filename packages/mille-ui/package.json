@@ -95,7 +95,8 @@
     "bench:active-policy": "node bench/active-entry-policy.mjs",
     "bench:file-actions": "node bench/file-action-path.mjs",
     "bench:search-scope": "node bench/file-search-scope.mjs",
-    "bench:collapse": "node bench/collapse-descendants.mjs"
+    "bench:collapse": "node bench/collapse-descendants.mjs",
+    "bench:diagnostics": "node bench/diagnostics-update.mjs"
   },
   "size-limit": [
     {

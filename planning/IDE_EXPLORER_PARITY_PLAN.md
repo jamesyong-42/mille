@@ -1157,6 +1157,11 @@ Move from a capable filesystem tree to a central IDE navigation surface.
   precedence is later-wins on overlapping fields (`mergeDecorations`); hosts
   that want diagnostic badges over SCM letters should register diagnostics
   after SCM. CSS tokens: `--mille-decoration-error|warning|info|hint` (+ muted).
+  Hardening: generation token (stale fetch discard), background error channel,
+  `resolvePath` fallback for port clients, path traversal rejection, bounded
+  concurrent path resolve (default 16), value-diff `onDidChange`, accessible
+  decoration text (`aria-label` + sr-only). Bench:
+  `pnpm --filter @vibecook/mille-ui bench:diagnostics`.
   Tests: `packages/mille-ui/test/diagnostics-decorations.test.mjs`.
 - Test status and failure decorations. *(open)*
 - Dirty/open/active editor state. *(open — active-entry policy already exists)*

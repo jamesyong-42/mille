@@ -11,7 +11,11 @@
   (`error > warning > info > hint`); folders aggregate descendant counts with
   muted colors. Badge cap, color/tooltip/badge overrides, and
   `propagateToParent` match the git companion ergonomics. CSS tokens:
-  `--mille-decoration-error|warning|info|hint` (+ muted variants).
+  `--mille-decoration-error|warning|info|hint` (+ muted variants). Hardening:
+  generation-token stale-fetch discard, background `onError`, port
+  `resolvePath` fallback, workspace-relative path validation, bounded
+  concurrent path resolve, value-diff notifications, and accessible
+  decoration labels (`aria-label` + sr-only text on `FileDecorations`).
 - **Trash default and undo journal** — `delete` soft-trashes into workspace
   `.mille-trash` by default (undoable); `{ trash: false }` is permanent. Public
   `canUndo` / `peekUndo` / `undo` reverse create, rename, move, and soft-delete.

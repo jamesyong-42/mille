@@ -15,6 +15,7 @@ export { decodeBulkRows } from './decode.js';
 export type { VisibleRow as DecodedVisibleRow } from './decode.js';
 export { FileExplorer, MirrorSnapshot } from './client.js';
 export type {
+  CollisionPolicy,
   Entry,
   EntryId,
   EventName,

@@ -31,7 +31,7 @@ pub struct DeleteOptionsJs {
 pub struct TransferOptionsJs {
     /// Cross-root transfers are denied unless this is explicitly true.
     pub cross_root: Option<bool>,
-    /// `"error"` (default) or `"rename"` for a deterministic free suffix.
+    /// `"error"` (default), `"rename"`, `"overwrite"`, `"skip"`, or `"merge"`.
     pub collision: Option<String>,
 }
 

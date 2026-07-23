@@ -75,7 +75,7 @@ export interface DragDropOptions {
   /** Allow drops that cross workspace roots. Default `false`. */
   readonly crossRoot?: boolean;
   /** Existing destination behavior. Default `error`. */
-  readonly collision?: 'error' | 'rename';
+  readonly collision?: 'error' | 'rename' | 'overwrite' | 'skip' | 'merge';
   /** Optional validation override — runs before cycle/cross-root checks. */
   readonly onDropValidate?: (
     ctx: DragDropValidateContext,
@@ -86,6 +86,39 @@ export interface DragDropOptions {
    * aborts the drop.
    */
   readonly onConfirm?: (message: string) => boolean | Promise<boolean>;
+  /**
+   * Per-item collision prompt for batch drops. Return a policy or
+   * `{ policy, applyToAll: true }` to reuse it for remaining items.
+   */
+  readonly onCollision?: (
+    request: {
+      readonly sourcePath?: string;
+      readonly sourceId?: number;
+      readonly targetParentId: EntryId;
+      readonly desiredName: string;
+      readonly remaining: number;
+    },
+  ) =>
+    | 'error'
+    | 'rename'
+    | 'overwrite'
+    | 'skip'
+    | 'merge'
+    | {
+        readonly policy: 'error' | 'rename' | 'overwrite' | 'skip' | 'merge';
+        readonly applyToAll?: boolean;
+      }
+    | Promise<
+        | 'error'
+        | 'rename'
+        | 'overwrite'
+        | 'skip'
+        | 'merge'
+        | {
+            readonly policy: 'error' | 'rename' | 'overwrite' | 'skip' | 'merge';
+            readonly applyToAll?: boolean;
+          }
+      >;
   /** Dwell before an auto-expand fires on a hovered collapsed folder. */
   readonly autoExpandDelayMs?: number;
 }
@@ -142,7 +175,7 @@ interface DragDropEngine {
     newName?: string,
     options?: {
       readonly crossRoot?: boolean;
-      readonly collision?: 'error' | 'rename';
+      readonly collision?: 'error' | 'rename' | 'overwrite' | 'skip' | 'merge';
     },
   ): Promise<{ id: EntryId } | unknown>;
   copy(
@@ -151,7 +184,7 @@ interface DragDropEngine {
     newName?: string,
     options?: {
       readonly crossRoot?: boolean;
-      readonly collision?: 'error' | 'rename';
+      readonly collision?: 'error' | 'rename' | 'overwrite' | 'skip' | 'merge';
     },
   ): Promise<{ id: EntryId } | unknown>;
   setExpanded(diff: {
@@ -168,7 +201,7 @@ interface DragDropEngine {
     newName?: string,
     options?: {
       readonly crossRoot?: boolean;
-      readonly collision?: 'error' | 'rename';
+      readonly collision?: 'error' | 'rename' | 'overwrite' | 'skip' | 'merge';
     },
   ): Promise<unknown>;
   create?(
@@ -284,8 +317,34 @@ export function useFileTreeDragDrop(
     collision = 'error',
     onDropValidate,
     onConfirm,
+    onCollision,
     autoExpandDelayMs = 300,
   } = options;
+
+  type CollisionChoice = 'error' | 'rename' | 'overwrite' | 'skip' | 'merge';
+
+  async function resolveItemCollision(
+    batch: { applied: CollisionChoice | null },
+    request: {
+      readonly sourcePath?: string;
+      readonly sourceId?: number;
+      readonly targetParentId: EntryId;
+      readonly desiredName: string;
+      readonly remaining: number;
+    },
+  ): Promise<CollisionChoice> {
+    if (batch.applied !== null) return batch.applied;
+    if (typeof onCollision !== 'function') return collision;
+    const result = await onCollision(request);
+    if (typeof result === 'string') return result;
+    if (result && typeof result === 'object' && typeof result.policy === 'string') {
+      if (result.applyToAll === true) {
+        batch.applied = result.policy;
+      }
+      return result.policy;
+    }
+    return collision;
+  }
 
   const ctx = useFileTreeContext();
   const fx = ctx.fx as unknown as DragDropEngine;
@@ -719,21 +778,37 @@ export function useFileTreeDragDrop(
       if (!proceed) return;
 
       try {
+        const batch = { applied: null as CollisionChoice | null };
         if (nextEffect === 'copy') {
-          for (const id of sourceIds) {
+          for (let index = 0; index < sourceIds.length; index += 1) {
+            const id = sourceIds[index]!;
+            const entry = snapshotRef.current.getById(id);
+            const itemCollision = await resolveItemCollision(batch, {
+              sourceId: id,
+              targetParentId,
+              desiredName: entry?.name ?? String(id),
+              remaining: sourceIds.length - index - 1,
+            });
             await fx.copy(id, targetParentId, undefined, {
               crossRoot,
-              collision,
+              collision: itemCollision,
             });
           }
         } else {
-          for (const id of sourceIds) {
+          for (let index = 0; index < sourceIds.length; index += 1) {
+            const id = sourceIds[index]!;
             // Skip no-op moves (source already has this parent).
             const e = snapshotRef.current.getById(id);
             if (e !== null && e.parentId === targetParentId) continue;
+            const itemCollision = await resolveItemCollision(batch, {
+              sourceId: id,
+              targetParentId,
+              desiredName: e?.name ?? String(id),
+              remaining: sourceIds.length - index - 1,
+            });
             await fx.move(id, targetParentId, undefined, {
               crossRoot,
-              collision,
+              collision: itemCollision,
             });
           }
         }
@@ -815,10 +890,19 @@ export function useFileTreeDragDrop(
       );
     }
     const failures: Array<{ path: string; error: unknown }> = [];
-    for (const p of paths) {
+    const batch = { applied: null as CollisionChoice | null };
+    for (let index = 0; index < paths.length; index += 1) {
+      const p = paths[index]!;
+      const desiredName = p.split(/[/\\]/).filter(Boolean).pop() ?? 'imported';
       try {
+        const itemCollision = await resolveItemCollision(batch, {
+          sourcePath: p,
+          targetParentId,
+          desiredName,
+          remaining: paths.length - index - 1,
+        });
         await fx.copyFromPath(p, targetParentId, undefined, {
-          collision,
+          collision: itemCollision,
         });
       } catch (error) {
         failures.push({ path: p, error });

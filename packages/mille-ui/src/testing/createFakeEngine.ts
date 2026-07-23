@@ -74,7 +74,10 @@ export interface FakeEngineCalls {
     newParentId: EntryId;
     newName: string | undefined;
     options:
-      | { readonly crossRoot?: boolean; readonly collision?: 'error' | 'rename' }
+      | {
+          readonly crossRoot?: boolean;
+          readonly collision?: 'error' | 'rename' | 'overwrite' | 'skip' | 'merge';
+        }
       | undefined;
   }>;
   copy: Array<{
@@ -82,7 +85,10 @@ export interface FakeEngineCalls {
     newParentId: EntryId;
     newName: string | undefined;
     options:
-      | { readonly crossRoot?: boolean; readonly collision?: 'error' | 'rename' }
+      | {
+          readonly crossRoot?: boolean;
+          readonly collision?: 'error' | 'rename' | 'overwrite' | 'skip' | 'merge';
+        }
       | undefined;
   }>;
   copyFromPath: Array<{
@@ -90,7 +96,10 @@ export interface FakeEngineCalls {
     newParentId: EntryId;
     newName: string | undefined;
     options:
-      | { readonly crossRoot?: boolean; readonly collision?: 'error' | 'rename' }
+      | {
+          readonly crossRoot?: boolean;
+          readonly collision?: 'error' | 'rename' | 'overwrite' | 'skip' | 'merge';
+        }
       | undefined;
   }>;
   setExpanded: Array<{ add: readonly EntryId[]; remove: readonly EntryId[] }>;
@@ -124,19 +133,28 @@ export interface FakeEngine {
     id: EntryId,
     newParentId: EntryId,
     newName?: string,
-    options?: { readonly crossRoot?: boolean; readonly collision?: 'error' | 'rename' },
+    options?: {
+      readonly crossRoot?: boolean;
+      readonly collision?: 'error' | 'rename' | 'overwrite' | 'skip' | 'merge';
+    },
   ): Promise<Entry>;
   copy(
     id: EntryId,
     newParentId: EntryId,
     newName?: string,
-    options?: { readonly crossRoot?: boolean; readonly collision?: 'error' | 'rename' },
+    options?: {
+      readonly crossRoot?: boolean;
+      readonly collision?: 'error' | 'rename' | 'overwrite' | 'skip' | 'merge';
+    },
   ): Promise<Entry>;
   copyFromPath(
     sourcePath: string,
     newParentId: EntryId,
     newName?: string,
-    options?: { readonly crossRoot?: boolean; readonly collision?: 'error' | 'rename' },
+    options?: {
+      readonly crossRoot?: boolean;
+      readonly collision?: 'error' | 'rename' | 'overwrite' | 'skip' | 'merge';
+    },
   ): Promise<Entry>;
   /**
    * Phase 8 — fuzzy search. Returns whatever was scripted via

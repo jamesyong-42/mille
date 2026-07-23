@@ -410,12 +410,29 @@ export interface DragDropValidationResult {
   readonly requireConfirm?: boolean;
 }
 
+/** Collision policy accepted by transfer mutations and DnD. */
+export type CollisionPolicy = 'error' | 'rename' | 'overwrite' | 'skip' | 'merge';
+
+/** Host prompt payload when a drop target already exists. */
+export interface CollisionPromptRequest {
+  readonly sourcePath?: string;
+  readonly sourceId?: number;
+  readonly targetParentId: number;
+  readonly desiredName: string;
+  readonly remaining: number;
+}
+
+export type CollisionPromptResult =
+  | CollisionPolicy
+  | { readonly policy: CollisionPolicy; readonly applyToAll?: boolean };
+
 /**
  * Options for the drag-drop subsystem. Phase 11 full surface:
  *   - `internal` / `externalOut` / `externalIn` gate each drag flavor.
  *   - `crossRoot` disables cross-workspace-root drops by default.
  *   - `onDropValidate` is a pre-drop veto hook (runs inside dragover).
  *   - `onConfirm` drives gitignore / warning confirmations.
+ *   - `onCollision` prompts overwrite/rename/skip/merge with apply-to-all.
  *
  * `external` is preserved for backwards-compat with the Phase-3
  * placeholder: when present it overrides `externalIn`.
@@ -427,12 +444,22 @@ export interface DragDropOptions {
   /** @deprecated use `externalIn`. Retained for Phase-3 compatibility. */
   readonly external?: DragDropEffect | false;
   readonly crossRoot?: boolean;
-  /** Destination collision behavior for internal move/copy. Default: error. */
-  readonly collision?: 'error' | 'rename';
+  /**
+   * Destination collision behavior for internal move/copy and external import.
+   * Default: `error`. Hosts that prompt can override per item via `onCollision`.
+   */
+  readonly collision?: CollisionPolicy;
   readonly onDropValidate?: (
     ctx: DragDropValidateContext,
   ) => DragDropValidationResult;
   readonly onConfirm?: (message: string) => boolean | Promise<boolean>;
+  /**
+   * Per-item collision prompt. Return a policy, or `{ policy, applyToAll }`
+   * to reuse it for the remaining batch items.
+   */
+  readonly onCollision?: (
+    request: CollisionPromptRequest,
+  ) => CollisionPromptResult | Promise<CollisionPromptResult>;
   readonly autoExpandDelayMs?: number;
 }
 

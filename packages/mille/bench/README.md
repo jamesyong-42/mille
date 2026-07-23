@@ -134,6 +134,17 @@ complete reverse-path rewrite, and public path verification. It enforces a
 16 ms p95 gate; fixture size, warmups, samples, and budget use
 `MILLE_CROSS_ROOT_*`.
 
+## Collision policy
+
+```sh
+pnpm bench:collision
+```
+
+The harness alternates skip and overwrite copies of a colliding file for 40
+measured samples (5 warmups), verifying destination content each time. Default
+p95 gate is 5 ms for both policies; samples, warmups, and budget use the
+`MILLE_COLLISION_*` environment variables.
+
 ## External path import
 
 ```sh

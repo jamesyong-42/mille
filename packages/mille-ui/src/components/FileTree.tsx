@@ -834,6 +834,7 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
       ...(dragDrop.collision !== undefined ? { collision: dragDrop.collision } : null),
       ...(dragDrop.onDropValidate !== undefined ? { onDropValidate: dragDrop.onDropValidate } : null),
       ...(dragDrop.onConfirm !== undefined ? { onConfirm: dragDrop.onConfirm } : null),
+      ...(dragDrop.onCollision !== undefined ? { onCollision: dragDrop.onCollision } : null),
       ...(dragDrop.autoExpandDelayMs !== undefined ? { autoExpandDelayMs: dragDrop.autoExpandDelayMs } : null),
     };
   }, [dragDrop]);

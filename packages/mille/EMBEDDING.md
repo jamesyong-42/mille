@@ -1052,13 +1052,24 @@ await fx.move(entryId, destinationFolderId, undefined, {
 });
 ```
 
-`collision: 'error'` is the default and returns `EEXIST` before changing disk.
-`'rename'` chooses the first free deterministic suffix (`file copy.txt`,
-`file copy 2.txt`, …). The same options apply to `copy` and `copyFromPath`.
+`collision` defaults to `'error'` and returns `EEXIST` before changing disk.
+Other policies:
+
+| Policy | Behavior |
+| --- | --- |
+| `error` | Fail when the destination name exists (including case-only siblings) |
+| `rename` | Choose a free `copy` / `copy N` suffix |
+| `overwrite` | Replace the destination file or directory |
+| `skip` | Leave the destination untouched and succeed |
+| `merge` | For directories, merge children; files overwrite |
+
+The same options apply to `copy`, `move`, and `copyFromPath`. Hosts that need
+UI prompts can use `FileTree` `dragDrop.onCollision` to choose a policy per
+item and optionally `applyToAll` for the rest of a multi-item drop.
 Same-volume directory moves preserve the complete known subtree identity;
 cross-device moves return `EUNSUPPORTED` without partial store mutation until
-the Phase 4 copy/delete fallback lands. Overwrite/merge prompting, progress,
-cancellation, and undo remain later Phase 4 work.
+the Phase 4 copy/delete fallback lands. Progress, cancellation, and undo
+remain later Phase 4 work.
 
 ### External import (`copyFromPath`)
 

@@ -1054,6 +1054,19 @@ progress/cancellation (4.3), and trash/undo recovery (4.4).
 - Detect self-copy, descendant cycles, case-only conflicts, and cross-root rules.
 - Revalidate immediately before mutation to handle external races.
 
+First collision-policy result (2026-07-23): `TransferOptions.collision`
+accepts `error` | `rename` | `overwrite` | `skip` | `merge` across move,
+copy, and `copyFromPath`. Destination resolution re-stats immediately before
+mutation, detects case-only sibling conflicts, rejects directory self/descendant
+cycles, and implements overwrite/skip/merge on disk with store reindexing.
+`FileTree` DnD adds `onCollision` with optional `applyToAll` for multi-item
+batches. Five integration tests cover overwrite, skip, merge, self-copy reject,
+and case-only collision; `pnpm bench:collision` gates skip/overwrite latency.
+On release macOS arm64 the gate measured skip at 0.063 ms median / 0.138 ms
+p95 and overwrite at 0.293 / 0.505 ms against a 5 ms ceiling. This completes
+the planned Phase 4.2 engine and DnD policy surface; rich host dialog UX is
+application-specific via `onCollision`.
+
 #### 4.3 Add progress and cancellation
 
 - Model long operations with ids, progress, cancellation, and completion status.

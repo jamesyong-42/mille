@@ -89,11 +89,20 @@ export interface VisibleRowCount {
   readonly pendingExpansions: ReadonlySet<EntryId>;
 }
 
+export type CollisionPolicy = 'error' | 'rename' | 'overwrite' | 'skip' | 'merge';
+
 export interface TransferOptions {
   /** Cross-root transfers are denied unless explicitly enabled. */
   readonly crossRoot?: boolean;
-  /** Existing destinations fail by default; `rename` selects a free copy suffix. */
-  readonly collision?: 'error' | 'rename';
+  /**
+   * Existing destinations:
+   * - `error` (default) — fail with `EEXIST` before mutation
+   * - `rename` — choose a free `copy` / `copy N` suffix
+   * - `overwrite` — replace the destination
+   * - `skip` — leave the destination untouched and succeed
+   * - `merge` — for directories, merge children; files overwrite
+   */
+  readonly collision?: CollisionPolicy;
 }
 
 export interface ResyncOptions {

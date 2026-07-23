@@ -343,7 +343,8 @@ Several features are primitives that require host work rather than complete
 end-user behavior:
 
 - the engine represents multiple roots, but there is no add/remove/reorder root
-  workflow in the explorer;
+  workflow in the explorer; duplicate basenames are now identity-safe and
+  visually numbered, but custom aliases and unavailable-root states remain;
 - `revealPath` exists, but automatic active-editor synchronization is not a
   product setting;
 - a decoration pipeline exists, but Problems, tests, and source-control states
@@ -370,8 +371,8 @@ adds 1,217,840 bytes to the optimized macOS arm64 binding (45.1%). Remaining
 settings gaps include:
 
 - UI controls for locale, hidden/ignored visibility, and exclusion settings;
-- same-display-name multi-root disambiguation for the new bounded, versioned,
-  durably stored expansion/selection/focus/filter/scroll navigation state.
+- dynamic root add/remove/reorder and custom-label controls around the new
+  identity-safe, bounded, durably stored navigation state.
 
 ### 5. File operations need product-level recovery
 

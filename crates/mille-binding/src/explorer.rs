@@ -205,6 +205,16 @@ impl FileExplorer {
         self.store.tree_version() as u32
     }
 
+    /// Resolve an indexed entry identity to its exact absolute path. This is
+    /// an internal fast path used by the TypeScript wrapper for lazy prefetch;
+    /// unlike basename reconstruction it is unambiguous across workspace roots.
+    #[napi(js_name = "pathForId")]
+    pub fn path_for_id(&self, id: i64) -> Option<String> {
+        self.store
+            .path_for_id(EntryId(id as u64))
+            .map(|path| path.to_string_lossy().into_owned())
+    }
+
     /// Resolve an absolute or workspace-relative path through the store's
     /// reverse path index. A path that exists below a configured root but is
     /// not indexed yet is hydrated one ancestor at a time, keeping lazy-mode
@@ -342,12 +352,10 @@ impl FileExplorer {
     /// and seed the EntryStore with the resulting entries. Returns the
     /// total number of entries inserted across all roots.
     ///
-    /// `include_root: true` is required so the walk root itself lands in
-    /// the store — `mutations::resolve_entry_path` walks up the tree
-    /// until it hits an entry with no parent and matches that entry's
-    /// name against one of the configured roots' basenames. Without the
-    /// root-as-entry, every descendant resolves to a bare name with no
-    /// configured-root match, and every mutation fails with EINVAL.
+    /// `include_root: true` is required so the walk root itself lands in the
+    /// store and receives an exact path-index identity. Without the
+    /// root-as-entry, descendants cannot be linked to a configured workspace
+    /// root and mutations fail with EINVAL.
     ///
     /// Deliberately NOT called in `new()` — construction stays cheap so
     /// consumers can attach sessions before scanning begins. Tests and
@@ -680,15 +688,12 @@ impl FileExplorer {
         let kind_enum = kind_from_u8(kind).map_err(fx_error_to_napi)?;
         let parent_eid = EntryId(parent_id as u64);
 
-        // Resolve parent path against the current snapshot.
-        let snap = self.store.snapshot();
-        let parent_path =
-            resolve_entry_path(snap.as_ref(), &self.roots, parent_eid).ok_or_else(|| {
-                fx_error_to_napi(FxError::InvalidInput(format!(
-                    "parent id {} not found in snapshot",
-                    parent_id
-                )))
-            })?;
+        let parent_path = resolve_entry_path(&self.store, parent_eid).ok_or_else(|| {
+            fx_error_to_napi(FxError::InvalidInput(format!(
+                "parent id {} not found in snapshot",
+                parent_id
+            )))
+        })?;
 
         let new_path = parent_path.join(&name);
 
@@ -728,8 +733,7 @@ impl FileExplorer {
     #[napi]
     pub async fn rename(&self, id: i64, new_name: String) -> Result<EntryJs> {
         let eid = EntryId(id as u64);
-        let snap = self.store.snapshot();
-        let old_path = resolve_entry_path(snap.as_ref(), &self.roots, eid).ok_or_else(|| {
+        let old_path = resolve_entry_path(&self.store, eid).ok_or_else(|| {
             fx_error_to_napi(FxError::InvalidInput(format!(
                 "id {} not found in snapshot",
                 id
@@ -772,21 +776,19 @@ impl FileExplorer {
     ) -> Result<EntryJs> {
         let eid = EntryId(id as u64);
         let new_parent_eid = EntryId(new_parent_id as u64);
-        let snap = self.store.snapshot();
 
-        let old_path = resolve_entry_path(snap.as_ref(), &self.roots, eid).ok_or_else(|| {
+        let old_path = resolve_entry_path(&self.store, eid).ok_or_else(|| {
             fx_error_to_napi(FxError::InvalidInput(format!(
                 "id {} not found in snapshot",
                 id
             )))
         })?;
-        let new_parent_path = resolve_entry_path(snap.as_ref(), &self.roots, new_parent_eid)
-            .ok_or_else(|| {
-                fx_error_to_napi(FxError::InvalidInput(format!(
-                    "new_parent id {} not found in snapshot",
-                    new_parent_id
-                )))
-            })?;
+        let new_parent_path = resolve_entry_path(&self.store, new_parent_eid).ok_or_else(|| {
+            fx_error_to_napi(FxError::InvalidInput(format!(
+                "new_parent id {} not found in snapshot",
+                new_parent_id
+            )))
+        })?;
 
         let effective_name = new_name.unwrap_or_else(|| {
             old_path
@@ -825,7 +827,7 @@ impl FileExplorer {
         let recursive = options.as_ref().and_then(|o| o.recursive).unwrap_or(false);
 
         let snap = self.store.snapshot();
-        let path = resolve_entry_path(snap.as_ref(), &self.roots, eid).ok_or_else(|| {
+        let path = resolve_entry_path(&self.store, eid).ok_or_else(|| {
             fx_error_to_napi(FxError::InvalidInput(format!(
                 "id {} not found in snapshot",
                 id
@@ -888,19 +890,18 @@ impl FileExplorer {
         let new_parent_eid = EntryId(new_parent_id as u64);
         let snap = self.store.snapshot();
 
-        let src_path = resolve_entry_path(snap.as_ref(), &self.roots, eid).ok_or_else(|| {
+        let src_path = resolve_entry_path(&self.store, eid).ok_or_else(|| {
             fx_error_to_napi(FxError::InvalidInput(format!(
                 "id {} not found in snapshot",
                 id
             )))
         })?;
-        let new_parent_path = resolve_entry_path(snap.as_ref(), &self.roots, new_parent_eid)
-            .ok_or_else(|| {
-                fx_error_to_napi(FxError::InvalidInput(format!(
-                    "new_parent id {} not found in snapshot",
-                    new_parent_id
-                )))
-            })?;
+        let new_parent_path = resolve_entry_path(&self.store, new_parent_eid).ok_or_else(|| {
+            fx_error_to_napi(FxError::InvalidInput(format!(
+                "new_parent id {} not found in snapshot",
+                new_parent_id
+            )))
+        })?;
 
         let src_entry = snap.get(eid).ok_or_else(|| {
             fx_error_to_napi(FxError::InvalidInput(format!(
@@ -1299,8 +1300,7 @@ impl FileExplorer {
     /// `FX|EINVAL|...` uniformly.
     pub(crate) fn resolve_path_for_id(&self, id: i64) -> Result<std::path::PathBuf> {
         let eid = EntryId(id as u64);
-        let snap = self.store.snapshot();
-        resolve_entry_path(snap.as_ref(), &self.roots, eid).ok_or_else(|| {
+        resolve_entry_path(&self.store, eid).ok_or_else(|| {
             fx_error_to_napi(FxError::InvalidInput(format!(
                 "id {} not found in snapshot",
                 id

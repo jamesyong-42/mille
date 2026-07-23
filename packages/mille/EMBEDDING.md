@@ -57,6 +57,13 @@ for (const root of snap.roots()) {
 await fx.dispose();
 ```
 
+Multiple roots may share a filesystem basename. Mille resolves every entry
+through an exact bidirectional path index, so reads, mutations, URI lookup, and
+lazy prefetch remain scoped to the intended root rather than the first matching
+name. The reference `FileTree` gives duplicate root rows stable ordinal labels
+such as `workspace (1)` and `workspace (2)` while preserving their real names
+for commands and persisted paths.
+
 ### Line-by-line
 
 - `new FileExplorer({ roots })` — cheap constructor; no I/O. Rejects non-absolute

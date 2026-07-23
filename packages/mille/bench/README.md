@@ -67,3 +67,16 @@ atomic tree version, and a ready 200-row viewport. It reports native update and
 ready-projection median/p95 latency, with default p95 gates of 90/100 ms.
 Fixture size, samples, and budgets use the `MILLE_LOCALE_*` environment
 variables.
+
+## Duplicate-basename workspace roots
+
+```sh
+pnpm bench:multi-root
+```
+
+The harness creates two configured roots whose basename is `workspace`, gives
+each a distinct child, and alternates 500 lazy list operations by root identity.
+Every sample must return only the intended root's child. It reports
+identity-to-path resolution plus bounded depth-1 list latency and enforces a
+default 5 ms p95 gate. Sample count and budget use
+`MILLE_MULTI_ROOT_SAMPLES` and `MILLE_MULTI_ROOT_P95_BUDGET_MS`.

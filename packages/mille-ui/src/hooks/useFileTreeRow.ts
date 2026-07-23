@@ -293,10 +293,20 @@ export function useFileTreeRow(props: FileTreeRowProps): UseFileTreeRowResult {
     };
   }, [registerRowElement, row.id]);
 
+  const duplicateRootLabel = useMemo(() => {
+    if (row.parentId !== null && row.parentId !== undefined) return null;
+    const roots = treeCtx?.snapshot.roots();
+    if (!roots) return null;
+    const matchingRoots = roots.filter((root) => root.name === row.name);
+    if (matchingRoots.length < 2) return null;
+    const ordinal = matchingRoots.findIndex((root) => root.id === row.id);
+    return ordinal < 0 ? null : `${row.name} (${ordinal + 1})`;
+  }, [row.id, row.name, row.parentId, treeCtx?.snapshot]);
+
   const displayName =
     row.pathSegments && row.pathSegments.length > 0
       ? row.pathSegments.join('/')
-      : row.name;
+      : (duplicateRootLabel ?? row.name);
 
   const isRenaming =
     renameTargetId !== undefined &&

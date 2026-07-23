@@ -189,3 +189,62 @@ test('stickyRoots={false} omits the sticky attribute on roots', async () => {
   await act(async () => { root.unmount(); });
   container.remove();
 });
+
+test('duplicate root names receive stable ordinal display labels', async () => {
+  const fx = createFakeEngine();
+  const rows = [
+    makeRow({ id: 11, parentId: null, name: 'workspace', depth: 0 }),
+    makeRow({ id: 12, parentId: null, name: 'unique', depth: 0 }),
+    makeRow({ id: 13, parentId: null, name: 'workspace', depth: 0 }),
+  ];
+  fx.emitDelta(
+    createFakeSnapshot({
+      rows,
+      roots: rows,
+      treeVersion: 1,
+    }),
+  );
+
+  const { container, root } = mount();
+  const obs = makeObservers();
+  await act(async () => {
+    root.render(
+      createElement(FileTree, {
+        fx,
+        ariaLabel: 'Duplicate roots',
+        rowHeight: 22,
+        overscan: 10,
+        __testObserveElementRect: obs.observeElementRect,
+        __testObserveElementOffset: obs.observeElementOffset,
+      }),
+    );
+  });
+
+  assert.deepEqual(
+    Array.from(container.querySelectorAll('[data-mille-row-name]')).map(
+      (element) => element.textContent,
+    ),
+    ['workspace (1)', 'unique', 'workspace (2)'],
+  );
+
+  await act(async () => {
+    fx.emitDelta(
+      createFakeSnapshot({
+        rows: [rows[0]],
+        roots: [rows[0]],
+        treeVersion: 2,
+      }),
+    );
+  });
+  assert.deepEqual(
+    Array.from(container.querySelectorAll('[data-mille-row-name]')).map(
+      (element) => element.textContent,
+    ),
+    ['workspace'],
+  );
+
+  await act(async () => {
+    root.unmount();
+  });
+  container.remove();
+});

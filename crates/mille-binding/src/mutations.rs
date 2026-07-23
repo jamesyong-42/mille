@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 
 use napi_derive::napi;
 
-use mille_core::{Entry, EntryId, EntryKind, FxError, StoreSnapshot};
+use mille_core::{Entry, EntryId, EntryKind, EntryStore, FxError};
 
 /// Options for `FileExplorer.delete`. Mirrors api.d.ts `DeleteOptions`.
 /// `trash` is accepted but stubbed until PLAN 13.x adds per-platform trash.
@@ -25,57 +25,11 @@ pub struct DeleteOptionsJs {
     pub recursive: Option<bool>,
 }
 
-/// Walk parent_ids up from `id` to a root, then join the matching root
-/// PathBuf with the collected names (in forward order) to rebuild an
-/// absolute filesystem path. Returns None if the chain dangles or if the
-/// root's name doesn't match any of the explorer's configured roots.
-///
-/// Ambiguous resolution (multiple roots sharing a basename) takes
-/// first-match. v0.1 doesn't store absolute paths per entry; Phase 2's
-/// path-index rework will make this O(1) instead of O(depth).
-pub(crate) fn resolve_entry_path(
-    snap: &StoreSnapshot,
-    roots: &[PathBuf],
-    id: EntryId,
-) -> Option<PathBuf> {
-    // Walk up, collecting names. Cap hops to defend against malformed chains.
-    const MAX_DEPTH: usize = 256;
-    let mut names: Vec<String> = Vec::new();
-    let mut cur_id = id;
-    let mut root_entry_name: Option<String> = None;
-    for _ in 0..MAX_DEPTH {
-        let entry = snap.get(cur_id)?.as_ref();
-        match entry.parent_id {
-            None => {
-                // Hit a root. Remember its name for root-path matching.
-                root_entry_name = Some(entry.name.clone());
-                break;
-            }
-            Some(parent) => {
-                names.push(entry.name.clone());
-                cur_id = parent;
-            }
-        }
-    }
-    let root_name = root_entry_name?;
-
-    // Find the configured PathBuf root whose basename matches.
-    let root_path = roots
-        .iter()
-        .find(|r| {
-            r.file_name()
-                .and_then(|n| n.to_str())
-                .map(|s| s == root_name)
-                .unwrap_or(false)
-        })
-        .cloned()?;
-
-    // Names were collected child-first; reverse to root-first to join.
-    let mut out = root_path;
-    for name in names.into_iter().rev() {
-        out.push(name);
-    }
-    Some(out)
+/// Resolve an entry identity through the store's exact bidirectional path
+/// index. Name-based reconstruction is incorrect when workspace roots share a
+/// basename and becomes stale if display aliases are introduced.
+pub(crate) fn resolve_entry_path(store: &EntryStore, id: EntryId) -> Option<PathBuf> {
+    store.path_for_id(id)
 }
 
 /// Build an mille-core `Entry` by stat'ing `path`. The returned Entry has

@@ -130,7 +130,10 @@ export interface Entry {
 // ─── Explorer construction ─────────────────────────────────────────────────
 
 export interface ExplorerOptions {
-  /** Workspace roots. Multiple roots render as siblings under a synthetic parent. */
+  /**
+   * Workspace roots in display order. Duplicate filesystem basenames are
+   * supported and retain distinct path identities.
+   */
   readonly roots: readonly Uri[];
 
   /** Parse .gitignore/.ignore/.rgignore and flag matching entries. Default: true. */

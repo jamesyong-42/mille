@@ -739,6 +739,23 @@ engine/settings scope of Phase 3.1; UI controls remain product-integration work.
 - Keep roots visually distinct and preserve state per root.
 - Handle missing, disconnected, and permission-denied roots.
 
+Duplicate-root identity result (2026-07-23): entries now have an exact
+identity-to-path index paired with the existing path-to-identity index. Both
+directions share one immutable path allocation, so duplicate-basename roots no
+longer route reads, creates, copies, deletes, lazy prefetch, or URI lookup
+through the first matching basename. Insert, leaf/subtree removal, and
+directory rename update both directions under the same writer lock. Local and
+host/port tests create two roots named `workspace`, verify distinct absolute
+URI resolution and file contents, prefetch the second root, and prove a create
+lands only there. `FileTree` keeps the real basename for commands and persisted
+paths but renders duplicate roots as stable configured-order labels
+(`workspace (1)`, `workspace (2)`), leaving unique names unchanged. The
+500-sample end-to-end gate alternated bounded lists between both roots at
+0.077 ms median, 0.129 ms p95, and 0.555 ms maximum against a 5 ms p95 budget;
+the direct medium-fixture identity lookup measured 43.562 ns. Dynamic
+add/remove/reorder, custom display aliases, cross-root operation policy, and
+unavailable-root states remain.
+
 #### 3.3 Persist navigation state
 
 - Expansion ids/paths per workspace.

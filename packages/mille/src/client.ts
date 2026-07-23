@@ -44,9 +44,7 @@ function joinPosix(root: string, ...parts: string[]): string {
   return joinPath(root, ...parts);
 }
 
-// Re-export so the typescript complains about unused are silenced; we
-// really do use `basename` + `joinPosix` above. `pathSep` kept importable
-// for future Windows-specific tweaks.
+// `pathSep` is kept importable for future Windows-specific tweaks.
 void pathSep;
 
 // ─── Local type mirrors (subset of api.d.ts) ──────────────────────────
@@ -184,6 +182,7 @@ export type EventName =
 type NativeFx = {
   readonly capabilities: number;
   getTreeVersion(): number;
+  pathForId?(id: number): string | null;
   resolvePath?(path: string): Promise<number | null>;
   getSnapshot(): NativeSnapshot;
   takePendingChanges(): NativeChangeSet;
@@ -485,6 +484,13 @@ export class FileExplorer {
    */
   async getByUri(uri: Uri): Promise<Entry | null> {
     if (uri.scheme !== 'file') return null;
+    const nativeResolve = this.nativeFx.resolvePath;
+    if (typeof nativeResolve === 'function') {
+      const id = await nativeResolve.call(this.nativeFx, uri.path);
+      if (id === null || id === undefined) return null;
+      return (this.nativeFx.getSnapshot().getById(id) as Entry | null) ?? null;
+    }
+
     // Find the configured root whose path is a prefix of `uri.path`.
     let match: { root: string; relative: string } | null = null;
     for (const rp of this.rootPaths) {
@@ -685,16 +691,20 @@ export class FileExplorer {
   }
 
   /**
-   * Walk parent pointers from `id` up to a root, collecting names; join
-   * against the matching configured root path. Returns null when the id
-   * is unknown or the chain doesn't terminate at a root whose basename
-   * matches one of the configured roots.
+   * Resolve an id through the native identity-to-path index. The parent-walk
+   * implementation below remains only for compatibility with older native
+   * artifacts that do not expose the indexed method.
    *
    * Mirrors the native `mutations::resolve_entry_path`. Lives on the TS
    * side so `prefetch` / `list` (both TS-only API surface) don't need a
    * dedicated NAPI round-trip to resolve the path.
    */
   private pathOf(id: EntryId): string | null {
+    const nativePathForId = this.nativeFx.pathForId;
+    if (typeof nativePathForId === 'function') {
+      return nativePathForId.call(this.nativeFx, id) ?? null;
+    }
+
     const snap = this.getSnapshot();
     const names: string[] = [];
     // Cap hops at 1024 — matches the malformed-chain defense in the
@@ -718,8 +728,13 @@ export class FileExplorer {
       cur = entry.parentId;
     }
     if (rootName === null) return null;
-    // Find the configured root path whose basename matches.
-    const rootPath = this.rootPaths.find((p) => basename(p) === rootName);
+    // Compatibility fallback for pre-indexed native artifacts. Root order is
+    // configured order, avoiding first-basename routing for duplicate names.
+    const rootIndex = snap.roots().findIndex((root) => root.id === cur);
+    const rootPath =
+      rootIndex >= 0
+        ? this.rootPaths[rootIndex]
+        : this.rootPaths.find((path) => basename(path) === rootName);
     if (rootPath === undefined) return null;
     // Names were child-first; join root-first.
     names.reverse();

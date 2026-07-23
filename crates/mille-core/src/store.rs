@@ -25,7 +25,8 @@ use crate::sort::SiblingOrder;
 
 pub struct EntryStore {
     inner: ArcSwap<StoreSnapshot>,
-    path_to_id: DashMap<PathBuf, EntryId>,
+    path_to_id: DashMap<Arc<Path>, EntryId>,
+    id_to_path: DashMap<EntryId, Arc<Path>>,
     id_counter: AtomicU64,
     write_lock: Mutex<()>,
     // Accumulated structural changes since the last take_pending_changes().
@@ -75,6 +76,7 @@ impl EntryStore {
                 file_nesting,
             ))),
             path_to_id: DashMap::new(),
+            id_to_path: DashMap::new(),
             id_counter: AtomicU64::new(0),
             write_lock: Mutex::new(()),
             pending_changes: Mutex::new(ChangeSet::default()),
@@ -100,14 +102,25 @@ impl EntryStore {
         self.get_by_id(id)
     }
 
+    /// Resolve an entry identity to its exact indexed filesystem path.
+    ///
+    /// This is deliberately independent of entry names: multiple configured
+    /// roots may share the same basename, and display labels may differ from
+    /// their on-disk names.
+    pub fn path_for_id(&self, id: EntryId) -> Option<PathBuf> {
+        self.id_to_path
+            .get(&id)
+            .map(|path| path.value().to_path_buf())
+    }
+
     /// Snapshot the path index below `root`. The returned paths include
     /// `root` itself when it is known. Watch reconciliation uses this to
     /// compare a bounded disk walk with the authoritative in-memory view.
     pub fn paths_under(&self, root: &Path) -> Vec<(PathBuf, EntryId)> {
         self.path_to_id
             .iter()
-            .filter(|kv| kv.key().as_path() == root || kv.key().starts_with(root))
-            .map(|kv| (kv.key().clone(), *kv.value()))
+            .filter(|kv| kv.key().as_ref() == root || kv.key().starts_with(root))
+            .map(|kv| (kv.key().to_path_buf(), *kv.value()))
             .collect()
     }
 
@@ -214,7 +227,7 @@ impl EntryStore {
         // Watch callbacks and an in-flight walker can discover the same path
         // concurrently. Path identity wins: returning the existing id keeps
         // insertion idempotent and prevents duplicate rows/self-echoes.
-        if let Some(existing) = self.path_to_id.get(&path) {
+        if let Some(existing) = self.path_to_id.get(path.as_path()) {
             return Ok(*existing.value());
         }
         let id = EntryId::alloc_from(&self.id_counter)?;
@@ -289,7 +302,9 @@ impl EntryStore {
         let new_tree_version = next.tree_version;
         self.inner.store(Arc::new(next));
 
-        self.path_to_id.insert(path, id);
+        let indexed_path: Arc<Path> = Arc::from(path.into_boxed_path());
+        self.path_to_id.insert(Arc::clone(&indexed_path), id);
+        self.id_to_path.insert(id, indexed_path);
 
         // Record the mutation in the pending ChangeSet for Phase 7 delta diff.
         self.record_mutation(prev_tree_version, new_tree_version, |cs| {
@@ -381,14 +396,8 @@ impl EntryStore {
         let new_tree_version = next.tree_version;
         self.inner.store(Arc::new(next));
 
-        // O(n) in path count — acceptable for Phase 1; reverse index lands in Phase 2.
-        let path_to_remove = self
-            .path_to_id
-            .iter()
-            .find(|kv| *kv.value() == id)
-            .map(|kv| kv.key().clone());
-        if let Some(p) = path_to_remove {
-            self.path_to_id.remove(&p);
+        if let Some((_, path)) = self.id_to_path.remove(&id) {
+            self.path_to_id.remove(path.as_ref());
         }
 
         // Record the mutation in the pending ChangeSet for Phase 7 delta diff.
@@ -492,10 +501,13 @@ impl EntryStore {
             .path_to_id
             .iter()
             .filter(|kv| id_set.contains(kv.value()))
-            .map(|kv| kv.key().clone())
+            .map(|kv| kv.key().to_path_buf())
             .collect();
         for path in paths_to_remove {
-            self.path_to_id.remove(&path);
+            self.path_to_id.remove(path.as_path());
+        }
+        for entry_id in &ids {
+            self.id_to_path.remove(entry_id);
         }
 
         self.record_mutation(prev_tree_version, new_tree_version, |cs| {
@@ -522,10 +534,7 @@ impl EntryStore {
             .ok_or_else(|| FxError::InvalidInput(format!("entry {:?} not found", id)))?;
 
         let old_path = self
-            .path_to_id
-            .iter()
-            .find(|kv| *kv.value() == id)
-            .map(|kv| kv.key().clone())
+            .path_for_id(id)
             .ok_or_else(|| FxError::InternalBug(format!("entry {:?} has no indexed path", id)))?;
         if old_path.parent() != new_path.parent() {
             return Err(FxError::Unsupported(
@@ -542,12 +551,12 @@ impl EntryStore {
             self.path_to_id
                 .iter()
                 .filter_map(|kv| {
-                    let path = kv.key();
-                    if path.as_path() != old_path && !path.starts_with(&old_path) {
+                    let path = kv.key().as_ref();
+                    if path != old_path && !path.starts_with(&old_path) {
                         return None;
                     }
                     let relative = path.strip_prefix(&old_path).ok()?;
-                    Some((path.clone(), *kv.value(), new_path.join(relative)))
+                    Some((path.to_path_buf(), *kv.value(), new_path.join(relative)))
                 })
                 .collect()
         } else {
@@ -597,10 +606,12 @@ impl EntryStore {
         // ordering. Remove the complete old prefix before installing the new
         // one so no stale descendant aliases survive a directory rename.
         for (old, _, _) in &path_updates {
-            self.path_to_id.remove(old);
+            self.path_to_id.remove(old.as_path());
         }
         for (_, entry_id, new) in path_updates {
-            self.path_to_id.insert(new, entry_id);
+            let indexed_path: Arc<Path> = Arc::from(new.into_boxed_path());
+            self.path_to_id.insert(Arc::clone(&indexed_path), entry_id);
+            self.id_to_path.insert(entry_id, indexed_path);
         }
 
         // Same-parent rename: parent unchanged, so reparented_ids stays empty.
@@ -710,7 +721,7 @@ impl EntryStore {
                 let Some(existing) = next.entries.get(&id) else {
                     continue;
                 };
-                let excluded = classify_excluded(path_and_id.key(), existing);
+                let excluded = classify_excluded(path_and_id.key().as_ref(), existing);
                 if existing.is_excluded == excluded {
                     continue;
                 }
@@ -860,6 +871,7 @@ mod tests {
         let id = s.insert("/a".into(), leaf("a", None)).unwrap();
         assert!(s.get_by_id(id).is_some());
         assert_eq!(s.get_by_path(Path::new("/a")).map(|e| e.id), Some(id));
+        assert_eq!(s.path_for_id(id), Some(PathBuf::from("/a")));
     }
 
     #[test]
@@ -888,6 +900,7 @@ mod tests {
         assert!(s.remove(id).is_none());
         assert!(s.get_by_id(id).is_none());
         assert!(s.get_by_path(Path::new("/a")).is_none());
+        assert_eq!(s.path_for_id(id), None);
     }
 
     #[test]
@@ -897,6 +910,7 @@ mod tests {
         s.rename(id, "/b".into()).unwrap();
         assert!(s.get_by_path(Path::new("/a")).is_none());
         assert_eq!(s.get_by_path(Path::new("/b")).map(|e| e.id), Some(id));
+        assert_eq!(s.path_for_id(id), Some(PathBuf::from("/b")));
     }
 
     #[test]
@@ -920,6 +934,8 @@ mod tests {
             s.get_by_path(Path::new("/r/e/child.txt")).map(|e| e.id),
             Some(child)
         );
+        assert_eq!(s.path_for_id(directory), Some(PathBuf::from("/r/e")));
+        assert_eq!(s.path_for_id(child), Some(PathBuf::from("/r/e/child.txt")));
         assert_eq!(s.get_by_id(directory).unwrap().name, "e");
         assert_eq!(s.get_by_id(child).unwrap().parent_id, Some(directory));
     }
@@ -1566,6 +1582,8 @@ mod tests {
         assert!(s.get_by_id(dir_id).is_none());
         assert!(s.get_by_id(leaf_id).is_none());
         assert!(s.get_by_path(Path::new("/r/d/a")).is_none());
+        assert_eq!(s.path_for_id(dir_id), None);
+        assert_eq!(s.path_for_id(leaf_id), None);
         assert!(s.snapshot().children_of(root).is_empty());
         let cs = s.take_pending_changes();
         assert!(cs.changed_ids.contains(&dir_id));

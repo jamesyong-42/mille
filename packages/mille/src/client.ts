@@ -246,6 +246,8 @@ type NativeChangeSet = {
 type NativeSnapshot = {
   readonly treeVersion: number;
   readonly decorationVersion: number;
+  readonly showHiddenFiles: boolean;
+  readonly showIgnoredFiles: boolean;
   roots(): Entry[];
   getById(id: number): Entry | null;
   directChildCount(id: number): number | null;
@@ -363,7 +365,10 @@ export class FileExplorer {
       nativeOpts.walkerConcurrency = options.walkerConcurrency;
     if (options.watchDebounceMs !== undefined) nativeOpts.watchDebounceMs = options.watchDebounceMs;
     if (options.compactFolders !== undefined) nativeOpts.compactFolders = options.compactFolders;
-    if (options.excludeGlobs !== undefined) nativeOpts.excludeGlobs = [...options.excludeGlobs];
+    const excludeGlobs = [
+      ...new Set([...(options.excludeGlobs ?? []), ...(options.settings?.excludeGlobs ?? [])]),
+    ];
+    if (excludeGlobs.length > 0) nativeOpts.excludeGlobs = excludeGlobs;
     if (options.snapshotPath !== undefined) nativeOpts.snapshotPath = options.snapshotPath;
     if (options.maxCachedEntries !== undefined)
       nativeOpts.maxCachedEntries = options.maxCachedEntries;
@@ -371,6 +376,11 @@ export class FileExplorer {
       nativeOpts.sortBy = options.settings.sortBy;
       nativeOpts.caseSensitive = options.settings.caseSensitive;
       nativeOpts.foldersOnTop = options.settings.foldersOnTop;
+      nativeOpts.showHiddenFiles = options.settings.showHiddenFiles;
+      nativeOpts.showIgnoredFiles = options.settings.showIgnoredFiles;
+      if (options.compactFolders === undefined) {
+        nativeOpts.compactFolders = options.settings.compactFolders;
+      }
     }
     // `initialWalk` is consumed by the host wrapper (host.ts), not by the
     // native binding — don't pass it through.
@@ -916,6 +926,14 @@ export class MirrorSnapshot {
   /** Local snapshots hydrate atomically, so their projection tracks the tree. */
   get projectionVersion(): number {
     return this.treeVersion;
+  }
+
+  get showHiddenFiles(): boolean {
+    return this.inner.showHiddenFiles;
+  }
+
+  get showIgnoredFiles(): boolean {
+    return this.inner.showIgnoredFiles;
   }
 
   roots(): readonly Entry[] {

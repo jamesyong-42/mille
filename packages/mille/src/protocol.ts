@@ -27,8 +27,8 @@ export const PROTOCOL_VERSION = 1;
  * Common envelope for every message on the wire.
  */
 export interface Frame<T = unknown> {
-  v: number;       // protocol version
-  type: string;    // discriminator
+  v: number; // protocol version
+  type: string; // discriminator
   body: T;
 }
 
@@ -37,8 +37,8 @@ export interface Frame<T = unknown> {
 export interface HandshakeMsg {
   type: 'handshake';
   body: {
-    version: number;       // the client's PROTOCOL_VERSION
-    clientId: string;      // opaque label, logged by the host
+    version: number; // the client's PROTOCOL_VERSION
+    clientId: string; // opaque label, logged by the host
     options: {
       prefetchRows?: number;
       mirrorCap?: number;
@@ -51,7 +51,7 @@ export interface HandshakeMsg {
 export interface SetExpandedMsg {
   type: 'setExpanded';
   body: {
-    add: number[];         // EntryIds to add to the expansion set
+    add: number[]; // EntryIds to add to the expansion set
     remove: number[];
   };
 }
@@ -69,15 +69,7 @@ export interface MutateMsg {
   type: 'mutate';
   body: {
     reqId: number;
-    op:
-      | 'create'
-      | 'rename'
-      | 'move'
-      | 'delete'
-      | 'copy'
-      | 'writeFile'
-      | 'readFile'
-      | 'readText';
+    op: 'create' | 'rename' | 'move' | 'delete' | 'copy' | 'writeFile' | 'readFile' | 'readText';
     args: Record<string, unknown>;
   };
 }
@@ -161,16 +153,20 @@ export type ClientToHostMessage =
 export interface SnapshotMsg {
   type: 'snapshot';
   body: {
-    version: number;                             // tree version
+    version: number; // tree version
     roots: number[];
     /** Bincode-compatible root ClientEntry records. */
     mirror?: ArrayBuffer;
     /** Legacy JSON fallback accepted during protocol-v1 migration. */
     entriesJson?: string;
-    directChildCounts: Record<string, number>;   // keys are stringified ids
+    directChildCounts: Record<string, number>; // keys are stringified ids
     /** Reserved native viewport-row payload (see SPEC §4.8). */
     viewport?: ArrayBuffer;
     visibleCount: number;
+    visibility?: {
+      showHiddenFiles: boolean;
+      showIgnoredFiles: boolean;
+    };
   };
 }
 

@@ -88,6 +88,9 @@ export interface MirrorWorking {
   projectionVersion: number;
   /** Current decoration version (Phase 9). */
   decorationVersion: number;
+  /** Resolved host projection policy. */
+  showHiddenFiles: boolean;
+  showIgnoredFiles: boolean;
   /**
    * Phase A1 — merged decoration arrays received from the host, keyed
    * by entry id. Each entry is the wire-shape `DecorationOnWire[]`
@@ -123,6 +126,8 @@ export function createMirror(): MirrorWorking {
     treeVersion: 0,
     projectionVersion: 0,
     decorationVersion: 0,
+    showHiddenFiles: true,
+    showIgnoredFiles: true,
     decorations: new Map(),
     volatileSubtrees: new Set(),
     lruTouch: new Map(),
@@ -149,6 +154,8 @@ export function cloneMirror(m: MirrorWorking): MirrorWorking {
     treeVersion: m.treeVersion,
     projectionVersion: m.projectionVersion,
     decorationVersion: m.decorationVersion,
+    showHiddenFiles: m.showHiddenFiles,
+    showIgnoredFiles: m.showIgnoredFiles,
     decorations: new Map(m.decorations),
     volatileSubtrees: new Set(m.volatileSubtrees),
     lruTouch: new Map(m.lruTouch),

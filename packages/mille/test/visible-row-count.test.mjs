@@ -103,6 +103,52 @@ test('visibleRowCount: Project view shows ignored + hidden; OS noise optional', 
   assert.equal(vcAll.known, 5);
 });
 
+test('visibility settings stay consistent across rows, ids, count, and index', () => {
+  const m = createMirror();
+  m.showHiddenFiles = false;
+  m.showIgnoredFiles = true;
+  seedDir(m, 1, 'root', null, 4);
+  seedFile(m, 10, 'visible.txt', 1);
+  seedFile(m, 11, '.env', 1, { isHidden: true });
+  seedFile(m, 12, 'target', 1, { isIgnored: true, kind: 1 });
+  seedFile(m, 13, '.DS_Store', 1, { isHidden: true });
+  m.children.set(1, [10, 11, 12, 13]);
+  m.roots.push(1);
+  const snap = new ClientMirrorSnapshot(m);
+  const expanded = new Set([1]);
+
+  assert.deepEqual(
+    snap.visibleRows({ expanded, offset: 0, limit: 100 }).map((row) => row.id),
+    [1, 12, 10],
+  );
+  assert.deepEqual(snap.visibleRowIds({ expanded, offset: 0, limit: 100 }), [1, 12, 10]);
+  assert.equal(snap.visibleRowCount(expanded).known, 3);
+  assert.equal(snap.visibleRowIndex(12, expanded), 1);
+  assert.equal(snap.visibleRowIndex(11, expanded), null);
+  assert.equal(snap.hasChildren(1), true);
+
+  assert.deepEqual(
+    snap.visibleRowIds({ expanded, offset: 0, limit: 100, includeIgnored: true }),
+    [1, 12, 13, 11, 10],
+  );
+});
+
+test('visibility settings remove empty disclosure chevrons for known children', () => {
+  const m = createMirror();
+  m.showHiddenFiles = false;
+  seedDir(m, 1, 'root', null, 1);
+  seedFile(m, 10, '.env', 1, { isHidden: true });
+  m.children.set(1, [10]);
+  m.roots.push(1);
+  const snap = new ClientMirrorSnapshot(m);
+
+  assert.equal(snap.hasChildren(1), false);
+  assert.equal(
+    snap.visibleRows({ expanded: new Set(), offset: 0, limit: 10 })[0].hasChildren,
+    false,
+  );
+});
+
 test('visibleRowCount: reducer pendingExpansions folds into return', () => {
   const m = createMirror();
   seedDir(m, 1, 'root', null, 1);

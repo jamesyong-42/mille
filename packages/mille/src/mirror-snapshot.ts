@@ -123,17 +123,21 @@ export function createSortedChildrenLookup(
  *   - **Show** project dotfiles (.gitignore, .env, …).
  *   - `includeIgnored=true` additionally reveals OS/VCS noise.
  */
-function isVisibleEntry(e: ClientEntry, includeIgnored: boolean): boolean {
+function isVisibleEntry(
+  e: ClientEntry,
+  includeIgnored: boolean,
+  showHiddenFiles: boolean,
+  showIgnoredFiles: boolean,
+): boolean {
+  if (includeIgnored) return true;
   const n = e.name;
   // OS + VCS noise — hidden unless the caller asks for everything.
   if (n === '.DS_Store' || n === 'Thumbs.db' || n === 'desktop.ini') {
-    return includeIgnored;
+    return false;
   }
-  if (n === '.git') return includeIgnored;
+  if (n === '.git') return false;
 
-  // Project view shows ignored + hidden entries (excluded folders,
-  // config dotfiles, build artifacts). Styling is the UI's job.
-  return true;
+  return (showHiddenFiles || !e.isHidden) && (showIgnoredFiles || !e.isIgnored);
 }
 
 /**
@@ -175,6 +179,14 @@ export class ClientMirrorSnapshot {
     return this.state.decorationVersion;
   }
 
+  get showHiddenFiles(): boolean {
+    return this.state.showHiddenFiles;
+  }
+
+  get showIgnoredFiles(): boolean {
+    return this.state.showIgnoredFiles;
+  }
+
   roots(): readonly Entry[] {
     const out: Entry[] = [];
     for (const id of this.state.roots) {
@@ -195,6 +207,10 @@ export class ClientMirrorSnapshot {
   }
 
   hasChildren(id: EntryId): boolean {
+    return this.hasChildrenForProjection(id, false);
+  }
+
+  private hasChildrenForProjection(id: EntryId, includeIgnored: boolean): boolean {
     // With lazy expansion (v0.2 B2), directChildCount is `null` for
     // folders the walker hasn't visited yet. Returning `false` here
     // would hide the disclosure chevron, so the user can't expand
@@ -202,8 +218,23 @@ export class ClientMirrorSnapshot {
     // never fires — deadlock. For unwalked entries, fall back to
     // expandable kinds: real directories AND symlink-to-dir (pnpm /
     // npm workspace links — JetBrains shows these with a chevron).
+    const knownChildren = this.state.children.get(id);
+    if (knownChildren !== undefined) {
+      return Array.from(knownChildren).some((childId) => {
+        const child = this.state.byId.get(childId);
+        return (
+          child === undefined ||
+          isVisibleEntry(
+            child,
+            includeIgnored,
+            this.state.showHiddenFiles,
+            this.state.showIgnoredFiles,
+          )
+        );
+      });
+    }
     const count = this.state.directChildCounts.get(id);
-    if (count !== undefined) return count > 0;
+    if (count !== undefined && count === 0) return false;
     const entry = this.state.byId.get(id);
     return entry !== undefined && isExpandableEntry(entry);
   }
@@ -280,15 +311,23 @@ export class ClientMirrorSnapshot {
         if (out.length >= limit) return out;
         continue;
       }
-      if (!isVisibleEntry(entry, includeIgnored)) continue; // no emit, no descend
+      if (
+        !isVisibleEntry(
+          entry,
+          includeIgnored,
+          this.state.showHiddenFiles,
+          this.state.showIgnoredFiles,
+        )
+      ) {
+        continue;
+      }
 
       if (skipped < options.offset) {
         skipped++;
       } else {
         // Same lazy-friendly semantic as hasChildren(id): unvisited
         // dirs / symlink-to-dir get a chevron so expand can fire.
-        const cnt = this.state.directChildCounts.get(frame.id);
-        const hasChildren = cnt === undefined ? isExpandableEntry(entry) : cnt > 0;
+        const hasChildren = this.hasChildrenForProjection(frame.id, includeIgnored);
         const base = clientEntryToEntry(entry);
         const row: VisibleRow = {
           ...base,
@@ -335,7 +374,17 @@ export class ClientMirrorSnapshot {
     while (stack.length > 0) {
       const id = stack.pop()!;
       const entry = this.state.byId.get(id);
-      if (entry !== undefined && !isVisibleEntry(entry, includeIgnored)) continue;
+      if (
+        entry !== undefined &&
+        !isVisibleEntry(
+          entry,
+          includeIgnored,
+          this.state.showHiddenFiles,
+          this.state.showIgnoredFiles,
+        )
+      ) {
+        continue;
+      }
 
       if (skipped < options.offset) {
         skipped += 1;
@@ -377,7 +426,16 @@ export class ClientMirrorSnapshot {
         index += 1;
         continue;
       }
-      if (!isVisibleEntry(entry, includeIgnored)) continue;
+      if (
+        !isVisibleEntry(
+          entry,
+          includeIgnored,
+          this.state.showHiddenFiles,
+          this.state.showIgnoredFiles,
+        )
+      ) {
+        continue;
+      }
       if (id === target) return index;
       index += 1;
 
@@ -432,7 +490,16 @@ export class ClientMirrorSnapshot {
       const id = stack.pop()!;
       const entry = this.state.byId.get(id);
       if (entry === undefined) continue;
-      if (!isVisibleEntry(entry, includeIgnored)) continue;
+      if (
+        !isVisibleEntry(
+          entry,
+          includeIgnored,
+          this.state.showHiddenFiles,
+          this.state.showIgnoredFiles,
+        )
+      ) {
+        continue;
+      }
       known++;
 
       if (expanded.has(id)) {

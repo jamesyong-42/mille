@@ -52,6 +52,16 @@ impl MirrorSnapshot {
         0
     }
 
+    #[napi(getter, js_name = "showHiddenFiles")]
+    pub fn show_hidden_files(&self) -> bool {
+        self.inner.visibility().show_hidden_files
+    }
+
+    #[napi(getter, js_name = "showIgnoredFiles")]
+    pub fn show_ignored_files(&self) -> bool {
+        self.inner.visibility().show_ignored_files
+    }
+
     /// Workspace roots in the order they were registered.
     #[napi]
     pub fn roots(&self) -> Vec<EntryJs> {

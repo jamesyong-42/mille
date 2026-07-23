@@ -21,7 +21,34 @@ use crate::entry::{Entry, EntryId, EntryKind};
 /// parent_id cycles (self-reference, etc.). Real trees are ~10-15 deep.
 pub(crate) const MAX_ANCESTOR_WALK: usize = 128;
 
-#[derive(Clone, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct VisibilityPolicy {
+    pub show_hidden_files: bool,
+    pub show_ignored_files: bool,
+}
+
+impl VisibilityPolicy {
+    pub fn project_view() -> Self {
+        Self {
+            show_hidden_files: true,
+            show_ignored_files: true,
+        }
+    }
+
+    pub fn includes(self, entry: &Entry) -> bool {
+        if is_os_or_vcs_noise(&entry.name) {
+            return false;
+        }
+        (self.show_hidden_files || !entry.is_hidden)
+            && (self.show_ignored_files || !entry.is_ignored)
+    }
+}
+
+fn is_os_or_vcs_noise(name: &str) -> bool {
+    matches!(name, ".DS_Store" | "Thumbs.db" | "desktop.ini" | ".git")
+}
+
+#[derive(Clone)]
 pub struct StoreSnapshot {
     pub(crate) entries: BTreeMap<EntryId, Arc<Entry>>,
     pub(crate) children: BTreeMap<EntryId, SmallVec<[EntryId; 8]>>,
@@ -33,11 +60,42 @@ pub struct StoreSnapshot {
     pub(crate) descendant_visible_counts: BTreeMap<EntryId, u32>,
     /// Sum of file sizes in the subtree (dirs contribute 0; files their `size`).
     pub(crate) descendant_total_sizes: BTreeMap<EntryId, u64>,
+    pub(crate) visibility: VisibilityPolicy,
+}
+
+impl Default for StoreSnapshot {
+    fn default() -> Self {
+        Self {
+            entries: BTreeMap::new(),
+            children: BTreeMap::new(),
+            roots: SmallVec::new(),
+            tree_version: 0,
+            direct_child_counts: BTreeMap::new(),
+            descendant_visible_counts: BTreeMap::new(),
+            descendant_total_sizes: BTreeMap::new(),
+            visibility: VisibilityPolicy::default(),
+        }
+    }
 }
 
 impl StoreSnapshot {
     pub fn empty() -> Self {
         Self::default()
+    }
+
+    pub fn empty_with_visibility(visibility: VisibilityPolicy) -> Self {
+        Self {
+            visibility,
+            ..Self::default()
+        }
+    }
+
+    pub fn visibility(&self) -> VisibilityPolicy {
+        self.visibility
+    }
+
+    pub(crate) fn entry_counts_visible(&self, entry: &Entry) -> bool {
+        self.visibility.includes(entry)
     }
 
     pub fn entry_count(&self) -> usize {
@@ -66,7 +124,11 @@ impl StoreSnapshot {
 
     pub fn has_children(&self, id: EntryId) -> bool {
         if let Some(kids) = self.children.get(&id) {
-            return !kids.is_empty();
+            return kids.iter().any(|child_id| {
+                self.entries
+                    .get(child_id)
+                    .is_some_and(|entry| self.entry_counts_visible(entry))
+            });
         }
         // Unwalked: show a chevron for real directories and for
         // symlink-to-dir (pnpm/npm workspace links), matching the
@@ -74,6 +136,19 @@ impl StoreSnapshot {
         match self.entries.get(&id) {
             Some(e) => e.kind == EntryKind::Directory || e.symlink_target_is_dir == Some(true),
             None => false,
+        }
+    }
+
+    fn has_visible_children(&self, id: EntryId, include_ignored: bool) -> bool {
+        match self.children.get(&id) {
+            Some(kids) => kids.iter().any(|child_id| {
+                self.entries
+                    .get(child_id)
+                    .is_some_and(|entry| include_ignored || self.entry_counts_visible(entry))
+            }),
+            None => self.entries.get(&id).is_some_and(|entry| {
+                entry.kind == EntryKind::Directory || entry.symlink_target_is_dir == Some(true)
+            }),
         }
     }
 
@@ -97,12 +172,6 @@ impl StoreSnapshot {
     pub fn subtree_total_size(&self, id: EntryId) -> u64 {
         self.descendant_total_sizes.get(&id).copied().unwrap_or(0)
     }
-}
-
-/// Whether an entry contributes to the visible-row count (SPEC §4.9.2: ignored
-/// and hidden entries are filtered out by default).
-pub(crate) fn entry_counts_visible(entry: &Entry) -> bool {
-    !entry.is_ignored && !entry.is_hidden
 }
 
 // ============================================================================
@@ -177,7 +246,7 @@ impl StoreSnapshot {
             let Some(entry) = self.entries.get(&id) else {
                 continue;
             };
-            let visible = include_ignored || entry_counts_visible(entry);
+            let visible = include_ignored || self.entry_counts_visible(entry);
             if visible {
                 *known = known.saturating_add(1);
                 // Only descend when the parent itself would render — otherwise
@@ -224,7 +293,7 @@ impl StoreSnapshot {
             let Some(entry) = self.entries.get(&id) else {
                 continue;
             };
-            let visible = include_ignored || entry_counts_visible(entry);
+            let visible = include_ignored || self.entry_counts_visible(entry);
             if !visible {
                 continue;
             }
@@ -269,7 +338,7 @@ impl StoreSnapshot {
             let Some(entry) = self.entries.get(&id) else {
                 continue;
             };
-            let visible = include_ignored || entry_counts_visible(entry);
+            let visible = include_ignored || self.entry_counts_visible(entry);
             if !visible {
                 continue;
             }
@@ -326,7 +395,7 @@ impl StoreSnapshot {
             let Some(entry) = self.entries.get(&id) else {
                 continue;
             };
-            let visible = query.include_ignored || entry_counts_visible(entry);
+            let visible = query.include_ignored || self.entry_counts_visible(entry);
             if visible {
                 if skipped < query.offset {
                     skipped += 1;
@@ -369,19 +438,12 @@ impl StoreSnapshot {
             let Some(entry) = self.entries.get(&id) else {
                 continue;
             };
-            let visible = query.include_ignored || entry_counts_visible(entry);
+            let visible = query.include_ignored || self.entry_counts_visible(entry);
             if visible {
                 if skipped < query.offset {
                     skipped += 1;
                 } else {
-                    let kids = self.children.get(&id);
-                    let has_children = match kids {
-                        Some(v) => !v.is_empty(),
-                        None => {
-                            entry.kind == EntryKind::Directory
-                                || entry.symlink_target_is_dir == Some(true)
-                        }
-                    };
+                    let has_children = self.has_visible_children(id, query.include_ignored);
                     out.push(VisibleRowOut {
                         id,
                         depth,
@@ -469,7 +531,7 @@ mod tests {
         hidden: bool,
     ) {
         let entry = mk_entry(id, parent, name, kind, size, ignored, hidden);
-        let visible = entry_counts_visible(&entry);
+        let visible = VisibilityPolicy::default().includes(&entry);
         snap.entries.insert(id, Arc::new(entry));
         match parent {
             None => snap.roots.push(id),
@@ -843,6 +905,148 @@ mod tests {
 
         assert_eq!(snap.visible_row_count(&expanded, false).known, 2);
         assert_eq!(snap.visible_row_count(&expanded, true).known, 3);
+    }
+
+    #[test]
+    fn visibility_policy_applies_to_every_projection_query() {
+        let mut snap = StoreSnapshot::empty_with_visibility(VisibilityPolicy {
+            show_hidden_files: false,
+            show_ignored_files: true,
+        });
+        let root = EntryId(1);
+        let visible = EntryId(2);
+        let hidden = EntryId(3);
+        let ignored = EntryId(4);
+        let noise = EntryId(5);
+        seed(
+            &mut snap,
+            root,
+            None,
+            "root",
+            EntryKind::Directory,
+            0,
+            false,
+            false,
+        );
+        seed(
+            &mut snap,
+            visible,
+            Some(root),
+            "visible.txt",
+            EntryKind::File,
+            0,
+            false,
+            false,
+        );
+        seed(
+            &mut snap,
+            hidden,
+            Some(root),
+            ".env",
+            EntryKind::File,
+            0,
+            false,
+            true,
+        );
+        seed(
+            &mut snap,
+            ignored,
+            Some(root),
+            "target",
+            EntryKind::Directory,
+            0,
+            true,
+            false,
+        );
+        seed(
+            &mut snap,
+            noise,
+            Some(root),
+            ".DS_Store",
+            EntryKind::File,
+            0,
+            false,
+            true,
+        );
+        let expanded = HashSet::from([root]);
+
+        let rows = snap.visible_rows(VisibleRowsQuery {
+            expanded: &expanded,
+            offset: 0,
+            limit: 100,
+            include_ignored: false,
+        });
+        let ids: Vec<_> = rows.iter().map(|row| row.id).collect();
+        assert_eq!(ids, vec![root, visible, ignored]);
+        assert_eq!(snap.visible_row_count(&expanded, false).known, 3);
+        assert_eq!(snap.visible_row_index(ignored, &expanded, false), Some(2));
+        assert_eq!(
+            snap.visible_prefix_match("target", None, false, &expanded, false),
+            Some(ignored)
+        );
+
+        let all = snap.visible_row_ids(VisibleRowsQuery {
+            expanded: &expanded,
+            offset: 0,
+            limit: 100,
+            include_ignored: true,
+        });
+        assert_eq!(all, vec![root, visible, hidden, ignored, noise]);
+    }
+
+    #[test]
+    fn visibility_policy_removes_empty_disclosure_chevrons() {
+        let mut snap = StoreSnapshot::empty_with_visibility(VisibilityPolicy {
+            show_hidden_files: false,
+            show_ignored_files: true,
+        });
+        let root = EntryId(1);
+        let hidden = EntryId(2);
+        seed(
+            &mut snap,
+            root,
+            None,
+            "root",
+            EntryKind::Directory,
+            0,
+            false,
+            false,
+        );
+        seed(
+            &mut snap,
+            hidden,
+            Some(root),
+            ".env",
+            EntryKind::File,
+            0,
+            false,
+            true,
+        );
+        let expanded = HashSet::new();
+        assert!(!snap.has_children(root));
+        assert!(
+            !snap
+                .visible_rows(VisibleRowsQuery {
+                    expanded: &expanded,
+                    offset: 0,
+                    limit: 10,
+                    include_ignored: false,
+                })
+                .first()
+                .unwrap()
+                .has_children
+        );
+        assert!(
+            snap.visible_rows(VisibleRowsQuery {
+                expanded: &expanded,
+                offset: 0,
+                limit: 10,
+                include_ignored: true,
+            })
+            .first()
+            .unwrap()
+            .has_children
+        );
     }
 
     #[test]

@@ -634,6 +634,23 @@ focused Rust tests covering metadata re-ranking and case semantics. The
 constant primary comparison. Locale-aware collation and live visibility,
 exclusion, compact-folder, and nesting application remain.
 
+Visibility/exclusion result (2026-07-22): resolved `showHiddenFiles` and
+`showIgnoredFiles` now define one native snapshot policy used by visible rows,
+ID-only rows, counts, exact indexes, prefix lookup, bulk rows, and host viewport
+patches. The handshake carries that policy to the renderer mirror, whose
+equivalent queries now have the same semantics. Project dotfiles and ignored
+artifacts remain visible under the defaults; `.git` and common OS metadata
+remain suppressed unless `includeIgnored` requests the unfiltered view.
+`excludeGlobs` is no longer inert: legacy option globs and resolved-setting
+globs are de-duplicated and layered into initial, lazy, and watcher-reconcile
+walk matchers even when repository ignore handling is disabled. Combination
+tests cover native and mirror rows/ids/count/index agreement, excluded-directory
+subtree suppression, filtered disclosure chevrons, and the all-content
+override. The 100,001-entry mirror gate measured complete count-plus-ID
+projection at 9.51 ms median and 10.51 ms p95. Locale-aware collation, runtime
+reconfiguration, compact-folder
+application, and nesting remain.
+
 #### 3.2 Complete multi-root workspace behavior
 
 - Add, remove, rename-display, and reorder workspace roots.

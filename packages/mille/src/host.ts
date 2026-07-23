@@ -765,6 +765,10 @@ class FileExplorerHostImpl implements FileExplorerHost {
         ...(rootEntries.length > 0 ? { mirror: encodeClientEntries(rootEntries) } : {}),
         directChildCounts,
         visibleCount: rootEntries.length,
+        visibility: {
+          showHiddenFiles: snap.showHiddenFiles,
+          showIgnoredFiles: snap.showIgnoredFiles,
+        },
       }),
     );
   }

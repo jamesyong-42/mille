@@ -24,6 +24,7 @@ use crate::types::{ChangeNoticeJs, EntryJs, ErrorPayloadJs, FileSystemEventJs, W
 pub(crate) struct WatchConfig {
     pub roots: Vec<PathBuf>,
     pub respect_ignore: bool,
+    pub exclude_globs: Vec<String>,
     pub follow_symlinks: SymlinkPolicy,
     pub walker_concurrency: usize,
     pub debounce_ms: u64,
@@ -495,12 +496,15 @@ fn walk_for_reconcile(
     options: WalkOptions,
     config: &WatchConfig,
 ) -> Result<(Vec<WalkedEntry>, Option<IgnoreMatcher>), FxError> {
-    if !config.respect_ignore {
+    if !config.respect_ignore && config.exclude_globs.is_empty() {
         return Ok((walk(directory, options)?, None));
     }
 
     let root = containing_root(&config.roots, directory).unwrap_or_else(|| directory.to_path_buf());
     let mut seeded = IgnoreMatcher::new();
+    if !config.exclude_globs.is_empty() {
+        seeded.add_from_string(&root, &config.exclude_globs.join("\n"))?;
+    }
     let mut anchor = root.clone();
     for segment in directory
         .strip_prefix(&root)
@@ -508,18 +512,24 @@ fn walk_for_reconcile(
         .into_iter()
         .flat_map(|path| path.iter())
     {
-        add_ignore_files(&mut seeded, &anchor);
+        if config.respect_ignore {
+            add_ignore_files(&mut seeded, &anchor);
+        }
         anchor = anchor.join(segment);
     }
-    add_ignore_files(&mut seeded, directory);
+    if config.respect_ignore {
+        add_ignore_files(&mut seeded, directory);
+    }
     let walked = walk_with_ignore(directory, options, &seeded)?;
     // Keep ancestor rules that were seeded above the bounded walk, while
     // adding nested ignore files discovered during this reconciliation.
-    for entry in &walked {
-        if entry.path.file_name().is_some_and(|name| {
-            mille_core::IGNORE_FILE_NAMES.contains(&name.to_string_lossy().as_ref())
-        }) {
-            let _ = seeded.add_from_file(&entry.path);
+    if config.respect_ignore {
+        for entry in &walked {
+            if entry.path.file_name().is_some_and(|name| {
+                mille_core::IGNORE_FILE_NAMES.contains(&name.to_string_lossy().as_ref())
+            }) {
+                let _ = seeded.add_from_file(&entry.path);
+            }
         }
     }
     Ok((walked, Some(seeded)))

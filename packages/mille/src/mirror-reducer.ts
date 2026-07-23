@@ -123,6 +123,10 @@ export interface InboundSnapshot {
   directChildCounts: Record<string, number>;
   /** Total rows currently visible on the host side. Informational. */
   visibleCount: number;
+  visibility?: {
+    showHiddenFiles: boolean;
+    showIgnoredFiles: boolean;
+  };
 }
 
 /** Inbound delta frame body — incremental merge payload. */
@@ -230,6 +234,8 @@ export function applySnapshot(
     treeVersion: msg.version,
     projectionVersion: _prev.projectionVersion + 1,
     decorationVersion: 0,
+    showHiddenFiles: msg.visibility?.showHiddenFiles ?? true,
+    showIgnoredFiles: msg.visibility?.showIgnoredFiles ?? true,
     decorations: new Map(),
     volatileSubtrees: new Set(),
     lruTouch: new Map(),

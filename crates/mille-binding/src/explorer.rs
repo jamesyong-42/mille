@@ -48,6 +48,8 @@ pub struct ExplorerOptionsJs {
     pub sort_by: Option<String>,
     pub case_sensitive: Option<bool>,
     pub folders_on_top: Option<bool>,
+    pub show_hidden_files: Option<bool>,
+    pub show_ignored_files: Option<bool>,
 }
 
 /// Resolved form of ExplorerOptionsJs with defaults applied.
@@ -128,9 +130,13 @@ impl FileExplorer {
             case_sensitive: options.case_sensitive.unwrap_or(false),
             folders_on_top: options.folders_on_top.unwrap_or(true),
         };
+        let visibility = mille_core::VisibilityPolicy {
+            show_hidden_files: options.show_hidden_files.unwrap_or(true),
+            show_ignored_files: options.show_ignored_files.unwrap_or(true),
+        };
 
         Ok(Self {
-            store: Arc::new(EntryStore::with_sibling_order(sibling_order)),
+            store: Arc::new(EntryStore::with_policies(sibling_order, visibility)),
             watcher: Arc::new(std::sync::Mutex::new(None)),
             intents: Arc::new(parking_lot::Mutex::new(IntentCache::new())),
             disposed: AtomicBool::new(false),
@@ -305,10 +311,7 @@ impl FileExplorer {
     /// closes the race between initial scan results and live events.
     #[napi(js_name = "populateFromRoots")]
     pub async fn populate_from_roots(&self) -> Result<u32> {
-        use mille_core::{
-            build_ignore_matcher_from_walk, populate_store, walk, walk_with_ignore, IgnoreMatcher,
-            WalkOptions,
-        };
+        use mille_core::{populate_store, walk, walk_with_ignore, IgnoreMatcher, WalkOptions};
 
         self.ensure_watcher()?;
         let mut total: u32 = 0;
@@ -327,21 +330,30 @@ impl FileExplorer {
             // very first read_dir call. Nested ignore files are added
             // dynamically inside walk_with_ignore as subdirectories are
             // streamed.
-            let (walked, matcher) = if self.options.respect_ignore {
+            let use_matcher = self.options.respect_ignore || !self.options.exclude_globs.is_empty();
+            let (walked, matcher) = if use_matcher {
                 let mut seeded = IgnoreMatcher::new();
-                for name in mille_core::IGNORE_FILE_NAMES {
-                    let candidate = root.join(name);
-                    if candidate.is_file() {
-                        let _ = seeded.add_from_file(&candidate);
+                if self.options.respect_ignore {
+                    for name in mille_core::IGNORE_FILE_NAMES {
+                        let candidate = root.join(name);
+                        if candidate.is_file() {
+                            let _ = seeded.add_from_file(&candidate);
+                        }
                     }
                 }
+                add_exclude_globs(&mut seeded, root, &self.options.exclude_globs)
+                    .map_err(fx_error_to_napi)?;
                 let w = walk_with_ignore(root, options, &seeded).map_err(fx_error_to_napi)?;
-                // Rebuild a full matcher from every ignore file we
-                // actually observed during the walk so the is_ignored
-                // flag on the resulting entries is consistent with
-                // nested rules.
-                let full = build_ignore_matcher_from_walk(&w).map_err(fx_error_to_napi)?;
-                (w, Some(full))
+                if self.options.respect_ignore {
+                    for entry in &w {
+                        if entry.path.file_name().is_some_and(|name| {
+                            mille_core::IGNORE_FILE_NAMES.contains(&name.to_string_lossy().as_ref())
+                        }) {
+                            let _ = seeded.add_from_file(&entry.path);
+                        }
+                    }
+                }
+                (w, Some(seeded))
             } else {
                 let w = walk(root, options).map_err(fx_error_to_napi)?;
                 (w, None)
@@ -414,8 +426,11 @@ impl FileExplorer {
         // v0.2 B3: respect_ignore now uses the symlink-aware walker so
         // lazy `setExpanded` walks on a pnpm monorepo don't accidentally
         // descend into the central store.
-        let (walked, matcher) = if self.options.respect_ignore {
+        let use_matcher = self.options.respect_ignore || !self.options.exclude_globs.is_empty();
+        let (walked, matcher) = if use_matcher {
             let mut seeded = IgnoreMatcher::new();
+            add_exclude_globs(&mut seeded, &root, &self.options.exclude_globs)
+                .map_err(fx_error_to_napi)?;
             // Seed with every ignore file on the path from the workspace
             // root down to the target directory — a lazy expand at
             // `repo/packages/foo` should still honor `repo/.gitignore`.
@@ -426,26 +441,32 @@ impl FileExplorer {
                 .into_iter()
                 .flat_map(|r| r.iter())
             {
-                for name in mille_core::IGNORE_FILE_NAMES {
-                    let candidate = anchor.join(name);
-                    if candidate.is_file() {
-                        let _ = seeded.add_from_file(&candidate);
+                if self.options.respect_ignore {
+                    for name in mille_core::IGNORE_FILE_NAMES {
+                        let candidate = anchor.join(name);
+                        if candidate.is_file() {
+                            let _ = seeded.add_from_file(&candidate);
+                        }
                     }
                 }
                 anchor = anchor.join(seg);
             }
-            for name in mille_core::IGNORE_FILE_NAMES {
-                let candidate = p.join(name);
-                if candidate.is_file() {
-                    let _ = seeded.add_from_file(&candidate);
+            if self.options.respect_ignore {
+                for name in mille_core::IGNORE_FILE_NAMES {
+                    let candidate = p.join(name);
+                    if candidate.is_file() {
+                        let _ = seeded.add_from_file(&candidate);
+                    }
                 }
             }
             let w = walk_with_ignore(&p, options, &seeded).map_err(fx_error_to_napi)?;
-            for entry in &w {
-                if entry.path.file_name().is_some_and(|name| {
-                    mille_core::IGNORE_FILE_NAMES.contains(&name.to_string_lossy().as_ref())
-                }) {
-                    let _ = seeded.add_from_file(&entry.path);
+            if self.options.respect_ignore {
+                for entry in &w {
+                    if entry.path.file_name().is_some_and(|name| {
+                        mille_core::IGNORE_FILE_NAMES.contains(&name.to_string_lossy().as_ref())
+                    }) {
+                        let _ = seeded.add_from_file(&entry.path);
+                    }
                 }
             }
             (w, Some(seeded))
@@ -1049,6 +1070,7 @@ impl FileExplorer {
             crate::watch_runtime::WatchConfig {
                 roots: self.roots.clone(),
                 respect_ignore: self.options.respect_ignore,
+                exclude_globs: self.options.exclude_globs.clone(),
                 follow_symlinks: self.options.follow_symlinks,
                 walker_concurrency: self.options.walker_concurrency,
                 debounce_ms: self.options.watch_debounce_ms,
@@ -1077,6 +1099,17 @@ impl FileExplorer {
             )))
         })
     }
+}
+
+fn add_exclude_globs(
+    matcher: &mut mille_core::IgnoreMatcher,
+    root: &std::path::Path,
+    globs: &[String],
+) -> std::result::Result<(), FxError> {
+    if globs.is_empty() {
+        return Ok(());
+    }
+    matcher.add_from_string(root, &globs.join("\n"))
 }
 
 /// Mirror of api.d.ts `WriteFileOptions`.

@@ -38,7 +38,7 @@ mature IDE explorer is the 10/10 reference point.
 | Accessibility                        |   6.0 | Good ARIA tree semantics and keyboard tests; no real assistive-technology matrix                                                                                              |
 | Reliability and recovery             |   5.5 | Deterministic soak gates converge, but repeated Electron watcher stalls and direct native startup misses remain unresolved; crash/platform stress also remains                |
 | Performance confidence               |   7.8 | Million-sibling structure, binary-wire, bounded-hydration, windowed 500,000-row UI, Criterion, and Electron gates cover payload, paint, projection, navigation, and retention |
-| Explorer workflow breadth            |   3.5 | Important workspace, settings, editor, source-control, history, and remote-filesystem behavior is absent or host-only                                                         |
+| Explorer workflow breadth            |   3.8 | Versioned settings, native sort/visibility/exclusion, and durable navigation now exist; workspace, editor, source-control, history, and remote workflows remain shallow       |
 
 As a reusable tree widget, Mille is approximately **6.5-7/10**. As a complete
 IDE explorer experience, it is approximately **5/10**.
@@ -332,16 +332,18 @@ end-user behavior:
 
 ### 4. Explorer settings and state persistence are incomplete
 
-The current rendered ordering is effectively directories-first, lexical name
-sorting. Missing settings include:
+The versioned global/workspace/root settings record now drives native natural,
+type, modified-time, case, folders-on-top, hidden, ignored, and exclude-glob
+behavior at explorer construction. Native and renderer-mirror projections share
+the same visibility policy, and exclude globs apply to initial, lazy, and
+watcher-reconciliation walks. Remaining settings gaps include:
 
 - locale-aware collation beyond the live natural/type/modified,
   case-sensitive, folders-on-top native ordering policy;
 - file nesting rules;
 - configurable compact folders;
-- hidden-file, `files.exclude`, and Git-ignore visibility;
-- live application of visibility, exclusion, compact-folder, and nesting
-  fields from the new global/workspace/root settings model;
+- runtime reconfiguration without rebuilding the explorer;
+- UI controls for hidden/ignored visibility and exclusion settings;
 - same-display-name multi-root disambiguation for the new bounded, versioned,
   durably stored expansion/selection/focus/filter/scroll navigation state.
 

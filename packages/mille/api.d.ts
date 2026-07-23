@@ -291,6 +291,10 @@ export interface MirrorSnapshot {
   /** Advances when viewport rows hydrate without an authoritative tree change. */
   readonly projectionVersion: number;
   readonly decorationVersion: DecorationVersion;
+  /** Resolved projection policy for dotfiles and other hidden entries. */
+  readonly showHiddenFiles: boolean;
+  /** Resolved projection policy for ignored/excluded entries. */
+  readonly showIgnoredFiles: boolean;
 
   /** Workspace roots in display order. */
   roots(): readonly Entry[];

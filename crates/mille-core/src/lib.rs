@@ -27,7 +27,9 @@ pub use changes::ChangeSet;
 
 // TODO: Phase 4 — writeSnapshot / eventsSince (here now so store can use it)
 pub mod snapshot;
-pub use snapshot::{StoreSnapshot, VisibleRowCount, VisibleRowOut, VisibleRowsQuery};
+pub use snapshot::{
+    StoreSnapshot, VisibilityPolicy, VisibleRowCount, VisibleRowOut, VisibleRowsQuery,
+};
 
 // Phase 4.3 + 4.4 — crash-resume disk IO (write_snapshot / read_snapshot)
 // and the resume-diff walker (events_since / ResumeEvent).

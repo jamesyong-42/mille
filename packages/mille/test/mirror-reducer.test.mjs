@@ -93,6 +93,21 @@ test('applySnapshot tolerates missing entriesJson', () => {
   assert.equal(next.byId.size, 0);
 });
 
+test('applySnapshot carries host visibility policy into the mirror', () => {
+  const next = applySnapshot(createMirror(), {
+    version: 1,
+    roots: [],
+    directChildCounts: {},
+    visibleCount: 0,
+    visibility: {
+      showHiddenFiles: false,
+      showIgnoredFiles: true,
+    },
+  });
+  assert.equal(next.showHiddenFiles, false);
+  assert.equal(next.showIgnoredFiles, true);
+});
+
 test('applySnapshot tolerates empty-string entriesJson', () => {
   const next = applySnapshot(createMirror(), {
     version: 1,
@@ -119,14 +134,14 @@ test('applySnapshot decodes binary mirror entries', () => {
 
 test('applyDelta adds entries from entriesJson', () => {
   const state = createMirror();
-  const next = applyDelta(state, emptyDelta({
-    version: 5,
-    changedIds: [1, 2],
-    entriesJson: JSON.stringify([
-      entry({ id: 1, name: 'a' }),
-      entry({ id: 2, name: 'b' }),
-    ]),
-  }));
+  const next = applyDelta(
+    state,
+    emptyDelta({
+      version: 5,
+      changedIds: [1, 2],
+      entriesJson: JSON.stringify([entry({ id: 1, name: 'a' }), entry({ id: 2, name: 'b' })]),
+    }),
+  );
   assert.equal(next.treeVersion, 5);
   assert.equal(next.byId.get(1).name, 'a');
   assert.equal(next.byId.get(2).name, 'b');
@@ -166,11 +181,14 @@ test('applyDelta retains packed authoritative child order without copying', () =
 test('applyDelta updates existing entries (changedIds)', () => {
   const state = createMirror();
   state.byId.set(1, entry({ id: 1, name: 'old' }));
-  const next = applyDelta(state, emptyDelta({
-    version: 2,
-    changedIds: [1],
-    entriesJson: JSON.stringify([entry({ id: 1, name: 'new' })]),
-  }));
+  const next = applyDelta(
+    state,
+    emptyDelta({
+      version: 2,
+      changedIds: [1],
+      entriesJson: JSON.stringify([entry({ id: 1, name: 'new' })]),
+    }),
+  );
   assert.equal(next.byId.get(1).name, 'new');
   // Source untouched.
   assert.equal(state.byId.get(1).name, 'old');
@@ -184,10 +202,13 @@ test('applyDelta removes entries and purges aliased caches', () => {
   state.pendingExpansions.add(1);
   state.volatileSubtrees.add(1);
 
-  const next = applyDelta(state, emptyDelta({
-    version: 2,
-    removedIds: [1],
-  }));
+  const next = applyDelta(
+    state,
+    emptyDelta({
+      version: 2,
+      removedIds: [1],
+    }),
+  );
 
   assert.equal(next.byId.has(1), false);
   assert.equal(next.children.has(1), false);
@@ -201,10 +222,13 @@ test('applyDelta removes entries and purges aliased caches', () => {
 test('applyDelta merges new directChildCounts keys', () => {
   const state = createMirror();
   state.directChildCounts.set(1, 5);
-  const next = applyDelta(state, emptyDelta({
-    version: 2,
-    directChildCounts: { 2: 3 },
-  }));
+  const next = applyDelta(
+    state,
+    emptyDelta({
+      version: 2,
+      directChildCounts: { 2: 3 },
+    }),
+  );
   assert.equal(next.directChildCounts.get(1), 5, 'existing keys preserved');
   assert.equal(next.directChildCounts.get(2), 3, 'new key added');
 });
@@ -212,10 +236,13 @@ test('applyDelta merges new directChildCounts keys', () => {
 test('applyDelta overwrites directChildCounts on update', () => {
   const state = createMirror();
   state.directChildCounts.set(1, 5);
-  const next = applyDelta(state, emptyDelta({
-    version: 2,
-    directChildCounts: { 1: 9 },
-  }));
+  const next = applyDelta(
+    state,
+    emptyDelta({
+      version: 2,
+      directChildCounts: { 1: 9 },
+    }),
+  );
   assert.equal(next.directChildCounts.get(1), 9);
 });
 
@@ -224,10 +251,13 @@ test('applyDelta overwrites directChildCounts on update', () => {
 test('applyDelta coarse subtree clears children + marks pending', () => {
   const state = createMirror();
   state.children.set(7, [8, 9]);
-  const next = applyDelta(state, emptyDelta({
-    version: 3,
-    coarseSubtrees: [7],
-  }));
+  const next = applyDelta(
+    state,
+    emptyDelta({
+      version: 3,
+      coarseSubtrees: [7],
+    }),
+  );
   assert.equal(next.children.has(7), false, 'cached child list dropped');
   assert.equal(next.pendingExpansions.has(7), true, 'marked pending for re-query');
 });
@@ -236,31 +266,40 @@ test('applyDelta coarse subtree clears children + marks pending', () => {
 
 test('applyDelta subtreeDirty adds to volatileSubtrees', () => {
   const state = createMirror();
-  const next = applyDelta(state, emptyDelta({
-    version: 1,
-    subtreeDirty: [42],
-  }));
+  const next = applyDelta(
+    state,
+    emptyDelta({
+      version: 1,
+      subtreeDirty: [42],
+    }),
+  );
   assert.equal(next.volatileSubtrees.has(42), true);
 });
 
 test('applyDelta subtreeResynced clears from volatileSubtrees', () => {
   const state = createMirror();
   state.volatileSubtrees.add(42);
-  const next = applyDelta(state, emptyDelta({
-    version: 2,
-    subtreeResynced: [42],
-  }));
+  const next = applyDelta(
+    state,
+    emptyDelta({
+      version: 2,
+      subtreeResynced: [42],
+    }),
+  );
   assert.equal(next.volatileSubtrees.has(42), false);
 });
 
 test('applyDelta dirty+resynced on different roots each take effect', () => {
   const state = createMirror();
   state.volatileSubtrees.add(100);
-  const next = applyDelta(state, emptyDelta({
-    version: 3,
-    subtreeDirty: [200],
-    subtreeResynced: [100],
-  }));
+  const next = applyDelta(
+    state,
+    emptyDelta({
+      version: 3,
+      subtreeDirty: [200],
+      subtreeResynced: [100],
+    }),
+  );
   assert.equal(next.volatileSubtrees.has(100), false);
   assert.equal(next.volatileSubtrees.has(200), true);
 });
@@ -282,16 +321,19 @@ test('applyDelta does not mutate the source state', () => {
   state.directChildCounts.set(1, 2);
   state.volatileSubtrees.add(5);
 
-  applyDelta(state, emptyDelta({
-    version: 7,
-    changedIds: [1],
-    entriesJson: JSON.stringify([entry({ id: 1, name: 'changed' })]),
-    removedIds: [],
-    directChildCounts: { 2: 4 },
-    coarseSubtrees: [5],
-    subtreeDirty: [9],
-    subtreeResynced: [5],
-  }));
+  applyDelta(
+    state,
+    emptyDelta({
+      version: 7,
+      changedIds: [1],
+      entriesJson: JSON.stringify([entry({ id: 1, name: 'changed' })]),
+      removedIds: [],
+      directChildCounts: { 2: 4 },
+      coarseSubtrees: [5],
+      subtreeDirty: [9],
+      subtreeResynced: [5],
+    }),
+  );
 
   assert.equal(state.treeVersion, 0, 'source treeVersion untouched');
   assert.equal(state.byId.get(1).name, 'orig', 'source entry untouched');

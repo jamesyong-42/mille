@@ -892,3 +892,15 @@ const fx = new FileExplorer({
 Name, type/extension, modified-time, case-sensitive, and folders-on-top
 ordering are applied in the native store and preserved across the host/port
 boundary. Modified-time order is newest first.
+
+Hidden and ignored visibility is also applied at the snapshot boundary, so
+rows, ID-only projections, counts, indexes, typeahead, and port viewports agree.
+The default Project view shows project dotfiles and ignored/excluded artifacts,
+while suppressing `.git` and common OS metadata. Per-query
+`includeIgnored: true` requests the completely unfiltered view.
+
+`settings.excludeGlobs` and the legacy top-level `excludeGlobs` option are
+de-duplicated and layered onto repository ignore rules. They mark matching
+entries ignored and stop eager descent into matching directories during full,
+lazy, and watcher-reconciliation walks. Set `showIgnoredFiles: false` to hide
+those entries from the projection.

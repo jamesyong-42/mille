@@ -19,7 +19,7 @@ use parking_lot::Mutex;
 use crate::changes::ChangeSet;
 use crate::entry::{Entry, EntryId, EntryKind};
 use crate::error::FxError;
-use crate::snapshot::{entry_counts_visible, StoreSnapshot, MAX_ANCESTOR_WALK};
+use crate::snapshot::{StoreSnapshot, VisibilityPolicy, MAX_ANCESTOR_WALK};
 use crate::sort::SiblingOrder;
 
 pub struct EntryStore {
@@ -32,6 +32,7 @@ pub struct EntryStore {
     // tangling the main snapshot publish path.
     pending_changes: Mutex<ChangeSet>,
     sibling_order: SiblingOrder,
+    visibility: VisibilityPolicy,
 }
 
 impl EntryStore {
@@ -40,13 +41,18 @@ impl EntryStore {
     }
 
     pub fn with_sibling_order(sibling_order: SiblingOrder) -> Self {
+        Self::with_policies(sibling_order, VisibilityPolicy::default())
+    }
+
+    pub fn with_policies(sibling_order: SiblingOrder, visibility: VisibilityPolicy) -> Self {
         Self {
-            inner: ArcSwap::new(Arc::new(StoreSnapshot::empty())),
+            inner: ArcSwap::new(Arc::new(StoreSnapshot::empty_with_visibility(visibility))),
             path_to_id: DashMap::new(),
             id_counter: AtomicU64::new(0),
             write_lock: Mutex::new(()),
             pending_changes: Mutex::new(ChangeSet::default()),
             sibling_order,
+            visibility,
         }
     }
 
@@ -101,8 +107,8 @@ impl EntryStore {
             return Ok(false);
         }
 
-        let old_visible = entry_counts_visible(&existing) as i64;
-        let new_visible = entry_counts_visible(&updated) as i64;
+        let old_visible = self.visibility.includes(&existing) as i64;
+        let new_visible = self.visibility.includes(&updated) as i64;
         let visible_delta = new_visible - old_visible;
         let size_delta = updated.size as i128 - existing.size as i128;
 
@@ -183,10 +189,10 @@ impl EntryStore {
         let id = EntryId::alloc_from(&self.id_counter)?;
         entry.id = id;
         let parent = entry.parent_id;
-        let counts_visible = entry_counts_visible(&entry);
         let size = entry.size;
 
         let current = self.inner.load_full();
+        let counts_visible = self.visibility.includes(&entry);
         let mut next = (*current).clone();
         next.entries.insert(id, Arc::new(entry));
 
@@ -277,7 +283,7 @@ impl EntryStore {
 
         // Self-only contribution; the cache slot holds subtree totals, which
         // would double-count when descendants' own cache entries are still live.
-        let vis_contribution = if entry_counts_visible(&existing) {
+        let vis_contribution = if self.visibility.includes(&existing) {
             1u32
         } else {
             0

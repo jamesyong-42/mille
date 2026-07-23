@@ -45,6 +45,9 @@ pub struct ExplorerOptionsJs {
     pub exclude_globs: Option<Vec<String>>,
     pub snapshot_path: Option<String>,
     pub max_cached_entries: Option<u32>,
+    pub sort_by: Option<String>,
+    pub case_sensitive: Option<bool>,
+    pub folders_on_top: Option<bool>,
 }
 
 /// Resolved form of ExplorerOptionsJs with defaults applied.
@@ -116,8 +119,18 @@ impl FileExplorer {
                 .unwrap_or(500_000),
         };
 
+        let sibling_order = mille_core::sort::SiblingOrder {
+            sort_by: match options.sort_by.as_deref() {
+                Some("type") => mille_core::sort::SortBy::Type,
+                Some("modified") => mille_core::sort::SortBy::Modified,
+                _ => mille_core::sort::SortBy::Name,
+            },
+            case_sensitive: options.case_sensitive.unwrap_or(false),
+            folders_on_top: options.folders_on_top.unwrap_or(true),
+        };
+
         Ok(Self {
-            store: Arc::new(EntryStore::new()),
+            store: Arc::new(EntryStore::with_sibling_order(sibling_order)),
             watcher: Arc::new(std::sync::Mutex::new(None)),
             intents: Arc::new(parking_lot::Mutex::new(IntentCache::new())),
             disposed: AtomicBool::new(false),

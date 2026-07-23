@@ -32,6 +32,7 @@ import { wrap } from './errors.js';
 import { decodeBulkRows, type VisibleRow as DecodedRow } from './decode.js';
 import type { ChangeSet } from './delta.js';
 import { DecorationStore, type DecorationProvider } from './decorations.js';
+import type { ResolvedExplorerSettings } from './explorer-settings.js';
 
 /**
  * Platform-appropriate path join. On POSIX this is `path.join`; on
@@ -150,6 +151,8 @@ export interface ExplorerOptions {
    *     to layer their own lazy-hydration strategy.
    */
   readonly initialWalk?: 'full' | 'roots-only' | 'none';
+  /** Resolved Phase 3 settings applied at the native snapshot boundary. */
+  readonly settings?: ResolvedExplorerSettings;
 }
 
 export interface ListOptions {
@@ -364,6 +367,11 @@ export class FileExplorer {
     if (options.snapshotPath !== undefined) nativeOpts.snapshotPath = options.snapshotPath;
     if (options.maxCachedEntries !== undefined)
       nativeOpts.maxCachedEntries = options.maxCachedEntries;
+    if (options.settings !== undefined) {
+      nativeOpts.sortBy = options.settings.sortBy;
+      nativeOpts.caseSensitive = options.settings.caseSensitive;
+      nativeOpts.foldersOnTop = options.settings.foldersOnTop;
+    }
     // `initialWalk` is consumed by the host wrapper (host.ts), not by the
     // native binding — don't pass it through.
 
@@ -992,13 +1000,8 @@ export class MirrorSnapshot {
     includeIgnored?: boolean,
   ): EntryId | null {
     return (
-      this.inner.visiblePrefixMatch(
-        prefix,
-        fromId,
-        skipCurrent,
-        [...expanded],
-        includeIgnored,
-      ) ?? null
+      this.inner.visiblePrefixMatch(prefix, fromId, skipCurrent, [...expanded], includeIgnored) ??
+      null
     );
   }
 

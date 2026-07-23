@@ -20,17 +20,7 @@ use crate::changes::ChangeSet;
 use crate::entry::{Entry, EntryId, EntryKind};
 use crate::error::FxError;
 use crate::snapshot::{entry_counts_visible, StoreSnapshot, MAX_ANCESTOR_WALK};
-use crate::sort::natural_name_cmp;
-
-/// Rank for sibling ordering: directories (and symlink-to-dir) before files.
-#[inline]
-fn sibling_kind_rank(entry: &Entry) -> u8 {
-    match entry.kind {
-        EntryKind::Directory => 0,
-        EntryKind::Symlink if entry.symlink_target_is_dir == Some(true) => 0,
-        _ => 1,
-    }
-}
+use crate::sort::SiblingOrder;
 
 pub struct EntryStore {
     inner: ArcSwap<StoreSnapshot>,
@@ -41,16 +31,22 @@ pub struct EntryStore {
     // Guarded by its own mutex so writers can push under the write_lock without
     // tangling the main snapshot publish path.
     pending_changes: Mutex<ChangeSet>,
+    sibling_order: SiblingOrder,
 }
 
 impl EntryStore {
     pub fn new() -> Self {
+        Self::with_sibling_order(SiblingOrder::default())
+    }
+
+    pub fn with_sibling_order(sibling_order: SiblingOrder) -> Self {
         Self {
             inner: ArcSwap::new(Arc::new(StoreSnapshot::empty())),
             path_to_id: DashMap::new(),
             id_counter: AtomicU64::new(0),
             write_lock: Mutex::new(()),
             pending_changes: Mutex::new(ChangeSet::default()),
+            sibling_order,
         }
     }
 
@@ -147,21 +143,18 @@ impl EntryStore {
         // at the same path. Re-sort the stable id inside its sibling list.
         if existing.kind != next.entries[&id].kind
             || existing.symlink_target_is_dir != next.entries[&id].symlink_target_is_dir
+            || (self.sibling_order.sort_by == crate::sort::SortBy::Modified
+                && existing.mtime_ms != next.entries[&id].mtime_ms)
         {
             if let Some(parent_id) = existing.parent_id {
                 let mut siblings = next.children.remove(&parent_id).unwrap_or_default();
                 siblings.sort_by(|a, b| {
                     let ae = next.entries.get(a);
                     let be = next.entries.get(b);
-                    ae.map(|e| sibling_kind_rank(e))
-                        .unwrap_or(1)
-                        .cmp(&be.map(|e| sibling_kind_rank(e)).unwrap_or(1))
-                        .then_with(|| {
-                            natural_name_cmp(
-                                ae.map(|e| e.name.as_str()).unwrap_or(""),
-                                be.map(|e| e.name.as_str()).unwrap_or(""),
-                            )
-                        })
+                    match (ae, be) {
+                        (Some(ae), Some(be)) => self.sibling_order.compare(ae, be),
+                        _ => a.cmp(b),
+                    }
                 });
                 next.children.insert(parent_id, siblings);
             }
@@ -190,11 +183,9 @@ impl EntryStore {
         let id = EntryId::alloc_from(&self.id_counter)?;
         entry.id = id;
         let parent = entry.parent_id;
-        let name = entry.name.clone();
         let counts_visible = entry_counts_visible(&entry);
         let size = entry.size;
 
-        let kind_rank = sibling_kind_rank(&entry);
         let current = self.inner.load_full();
         let mut next = (*current).clone();
         next.entries.insert(id, Arc::new(entry));
@@ -208,11 +199,10 @@ impl EntryStore {
                 let pos = siblings
                     .binary_search_by(|&sib| {
                         let sib_e = next.entries.get(&sib);
-                        let sib_rank = sib_e.map(|e| sibling_kind_rank(e)).unwrap_or(1);
-                        let sib_name = sib_e.map(|e| e.name.as_str()).unwrap_or("");
-                        sib_rank
-                            .cmp(&kind_rank)
-                            .then_with(|| natural_name_cmp(sib_name, &name))
+                        match (sib_e, next.entries.get(&id)) {
+                            (Some(sib_e), Some(entry)) => self.sibling_order.compare(sib_e, entry),
+                            _ => sib.cmp(&id),
+                        }
                     })
                     .unwrap_or_else(|e| e);
                 siblings.insert(pos, id);
@@ -546,20 +536,15 @@ impl EntryStore {
                     siblings.remove(pos);
                 }
                 // Rank from the updated entry (name changed, kind unchanged).
-                let kind_rank = sibling_kind_rank(
-                    next.entries
-                        .get(&id)
-                        .map(|e| e.as_ref())
-                        .unwrap_or(entry.as_ref()),
-                );
                 let insert_pos = siblings
                     .binary_search_by(|&sib| {
                         let sib_e = next.entries.get(&sib);
-                        let sib_rank = sib_e.map(|e| sibling_kind_rank(e)).unwrap_or(1);
-                        let sib_name = sib_e.map(|e| e.name.as_str()).unwrap_or("");
-                        sib_rank
-                            .cmp(&kind_rank)
-                            .then_with(|| natural_name_cmp(sib_name, new_name.as_str()))
+                        match (sib_e, next.entries.get(&id)) {
+                            (Some(sib_e), Some(updated)) => {
+                                self.sibling_order.compare(sib_e, updated)
+                            }
+                            _ => sib.cmp(&id),
+                        }
                     })
                     .unwrap_or_else(|e| e);
                 siblings.insert(insert_pos, id);
@@ -819,6 +804,53 @@ mod tests {
             .insert("/r/file1".into(), leaf("file1", Some(root)))
             .unwrap();
         assert_eq!(s.snapshot().children_of(root), &[one, two, ten]);
+    }
+
+    #[test]
+    fn configured_type_modified_case_and_folder_order_are_applied() {
+        use crate::sort::{SiblingOrder, SortBy};
+
+        let by_type = EntryStore::with_sibling_order(SiblingOrder {
+            sort_by: SortBy::Type,
+            case_sensitive: false,
+            folders_on_top: false,
+        });
+        let root = by_type.insert("/r".into(), dir("r", None)).unwrap();
+        let ts = by_type
+            .insert("/r/z.ts".into(), leaf("z.ts", Some(root)))
+            .unwrap();
+        let js = by_type
+            .insert("/r/a.js".into(), leaf("a.js", Some(root)))
+            .unwrap();
+        let folder = by_type
+            .insert("/r/folder.zz".into(), dir("folder.zz", Some(root)))
+            .unwrap();
+        assert_eq!(by_type.snapshot().children_of(root), &[js, ts, folder]);
+
+        let by_modified = EntryStore::with_sibling_order(SiblingOrder {
+            sort_by: SortBy::Modified,
+            case_sensitive: true,
+            folders_on_top: true,
+        });
+        let root = by_modified.insert("/m".into(), dir("m", None)).unwrap();
+        let mut older = leaf("Alpha", Some(root));
+        older.mtime_ms = 10;
+        let older_id = by_modified.insert("/m/Alpha".into(), older).unwrap();
+        let mut newer = leaf("alpha", Some(root));
+        newer.mtime_ms = 20;
+        let newer_id = by_modified.insert("/m/alpha".into(), newer).unwrap();
+        assert_eq!(
+            by_modified.snapshot().children_of(root),
+            &[newer_id, older_id]
+        );
+
+        let mut newest = (*by_modified.get_by_id(older_id).unwrap()).clone();
+        newest.mtime_ms = 30;
+        by_modified.update(older_id, newest).unwrap();
+        assert_eq!(
+            by_modified.snapshot().children_of(root),
+            &[older_id, newer_id]
+        );
     }
 
     #[test]

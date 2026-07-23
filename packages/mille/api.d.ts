@@ -181,6 +181,8 @@ export interface ExplorerOptions {
    * The SPEC §4.3 walker section describes the tradeoffs in detail.
    */
   readonly initialWalk?: 'full' | 'roots-only' | 'none';
+  /** Resolved Phase 3 settings applied at the native snapshot boundary. */
+  readonly settings?: ResolvedExplorerSettings;
 }
 
 export type ExplorerSortBy = 'name' | 'type' | 'modified';

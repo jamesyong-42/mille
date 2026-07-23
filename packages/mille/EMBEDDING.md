@@ -879,3 +879,16 @@ The resolved shape includes sort mode, case/locale behavior, folders-on-top,
 hidden/ignored visibility, compact folders, exclude globs, and nesting rules.
 The parser migrates the pre-release flat shape and bounds hostile or stale
 workspace data.
+
+Pass the resolved record at construction to apply native ordering:
+
+```ts
+const fx = new FileExplorer({
+  roots: ['/workspace'],
+  settings: resolveExplorerSettings(document, workspaceId, rootId),
+});
+```
+
+Name, type/extension, modified-time, case-sensitive, and folders-on-top
+ordering are applied in the native store and preserved across the host/port
+boundary. Modified-time order is newest first.

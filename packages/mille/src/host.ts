@@ -30,7 +30,6 @@ import {
   type DecorationsFrameBody,
 } from './protocol.js';
 import type { Disposable, FileExplorerHost, MessagePortLike } from './types.js';
-import { compareNaturalNames } from './natural-sort.js';
 
 /**
  * Project a public `Entry` into the mirror-local `ClientEntry` shape.
@@ -55,18 +54,9 @@ function entryToClient(e: Entry): ClientEntry {
   };
 }
 
-/** Stable IDE-style child order used as compact structural metadata. */
+/** Native store order is authoritative for viewport and structural metadata. */
 function sortedChildIds(snap: MirrorSnapshot, parentId: number): number[] {
-  return [...snap.childrenOf(parentId)].sort((a, b) => {
-    const ea = snap.getById(a);
-    const eb = snap.getById(b);
-    const ka = ea && (ea.kind === 1 || ea.symlinkTargetIsDir === true) ? 0 : 1;
-    const kb = eb && (eb.kind === 1 || eb.symlinkTargetIsDir === true) ? 0 : 1;
-    if (ka !== kb) return ka - kb;
-    const na = ea?.name ?? '';
-    const nb = eb?.name ?? '';
-    return na === nb ? a - b : compareNaturalNames(na, nb);
-  });
+  return [...snap.childrenOf(parentId)];
 }
 
 /**

@@ -621,6 +621,19 @@ The maximum-shape 708,239-byte gate measured parse p50/p95 8.43/11.32 ms,
 7.28/10.00 ms. Feeding resolved sort/visibility values into live native
 configuration is the remaining settings-model work.
 
+Live sorting result (2026-07-22): `ExplorerOptions.settings` now passes resolved
+name/type/modified, case-sensitive, and folders-on-top values into the NAPI
+binding. `EntryStore` owns the policy, maintaining it during insertion, rename,
+file↔directory reclassification, and mtime changes; modified order is newest
+first and type order uses the natural extension comparator. The IPC host now
+preserves native child order verbatim, preventing custom native order from
+being overwritten before packed child lists reach the mirror. Native snapshot
+integration tests exercise all four controls against a real filesystem, with
+focused Rust tests covering metadata re-ranking and case semantics. The
+100,000-name comparator gate remains 9.80 ms p95; type and mtime add only a
+constant primary comparison. Locale-aware collation and live visibility,
+exclusion, compact-folder, and nesting application remain.
+
 #### 3.2 Complete multi-root workspace behavior
 
 - Add, remove, rename-display, and reorder workspace roots.

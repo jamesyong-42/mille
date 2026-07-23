@@ -335,14 +335,13 @@ end-user behavior:
 The current rendered ordering is effectively directories-first, lexical name
 sorting. Missing settings include:
 
-- configurable locale-aware and case-aware natural sorting;
-- sort by name, type, or modified time;
-- folders-on-top control;
+- locale-aware collation beyond the live natural/type/modified,
+  case-sensitive, folders-on-top native ordering policy;
 - file nesting rules;
 - configurable compact folders;
 - hidden-file, `files.exclude`, and Git-ignore visibility;
-- live application of the new versioned global/workspace/root settings
-  overrides at the native snapshot boundary;
+- live application of visibility, exclusion, compact-folder, and nesting
+  fields from the new global/workspace/root settings model;
 - same-display-name multi-root disambiguation for the new bounded, versioned,
   durably stored expansion/selection/focus/filter/scroll navigation state.
 

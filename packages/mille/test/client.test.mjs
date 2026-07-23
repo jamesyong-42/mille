@@ -214,6 +214,7 @@ test('populateFromRoots seeds the store with entries', async () => {
     }
     const aTxt = visible.find((row) => row.name === 'a.txt');
     assert.ok(aTxt);
+    assert.equal(await fx.findVisiblePrefix('A.', null, false, expanded), aTxt.id);
     assert.equal(await fx.resolvePath('a.txt'), aTxt.id);
     assert.equal(await fx.resolvePath(`${walkRoot.name}/a.txt`), aTxt.id);
     assert.equal(await fx.resolvePath('missing.txt'), null);

@@ -255,7 +255,6 @@ export interface MirrorSnapshot {
     expanded: ReadonlySet<EntryId>,
     includeIgnored?: boolean,
   ): number | null;
-
   getById(id: EntryId): Entry | null;
 
   /** Cached immediate-child count for a folder. `null` if not yet known. */
@@ -413,6 +412,13 @@ export declare class FileExplorer implements Disposable {
    * Lazy stores hydrate only the target's ancestor chain.
    */
   resolvePath(path: string): Promise<EntryId | null>;
+  /** Find the next visible prefix match without returning row payloads. */
+  findVisiblePrefix(
+    prefix: string,
+    fromId: EntryId | null,
+    skipCurrent: boolean,
+    expanded: ReadonlySet<EntryId>,
+  ): Promise<EntryId | null>;
 
   // Children (one level, paginated) — async form. Prefer `getSnapshot()`
   // for already-loaded data; use `list` for uncached / paginated reads.

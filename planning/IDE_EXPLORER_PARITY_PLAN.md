@@ -477,6 +477,25 @@ FSEvents runner as already documented in the assessment. Remaining Phase 2.4
 work is worst-case typeahead, wide-folder ordered-id metadata, and evaluating a
 maintained visible-rank structure from real native traces.
 
+Thirteenth typeahead-fallback result (2026-07-22): typeahead still searches a
+512-row local neighborhood first, but a miss no longer reads the remaining
+visible order into the renderer in 256-row chunks. Native snapshots now expose
+a payload-free, case-insensitive, wrap-aware prefix query; direct and port
+engines share it, and the host hydrates only a returned match's ancestor chain.
+Async results carry a generation guard so a timeout or newer keystroke cannot
+steal focus, while named navigation cancels pending typeahead. On the 500,000-row
+gate, the deliberate miss fell from 500,256 materialized lookup rows to 806
+local rows plus one engine query (**99.84% fewer row payloads**), with every read
+still capped at 256. The current happy-dom reporter moved from the preceding
+32.29 ms baseline to 11.29 ms, though the deterministic payload bound is the
+ratified signal. Native Criterion measures the full approximately 1,500-entry
+miss at 129.21-129.74 microseconds. The native traversal remains O(n); a
+maintained name/rank index is only justified together with the broader visible
+rank structure. All 318 UI tests pass, including far-result focus/scroll and
+bounded-miss regressions. Remaining Phase 2.4 work is wide-folder ordered-id
+metadata and evaluating that maintained rank/index structure from real native
+traces.
+
 #### 2.5 Define state under deletion and errors
 
 - Move focus to the nearest logical sibling or parent when the focused row is

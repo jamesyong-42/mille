@@ -590,6 +590,105 @@ test('local keyboard navigation reads a bounded row neighborhood', async () => {
   container.remove();
 });
 
+test('full-wrap typeahead delegates after 512 local rows without changing focus on miss', async () => {
+  const fx = createFakeEngine();
+  const rows = buildRows(10_000);
+  const snapshot = createFakeSnapshot({ rows, treeVersion: 1 });
+  const requestedLimits = [];
+  fx.emitDelta({
+    ...snapshot,
+    visibleRows: (options) => {
+      requestedLimits.push(options.limit);
+      return snapshot.visibleRows(options);
+    },
+  });
+  let prefixLookups = 0;
+  const indexedFx = {
+    ...fx,
+    findVisiblePrefix: async (prefix) => {
+      prefixLookups += 1;
+      assert.equal(prefix, '§');
+      return null;
+    },
+  };
+
+  const { container, root } = mount();
+  const obs = makeObservers({ height: 400 });
+  let focusedId = null;
+  await act(async () => {
+    root.render(createElement(FileTree, {
+      fx: indexedFx,
+      ariaLabel: 'Indexed typeahead miss',
+      rowHeight: 20,
+      onFocusedIdChange: (id) => { focusedId = id; },
+      __testObserveElementRect: obs.observeElementRect,
+      __testObserveElementOffset: obs.observeElementOffset,
+    }));
+  });
+  const tree = container.querySelector('[role="tree"]');
+  const origin = container.querySelector('[role="treeitem"]');
+  assert.ok(tree && origin);
+  await act(async () => { origin.click(); });
+  const originalFocus = focusedId;
+  requestedLimits.length = 0;
+
+  await act(async () => {
+    tree.dispatchEvent(new hdWindow.KeyboardEvent('keydown', {
+      key: '§', bubbles: true, cancelable: true,
+    }));
+  });
+  assert.equal(prefixLookups, 1);
+  assert.equal(focusedId, originalFocus);
+  assert.ok(Math.max(...requestedLimits) <= 256);
+  const rowsRead = requestedLimits.reduce((sum, limit) => sum + limit, 0);
+  assert.ok(rowsRead <= 1_024, `indexed typeahead materialized ${rowsRead} local rows`);
+
+  await act(async () => { root.unmount(); });
+  container.remove();
+});
+
+test('engine-resolved typeahead match focuses and scrolls to a far row', async () => {
+  const fx = createFakeEngine();
+  const rows = buildRows(10_000);
+  const snapshot = createFakeSnapshot({ rows, treeVersion: 1 });
+  fx.emitDelta(snapshot);
+  const targetIndex = 9_000;
+  const targetId = rows[targetIndex].id;
+  const indexedFx = {
+    ...fx,
+    findVisiblePrefix: async () => targetId,
+  };
+  const { container, root } = mount();
+  const obs = makeObservers({ height: 400 });
+  let focusedId = null;
+  await act(async () => {
+    root.render(createElement(FileTree, {
+      fx: indexedFx,
+      ariaLabel: 'Indexed typeahead match',
+      rowHeight: 20,
+      onFocusedIdChange: (id) => { focusedId = id; },
+      __testObserveElementRect: obs.observeElementRect,
+      __testObserveElementOffset: obs.observeElementOffset,
+    }));
+  });
+  const tree = container.querySelector('[role="tree"]');
+  const origin = container.querySelector('[role="treeitem"]');
+  assert.ok(tree && origin);
+  let scrollTop = null;
+  tree.scrollTo = (options) => { scrollTop = options.top; };
+  await act(async () => { origin.click(); });
+  await act(async () => {
+    tree.dispatchEvent(new hdWindow.KeyboardEvent('keydown', {
+      key: '§', bubbles: true, cancelable: true,
+    }));
+  });
+
+  assert.equal(focusedId, targetId);
+  assert.equal(scrollTop, targetIndex * 20);
+  await act(async () => { root.unmount(); });
+  container.remove();
+});
+
 test('Select All and long ranges read identities without complete row projections', async () => {
   const fx = createFakeEngine();
   const rows = buildRows(10_000);

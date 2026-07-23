@@ -558,6 +558,7 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
     [mountedViewportOffset, projection, findExactVisibleRowIndex],
   );
 
+  const indexedTypeaheadMatchRef = useRef<(id: EntryId) => void>(() => {});
   const rowsLookup = useMemo<KeyboardRowLookup>(
     () => ({
       get visibleRows() {
@@ -568,6 +569,17 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
       readRowIds: projection.readIds,
       findRowIndex: findVisibleRowIndex,
       findExactRowIndex: findExactVisibleRowIndex,
+      ...(typeof fx.findVisiblePrefix === 'function'
+        ? {
+            findTypeaheadMatch: async (
+              prefix: string,
+              fromId: EntryId | null,
+              skipCurrent: boolean,
+            ) =>
+              (await fx.findVisiblePrefix!(prefix, fromId, skipCurrent, expanded)) ?? null,
+            onTypeaheadMatch: (id: EntryId) => indexedTypeaheadMatchRef.current(id),
+          }
+        : {}),
       getRowById: (id) => {
         const mounted = visibleRows.find((row) => row.id === id);
         if (mounted) return mounted;
@@ -581,6 +593,8 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
       findVisibleRowIndex,
       findExactVisibleRowIndex,
       projection,
+      fx,
+      expanded,
       mountedViewportOffset,
       visibleRows,
     ],
@@ -1054,6 +1068,26 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
     ],
   );
 
+  const revealResolvedId = useCallback(
+    (id: EntryId): boolean => {
+      if (snapshot.getById(id) !== null) return revealId(id);
+      const latest = fx.getSnapshot();
+      pendingRevealIdRef.current = id;
+      if (latest.getById(id) !== null) {
+        setManyExpanded({ add: ancestorsOf(id, latest) });
+      }
+      return true;
+    },
+    [snapshot, revealId, fx, setManyExpanded, ancestorsOf],
+  );
+
+  useLayoutEffect(() => {
+    indexedTypeaheadMatchRef.current = (id) => {
+      selection.selectOne(id);
+      revealResolvedId(id);
+    };
+  }, [selection, revealResolvedId]);
+
   useLayoutEffect(() => {
     const id = pendingRevealIdRef.current;
     if (id === null) return;
@@ -1224,20 +1258,9 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
     async (path: string): Promise<boolean> => {
       const id = await resolvePath(path);
       if (id === null) return false;
-      if (snapshot.getById(id) !== null) return revealId(id);
-
-      // An indexed resolver may have hydrated a previously-collapsed path
-      // while this callback still holds the pre-request React snapshot. Read
-      // the engine once more, stage the ancestor expansion, and let the
-      // layout effect finish after useSyncExternalStore publishes the update.
-      const latest = fx.getSnapshot();
-      pendingRevealIdRef.current = id;
-      if (latest.getById(id) !== null) {
-        setManyExpanded({ add: ancestorsOf(id, latest) });
-      }
-      return true;
+      return revealResolvedId(id);
     },
-    [resolvePath, snapshot, revealId, fx, setManyExpanded, ancestorsOf],
+    [resolvePath, revealResolvedId],
   );
 
   const focusFilter = useCallback((): boolean => {

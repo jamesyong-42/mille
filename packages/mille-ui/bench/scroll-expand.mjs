@@ -800,44 +800,7 @@ async function runLongRange(rows) {
 
 async function runTypeahead(rows, { key, label, expectMatch }) {
   const fx = createFakeEngine();
-  let maxProjectionReadRows = 0;
-  let projectionRowsRead = 0;
-  const snapshot = createFakeSnapshot({ rows, treeVersion: 1 });
-  fx.emitDelta({
-    ...snapshot,
-    visibleRows: (options) => {
-      if (options.limit !== Number.MAX_SAFE_INTEGER) {
-        maxProjectionReadRows = Math.max(maxProjectionReadRows, options.limit);
-        projectionRowsRead += options.limit;
-      }
-      return snapshot.visibleRows(options);
-    },
-  });
-  const { container, root } = mountContainer();
-  const obs = makeObservers({ height: 600 });
-
-  await act(async () => {
-    root.render(
-      createElement(FileTree, {
-        fx,
-        ariaLabel: `bench-${label}`,
-        rowHeight: 22,
-        overscan: 10,
-        __testObserveElementRect: obs.observeElementRect,
-        __testObserveElementOffset: obs.observeElementOffset,
-      }),
-    );
-  });
-  const tree = container.querySelector('[role="tree"]');
   const originIndex = 5;
-  const origin = container.querySelector(
-    `[data-mille-row-id="${rows[originIndex]?.id}"]`,
-  );
-  if (!tree || !origin) throw new Error('typeahead bench origin is not mounted');
-  await act(async () => dispatchClick(origin));
-  maxProjectionReadRows = 0;
-  projectionRowsRead = 0;
-
   let expected = rows[originIndex]?.id ?? null;
   if (expectMatch) {
     expected = null;
@@ -849,6 +812,51 @@ async function runTypeahead(rows, { key, label, expectMatch }) {
       }
     }
   }
+  let maxProjectionReadRows = 0;
+  let projectionRowsRead = 0;
+  let prefixLookups = 0;
+  const snapshot = createFakeSnapshot({ rows, treeVersion: 1 });
+  fx.emitDelta({
+    ...snapshot,
+    visibleRows: (options) => {
+      if (options.limit !== Number.MAX_SAFE_INTEGER) {
+        maxProjectionReadRows = Math.max(maxProjectionReadRows, options.limit);
+        projectionRowsRead += options.limit;
+      }
+      return snapshot.visibleRows(options);
+    },
+  });
+  const indexedFx = {
+    ...fx,
+    findVisiblePrefix: async (prefix) => {
+      prefixLookups += 1;
+      return prefix.toLowerCase() === key.toLowerCase() ? expected : null;
+    },
+  };
+  const { container, root } = mountContainer();
+  const obs = makeObservers({ height: 600 });
+
+  await act(async () => {
+    root.render(
+      createElement(FileTree, {
+        fx: indexedFx,
+        ariaLabel: `bench-${label}`,
+        rowHeight: 22,
+        overscan: 10,
+        __testObserveElementRect: obs.observeElementRect,
+        __testObserveElementOffset: obs.observeElementOffset,
+      }),
+    );
+  });
+  const tree = container.querySelector('[role="tree"]');
+  const origin = container.querySelector(
+    `[data-mille-row-id="${rows[originIndex]?.id}"]`,
+  );
+  if (!tree || !origin) throw new Error('typeahead bench origin is not mounted');
+  await act(async () => dispatchClick(origin));
+  maxProjectionReadRows = 0;
+  projectionRowsRead = 0;
+
   const result = await measureAsync(label, async () => {
     await act(async () => dispatchKey(tree, key));
   });
@@ -868,6 +876,7 @@ async function runTypeahead(rows, { key, label, expectMatch }) {
     interactionPreserved,
     maxMaterializedRows: maxProjectionReadRows,
     projectionRowsRead,
+    prefixLookups,
   };
 }
 
@@ -1243,7 +1252,7 @@ async function main() {
     `      Long-range selection reads: ${longRangeResult.indexLookups} exact index queries + ${longRangeResult.idRequests} id-only request carrying ${longRangeResult.idsRead.toLocaleString()} ids; ${longRangeResult.projectionRowsRead.toLocaleString()} row payloads.`,
   );
   console.log(
-    `      Typeahead projection reads: near=${typeaheadNearResult.projectionRowsRead.toLocaleString()}, miss=${typeaheadMissResult.projectionRowsRead.toLocaleString()} rows; ${Math.max(typeaheadNearResult.maxMaterializedRows, typeaheadMissResult.maxMaterializedRows)} max per read.`,
+    `      Typeahead projection reads: near=${typeaheadNearResult.projectionRowsRead.toLocaleString()}, miss=${typeaheadMissResult.projectionRowsRead.toLocaleString()} rows + ${typeaheadMissResult.prefixLookups} engine prefix query; ${Math.max(typeaheadNearResult.maxMaterializedRows, typeaheadMissResult.maxMaterializedRows)} max per read.`,
   );
   console.log(
     `      Reveal lookup: ${revealResult.indexLookups} exact index query; ${revealResult.projectionRowsRead.toLocaleString()} viewport rows read, ${revealResult.maxMaterializedRows} max per read.`,
@@ -1333,11 +1342,11 @@ async function main() {
   }
   if (
     typeaheadMissResult.maxMaterializedRows > 256 ||
-    typeaheadMissResult.projectionRowsRead < rows.length ||
-    typeaheadMissResult.projectionRowsRead > rows.length + 512
+    typeaheadMissResult.projectionRowsRead > 1_024 ||
+    typeaheadMissResult.prefixLookups !== 1
   ) {
     throw new Error(
-      `full-wrap typeahead read max=${typeaheadMissResult.maxMaterializedRows}, total=${typeaheadMissResult.projectionRowsRead} rows`,
+      `full-wrap typeahead used ${typeaheadMissResult.prefixLookups} prefix queries; max=${typeaheadMissResult.maxMaterializedRows}, total=${typeaheadMissResult.projectionRowsRead} rows`,
     );
   }
   if (!revealResult.interactionPreserved || !revealResult.scrollRequested) {

@@ -94,6 +94,12 @@ test('resolvePath round-trips through the host path index', async () => {
     const { port1, port2 } = new MessageChannel();
     host.attachPort(port1);
     const client = await connectFileExplorer(port2);
+    const rootId = host.local.getSnapshot().roots()[0].id;
+    assert.equal(
+      await client.findVisiblePrefix('INDEX', null, false, new Set([rootId])),
+      expected,
+    );
+    assert.equal(client.getSnapshot().getById(expected).name, 'indexed.txt');
     assert.equal(await client.resolvePath('indexed.txt'), expected);
     assert.equal(await client.resolvePath('missing.txt'), null);
     await client.dispose();

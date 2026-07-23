@@ -62,6 +62,20 @@ export interface TypeaheadHandle {
     source: TypeaheadRowSource,
     fromId: EntryId | null,
   ): EntryId | null;
+  /**
+   * Scan a small local window, then delegate a full-wrap miss to a
+   * payload-free engine query. Stale async results are discarded.
+   */
+  pushWindowedIndexed(
+    char: string,
+    source: TypeaheadRowSource,
+    fromId: EntryId | null,
+    resolve: (
+      prefix: string,
+      fromId: EntryId | null,
+      skipCurrent: boolean,
+    ) => Promise<EntryId | null>,
+  ): Promise<EntryId | null>;
   /** Clear the buffer immediately. Called from Esc etc. */
   reset(): void;
   /** Current buffer contents (mainly for testing / inspection). */
@@ -72,9 +86,11 @@ export function useTypeahead(options: UseTypeaheadOptions = {}): TypeaheadHandle
   const { windowMs = 500 } = options;
   const bufferRef = useRef<string>('');
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const requestGenerationRef = useRef(0);
 
   const reset = useCallback(() => {
     bufferRef.current = '';
+    requestGenerationRef.current += 1;
     if (timerRef.current !== null) {
       clearTimeout(timerRef.current);
       timerRef.current = null;
@@ -92,6 +108,7 @@ export function useTypeahead(options: UseTypeaheadOptions = {}): TypeaheadHandle
       if (timerRef.current !== null) clearTimeout(timerRef.current);
       timerRef.current = setTimeout(() => {
         bufferRef.current = '';
+        requestGenerationRef.current += 1;
         timerRef.current = null;
       }, windowMs);
 
@@ -173,6 +190,50 @@ export function useTypeahead(options: UseTypeaheadOptions = {}): TypeaheadHandle
     [pushCharacter],
   );
 
+  const pushWindowedIndexed = useCallback(
+    async (
+      char: string,
+      source: TypeaheadRowSource,
+      fromId: EntryId | null,
+      resolve: (
+        prefix: string,
+        fromId: EntryId | null,
+        skipCurrent: boolean,
+      ) => Promise<EntryId | null>,
+    ): Promise<EntryId | null> => {
+      const buf = pushCharacter(char);
+      if (buf === null) return null;
+      const generation = ++requestGenerationRef.current;
+      const rowCount = Math.max(0, Math.trunc(source.rowCount));
+      if (rowCount === 0) return null;
+
+      const fromIndex = fromId === null ? -1 : source.findRowIndex(fromId);
+      const skipCurrent = buf.length === 1;
+      const startIndex = skipCurrent
+        ? (fromIndex >= 0 ? fromIndex + 1 : 0)
+        : (fromIndex >= 0 ? fromIndex : 0);
+      const localBudget = Math.min(rowCount, 512);
+      let cursor = startIndex % rowCount;
+      let remaining = localBudget;
+      while (remaining > 0) {
+        const limit = Math.min(256, remaining, rowCount - cursor);
+        const window = source.readRows(cursor, limit);
+        for (const row of window) {
+          if (row.name.toLowerCase().startsWith(buf)) {
+            return generation === requestGenerationRef.current ? row.id : null;
+          }
+        }
+        remaining -= limit;
+        cursor = (cursor + limit) % rowCount;
+      }
+      if (localBudget === rowCount) return null;
+
+      const match = await resolve(buf, fromId, skipCurrent);
+      return generation === requestGenerationRef.current ? match : null;
+    },
+    [pushCharacter],
+  );
+
   // Clean the timer on unmount to avoid leaking across mounts in tests.
   useEffect(() => {
     return () => {
@@ -186,6 +247,7 @@ export function useTypeahead(options: UseTypeaheadOptions = {}): TypeaheadHandle
   return {
     push,
     pushWindowed,
+    pushWindowedIndexed,
     reset,
     get buffer() {
       return bufferRef.current;

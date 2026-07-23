@@ -1087,6 +1087,33 @@ class FileExplorerHostImpl implements FileExplorerHost {
         }
         return { id, version: snapshot.treeVersion, entries };
       }
+      case 'findVisiblePrefix': {
+        const [prefix, fromId, skipCurrent, expanded] = args;
+        if (typeof prefix !== 'string') throw new Error('findVisiblePrefix requires a prefix');
+        if (fromId !== null && typeof fromId !== 'number') {
+          throw new Error('findVisiblePrefix requires a numeric or null fromId');
+        }
+        if (typeof skipCurrent !== 'boolean' || !Array.isArray(expanded)) {
+          throw new Error('findVisiblePrefix requires skipCurrent and expanded');
+        }
+        const id = this.explorer
+          .getSnapshot()
+          .visiblePrefixMatch(prefix, fromId, skipCurrent, new Set(expanded as EntryId[]));
+        if (id === null) return null;
+        const snapshot = this.explorer.getSnapshot();
+        const entries: ClientEntry[] = [];
+        let cursor: EntryId | null = id;
+        let guard = 0;
+        while (cursor !== null && guard < 10_000) {
+          const entry = snapshot.getById(cursor);
+          if (entry === null) break;
+          entries.push(entryToClient(entry));
+          session.knownIds.add(cursor);
+          cursor = entry.parentId ?? null;
+          guard += 1;
+        }
+        return { id, version: snapshot.treeVersion, entries };
+      }
       default:
         throw new Error(`unknown method: ${method}`);
     }

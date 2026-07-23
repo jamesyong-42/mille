@@ -8,6 +8,7 @@
 //   - visible_row_index (last row): < 0.2ms on populated snapshot
 //   - visible_row_ids (full order): faster than full row materialization
 //   - indexed path lookup: < 0.01ms on populated snapshot
+//   - payload-free typeahead full miss: < 0.2ms on populated snapshot
 
 use std::collections::HashSet;
 
@@ -182,6 +183,21 @@ fn bench_indexed_path_lookup(c: &mut Criterion) {
     });
 }
 
+fn bench_visible_prefix_miss(c: &mut Criterion) {
+    let (td, _) = medium_tree();
+    let walked = walk(td.path(), WalkOptions::default()).unwrap();
+    let store = EntryStore::new();
+    populate_store(&store, td.path(), &walked, None).unwrap();
+    let snap = store.snapshot();
+    let expanded = expanded_set_all(&store);
+
+    c.bench_function("visible_prefix_full_miss_medium", |b| {
+        b.iter(|| {
+            let _ = snap.visible_prefix_match("§-absent", None, false, &expanded, false);
+        })
+    });
+}
+
 /// v0.2 B3 regression bench. Fixture: `repo_entries` real files under `src/`
 /// plus a `node_modules` symlink into a `store_entries`-file sibling.
 /// `walk_with_ignore` with a `node_modules/` rule should walk in O(repo)
@@ -219,6 +235,7 @@ criterion_group!(
     bench_visible_row_ids_full,
     bench_visible_row_index,
     bench_indexed_path_lookup,
+    bench_visible_prefix_miss,
     bench_pnpm_style_ignore,
 );
 
@@ -234,6 +251,7 @@ criterion_group!(
     bench_visible_row_ids_full,
     bench_visible_row_index,
     bench_indexed_path_lookup,
+    bench_visible_prefix_miss,
 );
 
 criterion_main!(walker);

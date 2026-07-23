@@ -243,6 +243,68 @@ impl StoreSnapshot {
         None
     }
 
+    /// Find the next visible entry whose display name starts with `prefix`.
+    ///
+    /// Traverses entry ids and names only: no `VisibleRowOut` payloads are
+    /// allocated. Search starts at `from_id` (or immediately after it when
+    /// `skip_current` is true) and wraps once to the beginning, matching IDE
+    /// typeahead semantics.
+    pub fn visible_prefix_match(
+        &self,
+        prefix: &str,
+        from_id: Option<EntryId>,
+        skip_current: bool,
+        expanded: &HashSet<EntryId>,
+        include_ignored: bool,
+    ) -> Option<EntryId> {
+        if prefix.is_empty() {
+            return None;
+        }
+        let needle = prefix.to_lowercase();
+        let mut before_start: Option<EntryId> = None;
+        let mut reached_start = from_id.is_none();
+        let mut stack: Vec<EntryId> = self.roots.iter().rev().copied().collect();
+
+        while let Some(id) = stack.pop() {
+            let Some(entry) = self.entries.get(&id) else {
+                continue;
+            };
+            let visible = include_ignored || entry_counts_visible(entry);
+            if !visible {
+                continue;
+            }
+            let matches = entry.name.to_lowercase().starts_with(&needle);
+
+            if Some(id) == from_id {
+                reached_start = true;
+                if matches {
+                    if skip_current {
+                        before_start.get_or_insert(id);
+                    } else {
+                        return Some(id);
+                    }
+                }
+            } else if reached_start {
+                if matches {
+                    return Some(id);
+                }
+            } else if matches && before_start.is_none() {
+                before_start = Some(id);
+            }
+
+            if expanded.contains(&id) {
+                if let Some(kids) = self.children.get(&id) {
+                    for &child in kids.iter().rev() {
+                        stack.push(child);
+                    }
+                }
+            }
+        }
+
+        // An evicted/stale focus id is equivalent to starting at row zero.
+        before_start
+    }
+
     /// Visible ids in display order for an offset/limit range.
     ///
     /// This follows the same traversal semantics as `visible_rows` without
@@ -636,6 +698,73 @@ mod tests {
                 include_ignored: false,
             }),
             vec![a, b]
+        );
+    }
+
+    #[test]
+    fn visible_prefix_match_starts_after_focus_and_wraps() {
+        let mut snap = StoreSnapshot::empty();
+        let root = EntryId(1);
+        let alpha = EntryId(2);
+        let beta = EntryId(3);
+        let bravo = EntryId(4);
+        seed(
+            &mut snap,
+            root,
+            None,
+            "root",
+            EntryKind::Directory,
+            0,
+            false,
+            false,
+        );
+        seed(
+            &mut snap,
+            alpha,
+            Some(root),
+            "Alpha",
+            EntryKind::File,
+            0,
+            false,
+            false,
+        );
+        seed(
+            &mut snap,
+            beta,
+            Some(root),
+            "beta",
+            EntryKind::File,
+            0,
+            false,
+            false,
+        );
+        seed(
+            &mut snap,
+            bravo,
+            Some(root),
+            "Bravo",
+            EntryKind::File,
+            0,
+            false,
+            false,
+        );
+        let expanded = HashSet::from([root]);
+
+        assert_eq!(
+            snap.visible_prefix_match("b", Some(beta), true, &expanded, false),
+            Some(bravo)
+        );
+        assert_eq!(
+            snap.visible_prefix_match("b", Some(bravo), true, &expanded, false),
+            Some(beta)
+        );
+        assert_eq!(
+            snap.visible_prefix_match("BR", Some(bravo), false, &expanded, false),
+            Some(bravo)
+        );
+        assert_eq!(
+            snap.visible_prefix_match("missing", Some(alpha), false, &expanded, false),
+            None
         );
     }
 

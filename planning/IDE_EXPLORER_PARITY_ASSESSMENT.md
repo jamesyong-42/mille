@@ -166,6 +166,17 @@ ms for the full-wrap miss. This removes the full-order allocation, not the
 worst-case O(n) scan. Current validation is 310/310 UI tests and 12/12
 playground harness tests.
 
+The subsequent engine-fallback pass keeps the first 512 local rows responsive,
+then replaces the renderer-side full-wrap scan with one payload-free native or
+host query. The 500,000-row miss now materializes 806 rows including focus and
+viewport probes instead of 500,256 (**99.84% fewer row payloads**) and uses one
+engine query; the current timing reporter was 11.29 ms versus the preceding
+32.29 ms baseline. Native Criterion measures the full approximately 1,500-entry
+miss at 129.21-129.74 microseconds. The engine traversal is still O(n), but it
+is off the renderer hot path and returns at most one identity plus a bounded
+ancestor hydration chain. Current UI validation is 318/318 tests, including a
+far-match focus-and-scroll regression.
+
 Deep imperative reveal now uses a snapshot exact-position contract across the
 native and port implementations. It holds a pending stable id across ancestor
 expansion/hydration, then focuses and scrolls to the exact fixed-height offset.
@@ -204,9 +215,8 @@ and lazy host/port regression paths pass, with the port round trip measured at
 26.38 ms. Current UI validation is 316/316 tests.
 
 Remaining scaling gaps are O(n) ordered-id metadata for an extremely wide
-expanded folder; O(n) worst-case typeahead; and replacing the exact visible-id
-query's single traversal with a maintained rank structure if large native
-traces show that cost is material.
+expanded folder and replacing exact-position/prefix traversals with maintained
+rank and name indexes if large native traces show that cost is material.
 
 ## What is already strong
 

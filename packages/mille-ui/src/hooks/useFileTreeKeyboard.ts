@@ -75,6 +75,14 @@ export interface KeyboardRowLookup {
   findRowIndex?(id: EntryId, hintIndex?: number): number;
   /** Resolve an exact id position without nearby row-window probes. */
   findExactRowIndex?(id: EntryId, hintIndex?: number): number;
+  /** Payload-free engine fallback after the nearby typeahead window misses. */
+  findTypeaheadMatch?(
+    prefix: string,
+    fromId: EntryId | null,
+    skipCurrent: boolean,
+  ): Promise<EntryId | null>;
+  /** Focus/scroll hook for an engine-resolved match outside the local window. */
+  onTypeaheadMatch?(id: EntryId): void;
 }
 
 export interface UseFileTreeKeyboardOptions {
@@ -405,9 +413,15 @@ export function useFileTreeKeyboard(
         if (!isTypeaheadKey(event)) return;
         const windowedRead = rows.readRows;
         const windowedFind = rows.findRowIndex;
-        const nextId =
-          rows.rowCount !== undefined && windowedRead && windowedFind
-            ? typeahead.pushWindowed(
+        if (
+          rows.rowCount !== undefined &&
+          windowedRead &&
+          windowedFind &&
+          rows.findTypeaheadMatch
+        ) {
+          event.preventDefault();
+          void typeahead
+            .pushWindowedIndexed(
                 event.key,
                 {
                   rowCount: rows.rowCount,
@@ -415,8 +429,30 @@ export function useFileTreeKeyboard(
                   findRowIndex: (id) => windowedFind(id),
                 },
                 selection.focusedId,
-              )
-            : typeahead.push(
+              rows.findTypeaheadMatch,
+            )
+            .then((nextId) => {
+              if (nextId !== null) {
+                if (rows.onTypeaheadMatch) rows.onTypeaheadMatch(nextId);
+                else selection.selectOne(nextId);
+              }
+            })
+            .catch(() => {
+              // A failed host lookup leaves focus unchanged.
+            });
+          return;
+        }
+        const nextId = rows.rowCount !== undefined && windowedRead && windowedFind
+          ? typeahead.pushWindowed(
+              event.key,
+              {
+                rowCount: rows.rowCount,
+                readRows: windowedRead,
+                findRowIndex: (id) => windowedFind(id),
+              },
+              selection.focusedId,
+            )
+          : typeahead.push(
                 event.key,
                 toTypeaheadRows(rows.visibleRows),
                 selection.focusedId,
@@ -428,6 +464,9 @@ export function useFileTreeKeyboard(
         return;
       }
 
+      // Any named navigation/action leaves typeahead mode and invalidates a
+      // slower host fallback so it cannot steal focus after the new action.
+      typeahead.reset();
       const focusedId = selection.focusedId;
 
       switch (intent.id) {

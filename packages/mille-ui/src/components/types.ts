@@ -53,6 +53,13 @@ export interface FileTreeEngine {
   getSnapshot(): FileTreeSnapshotLike;
   /** Optional indexed workspace-relative path resolver. */
   resolvePath?(path: string): Promise<EntryId | null> | EntryId | null;
+  /** Optional payload-free full-order fallback for typeahead. */
+  findVisiblePrefix?(
+    prefix: string,
+    fromId: EntryId | null,
+    skipCurrent: boolean,
+    expanded: ReadonlySet<EntryId>,
+  ): Promise<EntryId | null> | EntryId | null;
   on(event: 'change', listener: (n?: unknown) => void): { dispose(): void };
   setExpanded(diff: {
     readonly add?: readonly EntryId[];

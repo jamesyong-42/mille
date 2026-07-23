@@ -183,6 +183,39 @@ export class PortFileExplorer {
     return payload.id;
   }
 
+  /** Run a payload-free typeahead fallback against the host's full snapshot. */
+  async findVisiblePrefix(
+    prefix: string,
+    fromId: number | null,
+    skipCurrent: boolean,
+    expanded: ReadonlySet<number>,
+  ): Promise<number | null> {
+    const result = await this.call('findVisiblePrefix', [
+      prefix,
+      fromId,
+      skipCurrent,
+      [...expanded],
+    ]);
+    if (typeof result === 'number') return result;
+    if (result === null || typeof result !== 'object') return null;
+    const payload = result as { id?: unknown; version?: unknown; entries?: unknown };
+    if (
+      typeof payload.id !== 'number' ||
+      typeof payload.version !== 'number' ||
+      !Array.isArray(payload.entries)
+    ) {
+      return null;
+    }
+    this.working = hydrateLookupEntries(
+      this.working,
+      payload.entries as ClientEntry[],
+      payload.version,
+      this.mirrorCap,
+    );
+    this.publishSnapshot();
+    return payload.id;
+  }
+
   /**
    * Current client-mirror snapshot. Identity is stable across ticks
    * that didn't deliver a new delta, so useSyncExternalStore can gate

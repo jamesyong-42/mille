@@ -261,6 +261,13 @@ type NativeSnapshot = {
     includeIgnored?: boolean;
   }): number[];
   visibleRowIndex(id: number, expanded: number[], includeIgnored?: boolean): number | null;
+  visiblePrefixMatch(
+    prefix: string,
+    fromId: number | null,
+    skipCurrent: boolean,
+    expanded: number[],
+    includeIgnored?: boolean,
+  ): number | null;
   visibleRowsBin(options: {
     expanded: number[];
     offset: number;
@@ -477,6 +484,16 @@ export class FileExplorer {
       if (entry !== null) return entry.id;
     }
     return null;
+  }
+
+  /** Payload-free full-order typeahead fallback. */
+  async findVisiblePrefix(
+    prefix: string,
+    fromId: EntryId | null,
+    skipCurrent: boolean,
+    expanded: ReadonlySet<EntryId>,
+  ): Promise<EntryId | null> {
+    return this.getSnapshot().visiblePrefixMatch(prefix, fromId, skipCurrent, expanded);
   }
 
   /**
@@ -965,6 +982,24 @@ export class MirrorSnapshot {
     includeIgnored?: boolean,
   ): number | null {
     return this.inner.visibleRowIndex(id, [...expanded], includeIgnored) ?? null;
+  }
+
+  visiblePrefixMatch(
+    prefix: string,
+    fromId: EntryId | null,
+    skipCurrent: boolean,
+    expanded: ReadonlySet<EntryId>,
+    includeIgnored?: boolean,
+  ): EntryId | null {
+    return (
+      this.inner.visiblePrefixMatch(
+        prefix,
+        fromId,
+        skipCurrent,
+        [...expanded],
+        includeIgnored,
+      ) ?? null
+    );
   }
 
   /**

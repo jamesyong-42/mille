@@ -170,6 +170,29 @@ impl MirrorSnapshot {
         )
     }
 
+    /// Payload-free full-order fallback for UI typeahead.
+    #[napi(js_name = "visiblePrefixMatch")]
+    pub fn visible_prefix_match(
+        &self,
+        prefix: String,
+        from_id: Option<i64>,
+        skip_current: bool,
+        expanded: Vec<i64>,
+        include_ignored: Option<bool>,
+    ) -> Option<i64> {
+        let expanded_set: HashSet<EntryId> =
+            expanded.iter().map(|raw| EntryId(*raw as u64)).collect();
+        self.inner
+            .visible_prefix_match(
+                &prefix,
+                from_id.map(|raw| EntryId(raw as u64)),
+                skip_current,
+                &expanded_set,
+                include_ignored.unwrap_or(false),
+            )
+            .map(|id| id.raw() as i64)
+    }
+
     /// Bulk-path sibling of `visibleRows` — returns the enriched rows
     /// (entry fields + viewport flags inlined) as a bincode-encoded
     /// `Buffer` instead of marshaling each row through NAPI. For

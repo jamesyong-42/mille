@@ -82,6 +82,11 @@ reports capture, stable JSON serialization, and validating parse p50/p95; fails
 if those paths exceed 50/20/30 ms respectively, if the JSON exceeds 500 KB, or
 if the bounded schema/round-trip invariants fail.
 
+The same root command also runs the Electron playground's disk-store gate. That
+gate fills all 32 workspace slots with maximum-shape state, reports main-process
+save p50/p95 plus cold-load time and file size, and fails above 100 ms save p95,
+75 ms cold load, or 16 MB.
+
 ## Why happy-dom
 
 Same reason the test suite uses it: fast, deterministic, no browser

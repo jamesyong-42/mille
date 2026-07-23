@@ -12,7 +12,13 @@ import {
   type ProfilerOnRenderCallback,
   type ReactElement,
 } from 'react';
-import { FileTreeProvider, FileTree, useFileTreeRef } from '@vibecook/mille-ui';
+import {
+  FileTreeProvider,
+  FileTree,
+  serializeFileTreeNavigationState,
+  useFileTreeRef,
+  type FileTreeNavigationState,
+} from '@vibecook/mille-ui';
 import type { IconTheme } from '@vibecook/mille-ui/icons';
 import { defaultIconTheme, duotoneIconTheme, minimalIconTheme } from '@vibecook/mille-ui/icons';
 import { createCommandRegistry, defaultCommands } from '@vibecook/mille-ui/commands';
@@ -133,13 +139,45 @@ export function App(): ReactElement {
     );
   }
 
-  return <Explorer fx={conn.fx} root={conn.workspaceRoot} />;
+  return <Explorer key={conn.workspaceRoot} fx={conn.fx} root={conn.workspaceRoot} />;
 }
 
 function Explorer({ fx, root }: { fx: PortFileExplorer; root: string }): ReactElement {
   const commands = useMemo(() => createCommandRegistry(defaultCommands), []);
   const treeRef = useFileTreeRef();
   const settingsRef = useRef<HTMLDivElement | null>(null);
+  const [initialNavigationState, setInitialNavigationState] = useState<string | null | undefined>(
+    undefined,
+  );
+  useEffect(() => {
+    let cancelled = false;
+    void window.millePlayground
+      .getFileTreeNavigationState(root)
+      .then((state) => {
+        if (!cancelled) setInitialNavigationState(state);
+      })
+      .catch((err: unknown) => {
+        console.warn('[playground] navigation restore failed:', err);
+        if (!cancelled) setInitialNavigationState(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [root]);
+  const persistNavigationState = useCallback(
+    (state: FileTreeNavigationState) => {
+      const serialized = serializeFileTreeNavigationState(state);
+      void window.millePlayground
+        .saveFileTreeNavigationState(root, serialized)
+        .then((saved) => {
+          if (!saved) console.warn('[playground] navigation state was not persisted');
+        })
+        .catch((err: unknown) => {
+          console.warn('[playground] navigation save failed:', err);
+        });
+    },
+    [root],
+  );
   const onTreeRender = useCallback<ProfilerOnRenderCallback>(
     (_id, phase, actualDuration, baseDuration, startTime, commitTime) => {
       publishTreeCommit(
@@ -438,19 +476,27 @@ function Explorer({ fx, root }: { fx: PortFileExplorer; root: string }): ReactEl
             data-mille-theme={iconThemeId === 'minimal' ? 'minimal' : undefined}
           >
             <Profiler id="file-tree" onRender={onTreeRender}>
-              <FileTree
-                ref={treeRef}
-                ariaLabel="Project"
-                iconTheme={iconTheme}
-                rowHeight={iconThemeId === 'minimal' ? 26 : 17}
-                overscan={36}
-                stickyRoots
-                showFilter={filterOpen}
-                searchMode="filter"
-                onOpen={(row) => {
-                  void openEntry(row);
-                }}
-              />
+              {initialNavigationState === undefined ? (
+                <div className="tree-navigation-loading" aria-busy="true">
+                  Restoring project view…
+                </div>
+              ) : (
+                <FileTree
+                  ref={treeRef}
+                  ariaLabel="Project"
+                  iconTheme={iconTheme}
+                  rowHeight={iconThemeId === 'minimal' ? 26 : 17}
+                  overscan={36}
+                  stickyRoots
+                  showFilter={filterOpen}
+                  searchMode="filter"
+                  initialNavigationState={initialNavigationState}
+                  onNavigationStateChange={persistNavigationState}
+                  onOpen={(row) => {
+                    void openEntry(row);
+                  }}
+                />
+              )}
             </Profiler>
           </div>
         </aside>

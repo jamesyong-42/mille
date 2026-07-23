@@ -623,8 +623,17 @@ paths, and does not eagerly materialize the visible tree. Both declarative
 `initialNavigationState`/debounced `onNavigationStateChange` wiring and
 imperative capture/restore methods are covered. The maximum-state gate measured
 capture p50/p95 1.93/2.30 ms, 158,124-byte serialization 0.46/0.59 ms, and
-validated parse 0.84/2.45 ms. Durable storage in the reference playground and
-same-display-name multi-root disambiguation remain paired with Phase 3.2.
+validated parse 0.84/2.45 ms.
+
+Reference persistence result (2026-07-22): the Electron playground now loads
+state before mounting each workspace tree and saves through context-isolated
+IPC to an atomic main-process store under `userData`. Workspace swaps remount
+the tree with their own root-keyed state. The store independently validates the
+schema/500 KB record ceiling, retains the 32 most recently updated workspaces,
+recovers from corrupt files, and never performs disk I/O on the renderer
+thread. Its worst-case 32-workspace gate produced a 5,687,497-byte file, save
+p50/p95 8.56/20.01 ms in the main process, and cold load+lookup 16.70 ms.
+Same-display-name multi-root disambiguation remains paired with Phase 3.2.
 
 #### 3.4 Follow the editor
 

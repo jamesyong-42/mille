@@ -63,6 +63,15 @@ contextBridge.exposeInMainWorld('millePlayground', {
     return list.filter((p): p is string => typeof p === 'string');
   },
 
+  async getFileTreeNavigationState(root: string): Promise<string | null> {
+    const state: unknown = await ipcRenderer.invoke('get-file-tree-navigation-state', root);
+    return typeof state === 'string' ? state : null;
+  },
+
+  async saveFileTreeNavigationState(root: string, state: string): Promise<boolean> {
+    return (await ipcRenderer.invoke('save-file-tree-navigation-state', root, state)) === true;
+  },
+
   /**
    * v0.2 — toggle git decorations. The shell-based `GitClient` uses
    * `node:child_process` + `fs.watch`, which can't run in the

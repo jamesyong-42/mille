@@ -75,11 +75,10 @@ import { join } from 'node:path';
 const WORKSPACE_ROOT = process.env.WORKSPACE_ROOT ?? homedir();
 
 async function createWindow() {
-  const fxProcess = utilityProcess.fork(
-    join(__dirname, '../main/fx-host.mjs'),
-    [],
-    { serviceName: 'mille-file-explorer', env: { ...process.env, WORKSPACE_ROOT } },
-  );
+  const fxProcess = utilityProcess.fork(join(__dirname, '../main/fx-host.mjs'), [], {
+    serviceName: 'mille-file-explorer',
+    env: { ...process.env, WORKSPACE_ROOT },
+  });
 
   const win = new BrowserWindow({
     webPreferences: {
@@ -160,11 +159,13 @@ export function App() {
   useEffect(() => {
     let disposed = false;
     (async () => {
-      const { port } = await fxPortReady;  // see fx-port.ts
+      const { port } = await fxPortReady; // see fx-port.ts
       const client = await connectFileExplorer(port, { mirrorCap: 20_000 });
       if (!disposed) setFx(client as unknown as FileExplorer);
     })();
-    return () => { disposed = true; };
+    return () => {
+      disposed = true;
+    };
   }, []);
 
   const commands = useMemo(() => createCommandRegistry(defaultCommands), []);
@@ -195,21 +196,21 @@ lost between the preload's send and React's first `useEffect`.
 Full listing in the engine UI spec — `MILLE_UI_SPEC.md` §6.1.
 Short summary:
 
-| Key             | Action                        |
-|-----------------|-------------------------------|
-| ↑ / ↓           | Move focus                    |
-| → / ←           | Expand / collapse folder      |
-| Enter           | Open file                     |
-| Space           | Toggle selection              |
-| Shift + ↑ / ↓   | Range select                  |
-| Mod + A         | Select all                    |
-| Mod + C / X / V | Copy / cut / paste            |
-| F2              | Rename                        |
-| Delete          | Delete                        |
-| Mod + F         | Focus filter                  |
-| Mod + N         | New file in focused folder    |
-| Mod + Shift + N | New folder                    |
-| Esc             | Clear selection / close menu  |
+| Key             | Action                       |
+| --------------- | ---------------------------- |
+| ↑ / ↓           | Move focus                   |
+| → / ←           | Expand / collapse folder     |
+| Enter           | Open file                    |
+| Space           | Toggle selection             |
+| Shift + ↑ / ↓   | Range select                 |
+| Mod + A         | Select all                   |
+| Mod + C / X / V | Copy / cut / paste           |
+| F2              | Rename                       |
+| Delete          | Delete                       |
+| Mod + F         | Focus filter                 |
+| Mod + N         | New file in focused folder   |
+| Mod + Shift + N | New folder                   |
+| Esc             | Clear selection / close menu |
 
 ## 4. Icon themes
 
@@ -228,7 +229,7 @@ import { loadIconTheme } from '@vibecook/mille-ui/icons';
 
 const theme = await loadIconTheme({
   url: '/icons/material/icon-theme.json',
-  appearance: 'auto',  // watches prefers-color-scheme
+  appearance: 'auto', // watches prefers-color-scheme
 });
 ```
 
@@ -249,8 +250,8 @@ import { registerGitDecorations } from '@vibecook/mille-ui/git';
 // Host supplies the git client (libgit2 via napi, isomorphic-git, …).
 // The companion wires it into the engine's decoration pipeline.
 const handle = registerGitDecorations({
-  fx,                                   // engine with registerDecorationProvider
-  client: hostGitClient,                // your implementation of GitClient
+  fx, // engine with registerDecorationProvider
+  client: hostGitClient, // your implementation of GitClient
   rootPath: '/Users/you/my-repo',
 });
 
@@ -324,6 +325,15 @@ Clear by deleting that JSON file (or the whole `userData` dir).
 Stored paths are trusted — they can only be seeded by the OS-native
 folder picker, never renderer-supplied strings — so the main-process
 skips canonicalization beyond `statSync` directory validation.
+
+## 6.2. Explorer navigation state (Phase 3)
+
+The playground restores expansion, selection, focus, filter, and scroll state
+from `app.getPath('userData') + '/file-tree-navigation.json'`. The renderer
+accesses it only through the context-isolated preload API; synchronous disk I/O
+stays in the main process. Records are keyed by absolute workspace root, capped
+at 500 KB each and 32 workspaces total, and written via temporary-file rename.
+Invalid, oversized, missing, or corrupt state falls back to a fresh tree.
 
 ## 7. Reference
 

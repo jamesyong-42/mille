@@ -14,6 +14,10 @@ import { readFileSync, statSync, writeFileSync } from 'node:fs';
 
 import { WatchBenchController, watchBenchConfigFromEnvironment } from './watch-bench-controller';
 import type { WatchBenchObservation } from '../shared/watch-bench';
+import {
+  createNavigationStateStore,
+  type NavigationStateStore,
+} from '../../scripts/navigation-state-store.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -29,6 +33,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 // throws if called before then.
 const RECENT_FOLDERS_MAX = 10;
 let recentFoldersPath: string | null = null;
+let navigationStateStore: NavigationStateStore | null = null;
 
 function loadRecentFolders(): string[] {
   if (recentFoldersPath === null) return [];
@@ -231,6 +236,15 @@ async function createWindow(): Promise<void> {
   // Cheap enough to re-read from disk on every call; no cache layer.
   ipcMain.handle('get-recent-folders', () => loadRecentFolders());
 
+  ipcMain.handle('get-file-tree-navigation-state', (_evt, root: unknown) => {
+    if (typeof root !== 'string' || root.length === 0) return null;
+    return navigationStateStore?.get(root) ?? null;
+  });
+  ipcMain.handle('save-file-tree-navigation-state', (_evt, root: unknown, state: unknown) => {
+    if (typeof root !== 'string' || typeof state !== 'string') return false;
+    return navigationStateStore?.set(root, state) ?? false;
+  });
+
   // Git decorations run in the fx utility process (they shell out to
   // `git`, which `node:child_process` can't do from the renderer).
   // Toolbar toggle → IPC → we forward to the current utility as a
@@ -249,6 +263,9 @@ async function createWindow(): Promise<void> {
 app.whenReady().then(() => {
   // v0.2 B7 — resolve userData path now that Electron is ready.
   recentFoldersPath = join(app.getPath('userData'), 'recent-folders.json');
+  navigationStateStore = createNavigationStateStore({
+    filePath: join(app.getPath('userData'), 'file-tree-navigation.json'),
+  });
   return createWindow();
 });
 

@@ -161,6 +161,11 @@ export interface InboundDelta {
   /** Subtrees flipped volatile / resynced (7.9, SPEC §4.9.10). */
   subtreeDirty: number[];
   subtreeResynced: number[];
+  visibility?: {
+    showHiddenFiles: boolean;
+    showIgnoredFiles: boolean;
+    compactFolders?: boolean;
+  };
   /**
    * Phase A1 — entry ids whose merged decoration set changed since the
    * previous delta. The reducer replaces `decorations[id]` for each
@@ -301,6 +306,12 @@ export function applyDelta(
 ): MirrorWorking {
   const next = cloneMirror(state);
   next.treeVersion = msg.version;
+  if (msg.visibility !== undefined) {
+    next.showHiddenFiles = msg.visibility.showHiddenFiles;
+    next.showIgnoredFiles = msg.visibility.showIgnoredFiles;
+    next.compactFolders = msg.visibility.compactFolders ?? false;
+    next.projectionVersion += 1;
+  }
 
   // A viewport patch replaces the prior pin set before entries are merged,
   // so the incoming window survives the eviction pass and the previous one

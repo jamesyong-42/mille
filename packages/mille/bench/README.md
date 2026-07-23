@@ -39,3 +39,16 @@ default gates are 100 ms for the cold plan and 10 ms warm p95. Override fixture
 size or budgets with `MILLE_NESTING_PAIRS`,
 `MILLE_NESTING_UNRELATED`, `MILLE_NESTING_COLD_BUDGET_MS`, and
 `MILLE_NESTING_P95_BUDGET_MS`.
+
+## Live projection reconfiguration
+
+```sh
+pnpm bench:reconfigure
+```
+
+The harness builds a 50,001-entry wide directory and alternates full display
+policies 20 times, including visibility, sibling ordering, and 15,000 nesting
+pairs. It reports atomic native update latency separately from the first
+200-row ready projection, plus the idempotent no-op path. Default p95 gates are
+50 ms update, 100 ms ready, and 0.1 ms no-op. Fixture size and budgets use the
+`MILLE_RECONFIGURE_*` environment variables.

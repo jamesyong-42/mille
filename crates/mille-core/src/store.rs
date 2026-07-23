@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use arc_swap::ArcSwap;
 use dashmap::DashMap;
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RwLock};
 
 use crate::changes::ChangeSet;
 use crate::entry::{Entry, EntryId, EntryKind};
@@ -32,8 +32,8 @@ pub struct EntryStore {
     // Guarded by its own mutex so writers can push under the write_lock without
     // tangling the main snapshot publish path.
     pending_changes: Mutex<ChangeSet>,
-    sibling_order: SiblingOrder,
-    visibility: VisibilityPolicy,
+    sibling_order: RwLock<SiblingOrder>,
+    visibility: RwLock<VisibilityPolicy>,
 }
 
 impl EntryStore {
@@ -78,8 +78,8 @@ impl EntryStore {
             id_counter: AtomicU64::new(0),
             write_lock: Mutex::new(()),
             pending_changes: Mutex::new(ChangeSet::default()),
-            sibling_order,
-            visibility,
+            sibling_order: RwLock::new(sibling_order),
+            visibility: RwLock::new(visibility),
         }
     }
 
@@ -117,6 +117,8 @@ impl EntryStore {
     /// ignore, symlink-target, and kind changes at a stable path.
     pub fn update(&self, id: EntryId, mut updated: Entry) -> Result<bool, FxError> {
         let _guard = self.write_lock.lock();
+        let sibling_order = *self.sibling_order.read();
+        let visibility = *self.visibility.read();
         let current = self.inner.load_full();
         let existing = current
             .entries
@@ -134,8 +136,8 @@ impl EntryStore {
             return Ok(false);
         }
 
-        let old_visible = self.visibility.includes(&existing) as i64;
-        let new_visible = self.visibility.includes(&updated) as i64;
+        let old_visible = visibility.includes(&existing) as i64;
+        let new_visible = visibility.includes(&updated) as i64;
         let visible_delta = new_visible - old_visible;
         let size_delta = updated.size as i128 - existing.size as i128;
 
@@ -176,7 +178,7 @@ impl EntryStore {
         // at the same path. Re-sort the stable id inside its sibling list.
         if existing.kind != next.entries[&id].kind
             || existing.symlink_target_is_dir != next.entries[&id].symlink_target_is_dir
-            || (self.sibling_order.sort_by == crate::sort::SortBy::Modified
+            || (sibling_order.sort_by == crate::sort::SortBy::Modified
                 && existing.mtime_ms != next.entries[&id].mtime_ms)
         {
             if let Some(parent_id) = existing.parent_id {
@@ -185,7 +187,7 @@ impl EntryStore {
                     let ae = next.entries.get(a);
                     let be = next.entries.get(b);
                     match (ae, be) {
-                        (Some(ae), Some(be)) => self.sibling_order.compare(ae, be),
+                        (Some(ae), Some(be)) => sibling_order.compare(ae, be),
                         _ => a.cmp(b),
                     }
                 });
@@ -207,6 +209,8 @@ impl EntryStore {
 
     pub fn insert(&self, path: PathBuf, mut entry: Entry) -> Result<EntryId, FxError> {
         let _guard = self.write_lock.lock();
+        let sibling_order = *self.sibling_order.read();
+        let visibility = *self.visibility.read();
         // Watch callbacks and an in-flight walker can discover the same path
         // concurrently. Path identity wins: returning the existing id keeps
         // insertion idempotent and prevents duplicate rows/self-echoes.
@@ -219,7 +223,7 @@ impl EntryStore {
         let size = entry.size;
 
         let current = self.inner.load_full();
-        let counts_visible = self.visibility.includes(&entry);
+        let counts_visible = visibility.includes(&entry);
         let mut next = (*current).clone();
         next.entries.insert(id, Arc::new(entry));
 
@@ -233,7 +237,7 @@ impl EntryStore {
                     .binary_search_by(|&sib| {
                         let sib_e = next.entries.get(&sib);
                         match (sib_e, next.entries.get(&id)) {
-                            (Some(sib_e), Some(entry)) => self.sibling_order.compare(sib_e, entry),
+                            (Some(sib_e), Some(entry)) => sibling_order.compare(sib_e, entry),
                             _ => sib.cmp(&id),
                         }
                     })
@@ -303,6 +307,7 @@ impl EntryStore {
 
     pub fn remove(&self, id: EntryId) -> Option<Arc<Entry>> {
         let _guard = self.write_lock.lock();
+        let visibility = *self.visibility.read();
         let current = self.inner.load_full();
         let existing = current.entries.get(&id)?.clone();
 
@@ -310,7 +315,7 @@ impl EntryStore {
 
         // Self-only contribution; the cache slot holds subtree totals, which
         // would double-count when descendants' own cache entries are still live.
-        let vis_contribution = if self.visibility.includes(&existing) {
+        let vis_contribution = if visibility.includes(&existing) {
             1u32
         } else {
             0
@@ -507,6 +512,7 @@ impl EntryStore {
 
     pub fn rename(&self, id: EntryId, new_path: PathBuf) -> Result<(), FxError> {
         let _guard = self.write_lock.lock();
+        let sibling_order = *self.sibling_order.read();
         let entry = self
             .inner
             .load()
@@ -573,9 +579,7 @@ impl EntryStore {
                     .binary_search_by(|&sib| {
                         let sib_e = next.entries.get(&sib);
                         match (sib_e, next.entries.get(&id)) {
-                            (Some(sib_e), Some(updated)) => {
-                                self.sibling_order.compare(sib_e, updated)
-                            }
+                            (Some(sib_e), Some(updated)) => sibling_order.compare(sib_e, updated),
                             _ => sib.cmp(&id),
                         }
                     })
@@ -611,6 +615,85 @@ impl EntryStore {
         });
 
         Ok(())
+    }
+
+    /// Atomically replace every display-only projection policy.
+    ///
+    /// Entry identities, paths, metadata, and the retained prior snapshot stay
+    /// untouched. The newly-published snapshot re-sorts sibling lists and
+    /// rebuilds visibility summaries before its version becomes observable.
+    pub fn reconfigure_projection(
+        &self,
+        sibling_order: SiblingOrder,
+        visibility: VisibilityPolicy,
+        compact_folders: bool,
+        file_nesting: FileNestingPolicy,
+    ) -> u64 {
+        let _guard = self.write_lock.lock();
+        let current = self.inner.load_full();
+        if *self.sibling_order.read() == sibling_order
+            && current.visibility == visibility
+            && current.compact_folders == compact_folders
+            && current.file_nesting == file_nesting
+        {
+            return current.tree_version;
+        }
+
+        let mut next = (*current).clone();
+        next.visibility = visibility;
+        next.compact_folders = compact_folders;
+        next.file_nesting = file_nesting;
+
+        let entries = &next.entries;
+        for siblings in next.children.values_mut() {
+            siblings.sort_by(
+                |left, right| match (entries.get(left), entries.get(right)) {
+                    (Some(left), Some(right)) => sibling_order.compare(left, right),
+                    _ => left.cmp(right),
+                },
+            );
+        }
+
+        next.descendant_visible_counts.clear();
+        for (id, entry) in &next.entries {
+            next.descendant_visible_counts
+                .insert(*id, visibility.includes(entry) as u32);
+        }
+        let visible_ids: Vec<EntryId> = next
+            .entries
+            .iter()
+            .filter_map(|(id, entry)| visibility.includes(entry).then_some(*id))
+            .collect();
+        for id in visible_ids {
+            let mut cursor = next.entries.get(&id).and_then(|entry| entry.parent_id);
+            let mut hops = 0usize;
+            while let Some(ancestor) = cursor {
+                if hops >= MAX_ANCESTOR_WALK {
+                    break;
+                }
+                *next.descendant_visible_counts.entry(ancestor).or_insert(0) += 1;
+                cursor = next
+                    .entries
+                    .get(&ancestor)
+                    .and_then(|entry| entry.parent_id);
+                hops += 1;
+            }
+        }
+
+        let prev_tree_version = next.tree_version;
+        next.tree_version += 1;
+        let new_tree_version = next.tree_version;
+        let changed_parents: Vec<EntryId> = next.children.keys().copied().collect();
+        let changed_roots: Vec<EntryId> = next.roots.iter().copied().collect();
+        *self.sibling_order.write() = sibling_order;
+        *self.visibility.write() = visibility;
+        self.inner.store(Arc::new(next));
+        self.record_mutation(prev_tree_version, new_tree_version, |changes| {
+            changes.projection_changed = true;
+            changes.child_set_changed.extend(changed_parents);
+            changes.subtree_roots_changed.extend(changed_roots);
+        });
+        new_tree_version
     }
 
     /// Push a mutation into the pending ChangeSet. Stamps `from_version` on
@@ -1108,6 +1191,79 @@ mod tests {
         assert!(after.projected_children_of(source, false).is_empty());
         assert_eq!(before.projected_children_of(source, false), vec![test]);
         assert!(s.take_pending_changes().child_set_changed.contains(&root));
+    }
+
+    #[test]
+    fn projection_reconfiguration_is_atomic_and_retained_snapshots_stay_stable() {
+        let s = EntryStore::with_projection_settings(
+            SiblingOrder::default(),
+            VisibilityPolicy::project_view(),
+            false,
+            FileNestingPolicy::default(),
+        );
+        let root = s.insert("/r".into(), dir("r", None)).unwrap();
+        let directory = s
+            .insert("/r/z-dir".into(), dir("z-dir", Some(root)))
+            .unwrap();
+        let file = s
+            .insert("/r/a.txt".into(), leaf("a.txt", Some(root)))
+            .unwrap();
+        let mut hidden_entry = leaf(".hidden", Some(root));
+        hidden_entry.is_hidden = true;
+        let hidden = s.insert("/r/.hidden".into(), hidden_entry).unwrap();
+        let source = s
+            .insert("/r/source.ts".into(), leaf("source.ts", Some(root)))
+            .unwrap();
+        let test = s
+            .insert(
+                "/r/source.test.ts".into(),
+                leaf("source.test.ts", Some(root)),
+            )
+            .unwrap();
+        let _ = s.take_pending_changes();
+        let before = s.snapshot();
+        assert_eq!(before.subtree_visible_count(root), 6);
+        assert!(before.projected_children_of(root, false).contains(&hidden));
+        assert!(before.projected_children_of(root, false).contains(&test));
+
+        let updated_order = SiblingOrder {
+            sort_by: crate::sort::SortBy::Name,
+            case_sensitive: true,
+            folders_on_top: false,
+        };
+        let updated_visibility = VisibilityPolicy {
+            show_hidden_files: false,
+            show_ignored_files: true,
+        };
+        let updated_nesting =
+            FileNestingPolicy::new([("*.ts".into(), vec!["${capture}.test.ts".into()])], true);
+        let version = s.reconfigure_projection(
+            updated_order,
+            updated_visibility,
+            true,
+            updated_nesting.clone(),
+        );
+        let after = s.snapshot();
+        assert_eq!(version, before.tree_version() + 1);
+        assert_eq!(after.tree_version(), version);
+        assert_eq!(
+            after.projected_children_of(root, false),
+            vec![file, source, directory]
+        );
+        assert_eq!(after.projected_children_of(source, false), vec![test]);
+        assert_eq!(after.subtree_visible_count(root), 5);
+        assert_eq!(before.subtree_visible_count(root), 6);
+        assert!(before.projected_children_of(root, false).contains(&hidden));
+        assert!(before.projected_children_of(root, false).contains(&test));
+
+        let changes = s.take_pending_changes();
+        assert!(changes.projection_changed);
+        assert!(changes.child_set_changed.contains(&root));
+        assert!(changes.subtree_roots_changed.contains(&root));
+        let unchanged =
+            s.reconfigure_projection(updated_order, updated_visibility, true, updated_nesting);
+        assert_eq!(unchanged, version);
+        assert!(s.take_pending_changes().is_empty());
     }
 
     // --- ChangeSet producer tests (commit 4.1) ---

@@ -31,6 +31,9 @@ pub struct ChangeSet {
     /// Phase 7 uses this to decide which expanded folders need their
     /// child-list re-sent; subtree_roots_changed drives row-count refresh.
     pub child_set_changed: HashSet<EntryId>,
+    /// The snapshot's display policy changed without changing entry records.
+    /// Forces host/renderer projection refresh even for an empty workspace.
+    pub projection_changed: bool,
     /// Tree version BEFORE the changes landed.
     pub from_version: u64,
     /// Tree version AFTER the changes landed (the current one).
@@ -43,6 +46,7 @@ impl ChangeSet {
             && self.reparented_ids.is_empty()
             && self.subtree_roots_changed.is_empty()
             && self.child_set_changed.is_empty()
+            && !self.projection_changed
     }
 
     pub fn len(&self) -> usize {
@@ -58,6 +62,7 @@ impl ChangeSet {
         self.subtree_roots_changed
             .extend(other.subtree_roots_changed);
         self.child_set_changed.extend(other.child_set_changed);
+        self.projection_changed |= other.projection_changed;
         // Version bookends: preserve earliest `from` and latest `to`. A zero
         // `from_version` on either side means "unset" — take the non-zero one.
         if self.from_version == 0
@@ -95,6 +100,17 @@ mod tests {
         assert_eq!(a.child_set_changed.len(), 2);
         assert!(a.child_set_changed.contains(&EntryId(100)));
         assert!(a.child_set_changed.contains(&EntryId(101)));
+    }
+
+    #[test]
+    fn projection_change_is_non_empty_and_survives_merge() {
+        let mut projection = ChangeSet::default();
+        projection.projection_changed = true;
+        assert!(!projection.is_empty());
+
+        let mut accumulated = ChangeSet::default();
+        accumulated.merge(projection);
+        assert!(accumulated.projection_changed);
     }
 
     #[test]

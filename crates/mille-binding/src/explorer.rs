@@ -30,6 +30,17 @@ pub struct FileNestingRuleJs {
     pub child_patterns: Vec<String>,
 }
 
+#[napi(object)]
+pub struct ProjectionSettingsJs {
+    pub sort_by: String,
+    pub case_sensitive: bool,
+    pub folders_on_top: bool,
+    pub show_hidden_files: bool,
+    pub show_ignored_files: bool,
+    pub compact_folders: bool,
+    pub file_nesting_rules: Vec<FileNestingRuleJs>,
+}
+
 /// Local-mode capability bitmask advertised in Phase 5 wave 1.
 /// ReadWrite (1) | CaseSensitive (2) | Watch (32) = 35.
 /// Keep in sync with api.d.ts `Capability` when later waves expand.
@@ -520,6 +531,56 @@ impl FileExplorer {
         MirrorSnapshot {
             inner: self.store.snapshot(),
         }
+    }
+
+    /// Atomically replace display-only settings without rebuilding or walking
+    /// the explorer. Ignore/exclude policy is intentionally not accepted here:
+    /// changing it requires filesystem reconciliation, not mere projection.
+    #[napi(js_name = "updateProjectionSettings")]
+    pub fn update_projection_settings(&self, settings: ProjectionSettingsJs) -> u32 {
+        let previous_version = self.store.tree_version() as u32;
+        let sibling_order = mille_core::sort::SiblingOrder {
+            sort_by: match settings.sort_by.as_str() {
+                "type" => mille_core::sort::SortBy::Type,
+                "modified" => mille_core::sort::SortBy::Modified,
+                _ => mille_core::sort::SortBy::Name,
+            },
+            case_sensitive: settings.case_sensitive,
+            folders_on_top: settings.folders_on_top,
+        };
+        let visibility = mille_core::VisibilityPolicy {
+            show_hidden_files: settings.show_hidden_files,
+            show_ignored_files: settings.show_ignored_files,
+        };
+        let nesting = mille_core::FileNestingPolicy::new(
+            settings
+                .file_nesting_rules
+                .into_iter()
+                .map(|rule| (rule.parent_pattern, rule.child_patterns)),
+            settings.case_sensitive,
+        );
+        let version = self.store.reconfigure_projection(
+            sibling_order,
+            visibility,
+            settings.compact_folders,
+            nesting,
+        ) as u32;
+        if version == previous_version {
+            return version;
+        }
+        let notice = || ChangeNoticeJs {
+            tree_version: version,
+            decoration_version: 0,
+            tree_changed: true,
+            decorations_changed: false,
+            changed_ids: Vec::new(),
+            child_set_changed: Vec::new(),
+            decoration_changed_ids: Vec::new(),
+            coarse_subtrees: Vec::new(),
+        };
+        self.events.emit_change(Channel::Change, notice());
+        self.events.emit_change(Channel::ChangeTree, notice());
+        version
     }
 
     /// Drain the store's pending ChangeSet, atomically resetting it. Called

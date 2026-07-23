@@ -32,7 +32,7 @@ import { wrap } from './errors.js';
 import { decodeBulkRows, type VisibleRow as DecodedRow } from './decode.js';
 import type { ChangeSet } from './delta.js';
 import { DecorationStore, type DecorationProvider } from './decorations.js';
-import type { ResolvedExplorerSettings } from './explorer-settings.js';
+import type { ExplorerProjectionSettings, ResolvedExplorerSettings } from './explorer-settings.js';
 
 /**
  * Platform-appropriate path join. On POSIX this is `path.join`; on
@@ -187,6 +187,7 @@ type NativeFx = {
   resolvePath?(path: string): Promise<number | null>;
   getSnapshot(): NativeSnapshot;
   takePendingChanges(): NativeChangeSet;
+  updateProjectionSettings(settings: NativeProjectionSettings): number;
   populateFromRoots(): Promise<number>;
   // Phase B2 — bounded-depth walk of a single path. Older native builds
   // (pre-v0.2) may not ship this method; the TS wrapper guards with
@@ -222,6 +223,16 @@ type NativeFx = {
   dispose(): Promise<void>;
 };
 
+type NativeProjectionSettings = {
+  sortBy: string;
+  caseSensitive: boolean;
+  foldersOnTop: boolean;
+  showHiddenFiles: boolean;
+  showIgnoredFiles: boolean;
+  compactFolders: boolean;
+  fileNestingRules: Array<{ parentPattern: string; childPatterns: string[] }>;
+};
+
 type NativeReadStream = {
   next(): Promise<Buffer | null>;
   cancel(): void;
@@ -234,6 +245,7 @@ type NativeChangeSet = {
   changedIds: number[];
   subtreeRootsChanged: number[];
   childSetChanged: number[];
+  projectionChanged: boolean;
   reparentedIds: Array<{
     id: number;
     oldParentId: number | null;
@@ -329,6 +341,23 @@ function encodeFollowSymlinks(v: ExplorerOptions['followSymlinks']): string | un
   return 'smart';
 }
 
+function encodeProjectionSettings(settings: ExplorerProjectionSettings): NativeProjectionSettings {
+  return {
+    sortBy: settings.sortBy,
+    caseSensitive: settings.caseSensitive,
+    foldersOnTop: settings.foldersOnTop,
+    showHiddenFiles: settings.showHiddenFiles,
+    showIgnoredFiles: settings.showIgnoredFiles,
+    compactFolders: settings.compactFolders,
+    fileNestingRules: Object.entries(settings.fileNestingPatterns).map(
+      ([parentPattern, childPatterns]) => ({
+        parentPattern,
+        childPatterns: [...childPatterns],
+      }),
+    ),
+  };
+}
+
 /**
  * Typed `FileExplorer` wrapping the native binding. All async methods
  * funnel through `wrap()` so rejected napi errors surface as
@@ -410,6 +439,15 @@ export class FileExplorer {
       for (const l of this.decorationListeners) l(ids);
       for (const l of this.changeAnyListeners) l(ids);
     });
+  }
+
+  /**
+   * Atomically update display-only projection settings on the existing tree.
+   * Exclude globs and locale are omitted because they require a filesystem
+   * reconciliation or a locale-aware comparator implementation respectively.
+   */
+  updateProjectionSettings(settings: ExplorerProjectionSettings): number {
+    return this.nativeFx.updateProjectionSettings(encodeProjectionSettings(settings));
   }
 
   get capabilities(): number {
@@ -700,6 +738,7 @@ export class FileExplorer {
       changedIds: cs.changedIds,
       subtreeRootsChanged: cs.subtreeRootsChanged,
       childSetChanged: cs.childSetChanged,
+      projectionChanged: cs.projectionChanged,
       reparentedIds: cs.reparentedIds.map((r) => ({
         id: r.id,
         oldParentId: r.oldParentId,

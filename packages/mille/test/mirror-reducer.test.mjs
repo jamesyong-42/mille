@@ -194,6 +194,30 @@ test('applyDelta updates existing entries (changedIds)', () => {
   assert.equal(state.byId.get(1).name, 'old');
 });
 
+test('applyDelta atomically replaces the projection policy', () => {
+  const state = createMirror();
+  const initialProjectionVersion = state.projectionVersion;
+  const next = applyDelta(
+    state,
+    emptyDelta({
+      version: 2,
+      visibility: {
+        showHiddenFiles: false,
+        showIgnoredFiles: false,
+        compactFolders: true,
+      },
+    }),
+  );
+
+  assert.equal(next.showHiddenFiles, false);
+  assert.equal(next.showIgnoredFiles, false);
+  assert.equal(next.compactFolders, true);
+  assert.equal(next.projectionVersion, initialProjectionVersion + 1);
+  assert.equal(state.showHiddenFiles, true, 'source policy remains immutable');
+  assert.equal(state.compactFolders, false, 'source policy remains immutable');
+  assert.equal(state.projectionVersion, initialProjectionVersion);
+});
+
 test('applyDelta removes entries and purges aliased caches', () => {
   const state = createMirror();
   state.byId.set(1, entry({ id: 1 }));

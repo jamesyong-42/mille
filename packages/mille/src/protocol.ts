@@ -194,6 +194,11 @@ export interface DeltaMsg {
     coarseSubtrees: number[];
     subtreeDirty: number[];
     subtreeResynced: number[];
+    visibility?: {
+      showHiddenFiles: boolean;
+      showIgnoredFiles: boolean;
+      compactFolders?: boolean;
+    };
     /**
      * Phase A1 — decoration fan-out piggybacks on the delta frame.
      *

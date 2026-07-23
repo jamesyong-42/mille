@@ -30,6 +30,7 @@ import {
   type DecorationsFrameBody,
 } from './protocol.js';
 import type { Disposable, FileExplorerHost, MessagePortLike } from './types.js';
+import type { ExplorerProjectionSettings } from './explorer-settings.js';
 
 /**
  * Project a public `Entry` into the mirror-local `ClientEntry` shape.
@@ -431,7 +432,8 @@ class FileExplorerHostImpl implements FileExplorerHost {
       cs.changedIds.length === 0 &&
       cs.childSetChanged.length === 0 &&
       cs.subtreeRootsChanged.length === 0 &&
-      cs.reparentedIds.length === 0;
+      cs.reparentedIds.length === 0 &&
+      cs.projectionChanged !== true;
 
     // Drain pending subtree markers. Doing this once per tick (not once
     // per session) guarantees all attached sessions see the same marker
@@ -628,6 +630,15 @@ class FileExplorerHostImpl implements FileExplorerHost {
           coarseSubtrees: coarse,
           subtreeDirty,
           subtreeResynced,
+          ...(cs.projectionChanged
+            ? {
+                visibility: {
+                  showHiddenFiles: snap.showHiddenFiles,
+                  showIgnoredFiles: snap.showIgnoredFiles,
+                  compactFolders: snap.compactFolders,
+                },
+              }
+            : {}),
           ...(decorationChangedIds.length > 0
             ? {
                 decorationChangedIds,
@@ -1123,6 +1134,19 @@ class FileExplorerHostImpl implements FileExplorerHost {
         return this.explorer.getTreeVersion();
       case 'capabilities':
         return this.explorer.capabilities;
+      case 'updateProjectionSettings': {
+        const settings = args[0];
+        if (typeof settings !== 'object' || settings === null || Array.isArray(settings)) {
+          throw new Error('updateProjectionSettings requires a settings object');
+        }
+        const version = this.explorer.updateProjectionSettings(
+          settings as ExplorerProjectionSettings,
+        );
+        // Publish the new ordering/visibility to every session before the
+        // initiating renderer observes RPC completion.
+        await this.flushTickNow();
+        return version;
+      }
       case 'resolvePath': {
         const path = args[0];
         if (typeof path !== 'string') throw new Error('resolvePath requires a string path');

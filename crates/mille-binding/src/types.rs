@@ -272,6 +272,7 @@ pub struct ChangeSetJs {
     pub changed_ids: Vec<i64>,
     pub subtree_roots_changed: Vec<i64>,
     pub child_set_changed: Vec<i64>,
+    pub projection_changed: bool,
     pub reparented_ids: Vec<ReparentJs>,
     pub from_version: u32,
     pub to_version: u32,
@@ -307,6 +308,7 @@ impl ChangeSetJs {
                 .copied()
                 .map(entry_id_to_i64)
                 .collect(),
+            projection_changed: cs.projection_changed,
             reparented_ids: cs
                 .reparented_ids
                 .iter()

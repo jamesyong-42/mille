@@ -40,6 +40,7 @@ import {
   type DecorationOnWire,
 } from './protocol.js';
 import type { Disposable, MessagePortLike } from './types.js';
+import type { ExplorerProjectionSettings } from './explorer-settings.js';
 
 interface PendingRequest {
   resolve: (value: unknown) => void;
@@ -294,6 +295,15 @@ export class PortFileExplorer {
     this.sendAfterReady(frame('setViewport', body));
   }
 
+  /** Atomically update the host's display projection for every attached client. */
+  async updateProjectionSettings(settings: ExplorerProjectionSettings): Promise<number> {
+    const result = await this.call('updateProjectionSettings', [settings]);
+    if (typeof result !== 'number') {
+      throw new FileSystemError('EUNKNOWN', 'invalid updateProjectionSettings response');
+    }
+    return result;
+  }
+
   // ─── Mutations ────────────────────────────────────────────────────
 
   create(parentId: number, name: string, kind: number): Promise<unknown> {
@@ -310,10 +320,7 @@ export class PortFileExplorer {
     return this.mutate('move', args);
   }
 
-  delete(
-    id: number,
-    options?: { trash?: boolean; recursive?: boolean },
-  ): Promise<unknown> {
+  delete(id: number, options?: { trash?: boolean; recursive?: boolean }): Promise<unknown> {
     const args: Record<string, unknown> = { id };
     if (options !== undefined) args.options = options;
     return this.mutate('delete', args);
@@ -336,11 +343,7 @@ export class PortFileExplorer {
     return this.mutate('readText', args);
   }
 
-  writeFile(
-    id: number,
-    data: Uint8Array,
-    options?: { atomic?: boolean },
-  ): Promise<unknown> {
+  writeFile(id: number, data: Uint8Array, options?: { atomic?: boolean }): Promise<unknown> {
     const args: Record<string, unknown> = { id, data: Array.from(data) };
     if (options !== undefined) args.options = options;
     return this.mutate('writeFile', args);
@@ -689,11 +692,7 @@ export class PortFileExplorer {
     this.pending.delete(body.reqId);
     if (body.error) {
       pending.reject(
-        new FileSystemError(
-          body.error.code as ErrorCode,
-          body.error.message,
-          body.error.path,
-        ),
+        new FileSystemError(body.error.code as ErrorCode, body.error.message, body.error.path),
       );
     } else {
       pending.resolve(body.result);
@@ -746,9 +745,7 @@ export async function connectFileExplorer(
  */
 function isThenable<T>(v: T | Promise<T>): v is Promise<T> {
   return (
-    v !== null &&
-    typeof v === 'object' &&
-    typeof (v as { then?: unknown }).then === 'function'
+    v !== null && typeof v === 'object' && typeof (v as { then?: unknown }).then === 'function'
   );
 }
 

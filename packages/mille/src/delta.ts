@@ -20,6 +20,7 @@ export interface ChangeSet {
   changedIds: number[];
   subtreeRootsChanged: number[];
   childSetChanged: number[];
+  projectionChanged?: boolean;
   reparentedIds: ReparentEntry[];
   fromVersion: number;
   toVersion: number;
@@ -78,10 +79,7 @@ export interface SessionDelta {
  *     visibility-transition tracking. For now both stay empty; mutations
  *     dispatched through the session explicitly manage knownIds.
  */
-export function computeSessionDelta(
-  changeSet: ChangeSet,
-  session: SessionView,
-): SessionDelta {
+export function computeSessionDelta(changeSet: ChangeSet, session: SessionView): SessionDelta {
   const changedIds: number[] = [];
   for (const id of changeSet.changedIds) {
     if (session.knownIds.has(id)) changedIds.push(id);

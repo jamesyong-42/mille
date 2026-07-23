@@ -249,6 +249,15 @@ viewport. Immutable-snapshot memoization reduced the identical warm path to
 2.24 ms median / 2.44 ms p95, with a 35.23 ms cold plan; caches reset on
 structural clones, and a retained older snapshot remains internally consistent.
 
+Display settings can now change on a live explorer without rebuilding its
+store. One atomic snapshot publication covers sibling order, visibility,
+compact folders, and nesting; host deltas update every renderer mirror before
+the initiating port resolves. Retained snapshots stay stable and identical
+settings do not advance versions or emit changes. The 50,001-entry gate
+measured 11.83 ms median / 12.16 ms p95 for the native policy update and
+37.97/40.07 ms for the first ready 200-row projection, versus 30,878.05 ms for
+the initial filesystem population; idempotent updates measured 0.001 ms p95.
+
 ## What is already strong
 
 ### Engine and host architecture
@@ -355,7 +364,7 @@ watcher-reconciliation walks. Remaining settings gaps include:
 
 - locale-aware collation beyond the live natural/type/modified,
   case-sensitive, folders-on-top native ordering policy;
-- runtime reconfiguration without rebuilding the explorer;
+- runtime exclude-glob reconfiguration with reversible ignore provenance;
 - UI controls for hidden/ignored visibility and exclusion settings;
 - same-display-name multi-root disambiguation for the new bounded, versioned,
   durably stored expansion/selection/focus/filter/scroll navigation state.

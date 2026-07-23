@@ -27,6 +27,17 @@ export interface ResolvedExplorerSettings {
   readonly fileNestingPatterns: Readonly<Record<string, readonly string[]>>;
 }
 
+export type ExplorerProjectionSettings = Pick<
+  ResolvedExplorerSettings,
+  | 'sortBy'
+  | 'caseSensitive'
+  | 'foldersOnTop'
+  | 'showHiddenFiles'
+  | 'showIgnoredFiles'
+  | 'compactFolders'
+  | 'fileNestingPatterns'
+>;
+
 export type ExplorerSettingsOverride = Partial<ResolvedExplorerSettings>;
 
 export interface ExplorerWorkspaceSettings {

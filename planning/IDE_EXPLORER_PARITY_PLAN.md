@@ -682,6 +682,21 @@ viewport work from 59.30/61.14 ms median/p95 to 2.24/2.44 ms, with a 35.23 ms
 cold plan and 10 ms warm p95 gate. Locale-aware collation and runtime
 reconfiguration remain for Phase 3.1.
 
+Live-projection result (2026-07-22): `updateProjectionSettings` now atomically
+replaces name/type/modified ordering, case sensitivity, folders-on-top,
+hidden/ignored visibility, compact folders, and file nesting on an existing
+store. The new immutable snapshot re-sorts every sibling list and rebuilds
+visibility summaries before publishing one version; retained snapshots remain
+stable and identical settings are a version/event no-op. A projection-change
+delta refreshes authoritative child lists, viewport rows, counts, and mirror
+policy for every attached client before the initiating port promise resolves.
+Local, retained-snapshot, idempotence, and two-client tests cover the contract.
+On a 50,001-entry directory with 15,000 nesting pairs, the atomic update
+measured 11.83/12.16 ms median/p95 and the first ready 200-row projection
+37.97/40.07 ms; a no-op measured 0.001 ms p95 versus 30,878.05 ms for the
+initial walk. Runtime exclude changes remain coupled to ignore-provenance and
+reconciliation work; locale-aware collation also remains.
+
 #### 3.2 Complete multi-root workspace behavior
 
 - Add, remove, rename-display, and reorder workspace roots.

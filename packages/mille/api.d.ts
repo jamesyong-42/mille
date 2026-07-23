@@ -205,6 +205,17 @@ export interface ResolvedExplorerSettings {
   readonly fileNestingPatterns: Readonly<Record<string, readonly string[]>>;
 }
 
+export type ExplorerProjectionSettings = Pick<
+  ResolvedExplorerSettings,
+  | 'sortBy'
+  | 'caseSensitive'
+  | 'foldersOnTop'
+  | 'showHiddenFiles'
+  | 'showIgnoredFiles'
+  | 'compactFolders'
+  | 'fileNestingPatterns'
+>;
+
 export type ExplorerSettingsOverride = Partial<ResolvedExplorerSettings>;
 
 export interface ExplorerWorkspaceSettings {
@@ -487,6 +498,15 @@ export declare class FileExplorer implements Disposable {
    *     const rows = snap.visibleRows({ expanded, offset, limit });
    */
   getSnapshot(): MirrorSnapshot;
+
+  /**
+   * Atomically replace display-only settings without rebuilding or walking.
+   * Local explorers return the new version synchronously; port explorers
+   * resolve after every attached mirror has received the new projection.
+   */
+  updateProjectionSettings(
+    settings: ExplorerProjectionSettings,
+  ): TreeVersion | Promise<TreeVersion>;
 
   /** Async URI → entry. May return null if the URI isn't under a known root. */
   getByUri(uri: Uri): Promise<Entry | null>;

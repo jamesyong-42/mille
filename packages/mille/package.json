@@ -58,6 +58,7 @@
     "bench:visibility": "node bench/visibility-projection.mjs",
     "bench:compact": "node bench/compact-folders.mjs",
     "bench:nesting": "node bench/file-nesting.mjs",
+    "bench:reconfigure": "node bench/projection-reconfigure.mjs",
     "bench:watch:soak": "node bench/watch-soak.mjs",
     "artifacts": "napi artifacts",
     "prepublishOnly": "napi prepublish -t npm"

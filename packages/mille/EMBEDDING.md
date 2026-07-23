@@ -929,6 +929,26 @@ could claim the same file, current sibling order then normalized rule order
 wins. Nesting is one level deep, never creates synthetic IDs, and never changes
 filesystem mutation paths. Local snapshots and port clients use the same
 authoritative projected child lists.
+
+Display projection settings can be changed without rebuilding or rewalking the
+explorer:
+
+```ts
+await fx.updateProjectionSettings({
+  ...settings,
+  showHiddenFiles: false,
+  compactFolders: true,
+});
+```
+
+The update publishes one atomic tree version covering sort mode, case
+sensitivity, folders-on-top, hidden/ignored visibility, compact folders, and
+file nesting. Existing snapshots remain immutable. On a port client, the
+promise resolves only after every attached mirror has received the new
+projection. Locale and exclude globs are intentionally absent from
+`ExplorerProjectionSettings`: locale-aware comparison is not implemented yet,
+and changing excludes safely requires a filesystem reconciliation because
+ignore provenance is currently flattened on each entry.
 Counts, indexes, typeahead, host viewports, and port mirrors use the same leaf
 identity. In roots-only mode the host follows the chain with bounded depth-1
 reads and stops at the first branch; it does not eagerly walk the subtree.

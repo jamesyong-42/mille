@@ -43,6 +43,7 @@ export {
 } from './explorer-settings.js';
 export type {
   ExplorerSortBy,
+  ExplorerProjectionSettings,
   ExplorerSettingsOverride,
   ExplorerWorkspaceSettings,
   ExplorerSettingsDocument,

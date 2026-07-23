@@ -125,6 +125,7 @@ pub(crate) async fn stat_to_entry(
         symlink_target_is_dir,
         path_segments: None,
         is_ignored: false,
+        is_excluded: false,
         is_readonly,
         is_hidden,
     })

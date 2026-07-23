@@ -64,9 +64,23 @@ pub struct Entry {
     pub symlink_target_is_dir: Option<bool>,
     #[serde(default)]
     pub path_segments: Option<Vec<String>>,
+    /// Ignored by repository-owned rules (`.gitignore`, `.ignore`,
+    /// `.rgignore`). Configured explorer excludes are tracked separately so
+    /// they can be removed at runtime without losing this provenance.
     pub is_ignored: bool,
     pub is_readonly: bool,
     pub is_hidden: bool,
+    /// Appended to the serialized record so format-v1 entries can still
+    /// deserialize with the default and reach the resume version gate.
+    #[serde(default)]
+    pub is_excluded: bool,
+}
+
+impl Entry {
+    #[inline]
+    pub fn is_ignored_or_excluded(&self) -> bool {
+        self.is_ignored || self.is_excluded
+    }
 }
 
 bitflags! {
@@ -155,6 +169,7 @@ mod tests {
             symlink_target_is_dir: None,
             path_segments: Some(vec!["a".into(), "b".into(), "README.md".into()]),
             is_ignored: false,
+            is_excluded: false,
             is_readonly: false,
             is_hidden: false,
         };

@@ -213,6 +213,7 @@ export type ExplorerProjectionSettings = Pick<
   | 'showHiddenFiles'
   | 'showIgnoredFiles'
   | 'compactFolders'
+  | 'excludeGlobs'
   | 'fileNestingPatterns'
 >;
 
@@ -500,7 +501,8 @@ export declare class FileExplorer implements Disposable {
   getSnapshot(): MirrorSnapshot;
 
   /**
-   * Atomically replace display-only settings without rebuilding or walking.
+   * Atomically replace display settings without rebuilding or walking.
+   * Indexed entries are immediately reclassified for exclude-glob changes.
    * Local explorers return the new version synchronously; port explorers
    * resolve after every attached mirror has received the new projection.
    */

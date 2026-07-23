@@ -694,8 +694,25 @@ Local, retained-snapshot, idempotence, and two-client tests cover the contract.
 On a 50,001-entry directory with 15,000 nesting pairs, the atomic update
 measured 11.83/12.16 ms median/p95 and the first ready 200-row projection
 37.97/40.07 ms; a no-op measured 0.001 ms p95 versus 30,878.05 ms for the
-initial walk. Runtime exclude changes remain coupled to ignore-provenance and
-reconciliation work; locale-aware collation also remains.
+initial walk. At that checkpoint runtime exclude changes still required
+ignore-provenance and reconciliation work; locale-aware collation also
+remained.
+
+Live-exclude result (2026-07-23): repository-ignore and configured-exclude
+provenance are now stored independently while the public `isIgnored` contract
+remains their union. `updateProjectionSettings` atomically reclassifies every
+indexed path, rebuilds visibility summaries, and publishes changed entry
+records with the projection delta; retained snapshots stay immutable. The
+shared policy gate prevents an old watcher matcher from overwriting the new
+classification, and initial/lazy walks plus Mille-created or externally
+discovered files use the current rules. Removing a glob restores configured
+entries without exposing paths that repository rules still ignore. Resume
+format version 2 records the extra provenance bit. Local, retained-snapshot,
+mutation, lazy-prefetch, no-op, and two-client tests cover the contract. The
+50,001-entry harness toggles 20,000 exclusions alongside sorting and nesting:
+43.23/93.73 ms median/p95 for the atomic update, 46.51/93.73 ms for adding
+exclusions, 32.91/34.32 ms for removing them, 114.14 ms p95 through the first
+200-row projection, and 0.004 ms no-op p95. Locale-aware collation remains.
 
 #### 3.2 Complete multi-root workspace behavior
 

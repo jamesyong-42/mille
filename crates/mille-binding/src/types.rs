@@ -55,7 +55,7 @@ impl EntryJs {
             ctime_ms: e.ctime_ms,
             symlink_target_is_dir: e.symlink_target_is_dir,
             path_segments: e.path_segments.clone(),
-            is_ignored: e.is_ignored,
+            is_ignored: e.is_ignored_or_excluded(),
             is_readonly: e.is_readonly,
             is_hidden: e.is_hidden,
         }
@@ -100,7 +100,7 @@ impl VisibleRowJs {
                 .path_segments
                 .clone()
                 .or_else(|| entry.path_segments.clone()),
-            is_ignored: entry.is_ignored,
+            is_ignored: entry.is_ignored_or_excluded(),
             is_readonly: entry.is_readonly,
             is_hidden: entry.is_hidden,
             depth: row.depth as u32,
@@ -136,7 +136,7 @@ impl VisibleRowJs {
                 .path_segments
                 .clone()
                 .or_else(|| entry.path_segments.clone()),
-            is_ignored: entry.is_ignored,
+            is_ignored: entry.is_ignored_or_excluded(),
             is_readonly: entry.is_readonly,
             is_hidden: entry.is_hidden,
             depth: row.depth as u32,

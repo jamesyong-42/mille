@@ -127,6 +127,7 @@ mod tests {
             symlink_target_is_dir: None,
             path_segments: None,
             is_ignored: false,
+            is_excluded: false,
             is_readonly: false,
             is_hidden: false,
         }

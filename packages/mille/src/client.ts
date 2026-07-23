@@ -230,6 +230,7 @@ type NativeProjectionSettings = {
   showHiddenFiles: boolean;
   showIgnoredFiles: boolean;
   compactFolders: boolean;
+  excludeGlobs: string[];
   fileNestingRules: Array<{ parentPattern: string; childPatterns: string[] }>;
 };
 
@@ -349,6 +350,7 @@ function encodeProjectionSettings(settings: ExplorerProjectionSettings): NativeP
     showHiddenFiles: settings.showHiddenFiles,
     showIgnoredFiles: settings.showIgnoredFiles,
     compactFolders: settings.compactFolders,
+    excludeGlobs: [...settings.excludeGlobs],
     fileNestingRules: Object.entries(settings.fileNestingPatterns).map(
       ([parentPattern, childPatterns]) => ({
         parentPattern,
@@ -443,8 +445,9 @@ export class FileExplorer {
 
   /**
    * Atomically update display-only projection settings on the existing tree.
-   * Exclude globs and locale are omitted because they require a filesystem
-   * reconciliation or a locale-aware comparator implementation respectively.
+   * Indexed entries are reclassified immediately when exclude globs change;
+   * newly un-excluded directory contents stay lazily hydrated until expansion.
+   * Locale remains omitted until the native comparator is locale-aware.
    */
   updateProjectionSettings(settings: ExplorerProjectionSettings): number {
     return this.nativeFx.updateProjectionSettings(encodeProjectionSettings(settings));

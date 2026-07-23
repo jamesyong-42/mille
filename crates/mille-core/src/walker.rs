@@ -317,6 +317,19 @@ pub fn populate_store(
     walked: &[WalkedEntry],
     ignore: Option<&crate::ignore::IgnoreMatcher>,
 ) -> Result<Vec<crate::entry::EntryId>, FxError> {
+    populate_store_with_provenance(store, root, walked, ignore, None)
+}
+
+/// Populate while retaining the source of ignore decisions. Repository rules
+/// and explorer-configured excludes remain independently reversible even
+/// though public consumers observe their union as `isIgnored`.
+pub fn populate_store_with_provenance(
+    store: &crate::store::EntryStore,
+    root: &Path,
+    walked: &[WalkedEntry],
+    repository_ignore: Option<&crate::ignore::IgnoreMatcher>,
+    excludes: Option<&crate::ignore::IgnoreMatcher>,
+) -> Result<Vec<crate::entry::EntryId>, FxError> {
     use crate::entry::{Entry, EntryId, EntryKind};
     use std::collections::HashMap;
 
@@ -349,7 +362,11 @@ pub fn populate_store(
         let _ = root;
 
         let is_dir_like = w.kind == EntryKind::Directory || w.symlink_target_is_dir == Some(true);
-        let is_ignored = match ignore {
+        let is_ignored = match repository_ignore {
+            Some(m) => m.is_ignored(&w.path, is_dir_like),
+            None => false,
+        };
+        let is_excluded = match excludes {
             Some(m) => m.is_ignored(&w.path, is_dir_like),
             None => false,
         };
@@ -365,6 +382,7 @@ pub fn populate_store(
             symlink_target_is_dir: w.symlink_target_is_dir,
             path_segments: None,
             is_ignored,
+            is_excluded,
             is_readonly: w.is_readonly,
             is_hidden: w.is_hidden,
         };

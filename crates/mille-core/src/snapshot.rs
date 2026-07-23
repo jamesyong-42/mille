@@ -42,7 +42,7 @@ impl VisibilityPolicy {
             return false;
         }
         (self.show_hidden_files || !entry.is_hidden)
-            && (self.show_ignored_files || !entry.is_ignored)
+            && (self.show_ignored_files || !entry.is_ignored_or_excluded())
     }
 }
 
@@ -835,6 +835,7 @@ mod tests {
             symlink_target_is_dir: None,
             path_segments: None,
             is_ignored: ignored,
+            is_excluded: false,
             is_readonly: false,
             is_hidden: hidden,
         }

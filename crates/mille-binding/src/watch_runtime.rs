@@ -24,7 +24,8 @@ use crate::types::{ChangeNoticeJs, EntryJs, ErrorPayloadJs, FileSystemEventJs, W
 pub(crate) struct WatchConfig {
     pub roots: Vec<PathBuf>,
     pub respect_ignore: bool,
-    pub exclude_globs: Vec<String>,
+    pub exclude_globs: Arc<parking_lot::RwLock<Vec<String>>>,
+    pub policy_gate: Arc<Mutex<()>>,
     pub follow_symlinks: SymlinkPolicy,
     pub walker_concurrency: usize,
     pub debounce_ms: u64,
@@ -99,6 +100,7 @@ fn process_batch(
     config: &WatchConfig,
     raw: Vec<mille_core::RawEvent>,
 ) {
+    let _policy_guard = config.policy_gate.lock();
     let now = Instant::now();
     let raw: Vec<_> = raw
         .into_iter()
@@ -410,7 +412,8 @@ fn reconcile_directory(
         include_root: true,
         parallelism: config.walker_concurrency,
     };
-    let (mut walked, matcher) = walk_for_reconcile(directory, walk_options, config)?;
+    let (mut walked, repository_ignore, excludes) =
+        walk_for_reconcile(directory, walk_options, config)?;
     walked.sort_by(|a, b| a.depth.cmp(&b.depth).then_with(|| a.path.cmp(&b.path)));
     let disk_paths: HashSet<PathBuf> = walked.iter().map(|entry| entry.path.clone()).collect();
 
@@ -456,7 +459,12 @@ fn reconcile_directory(
                     .and_then(|parent| store.get_by_path(parent))
                     .map(|entry| entry.id)
             });
-        let entry = entry_from_walked(walked_entry, parent_id, matcher.as_ref());
+        let entry = entry_from_walked(
+            walked_entry,
+            parent_id,
+            repository_ignore.as_ref(),
+            excludes.as_ref(),
+        );
         if let Some(existing) = existing {
             if existing.kind == EntryKind::Directory && entry.kind != EntryKind::Directory {
                 let removed = store.remove_subtree(existing.id);
@@ -495,15 +503,26 @@ fn walk_for_reconcile(
     directory: &Path,
     options: WalkOptions,
     config: &WatchConfig,
-) -> Result<(Vec<WalkedEntry>, Option<IgnoreMatcher>), FxError> {
-    if !config.respect_ignore && config.exclude_globs.is_empty() {
-        return Ok((walk(directory, options)?, None));
+) -> Result<
+    (
+        Vec<WalkedEntry>,
+        Option<IgnoreMatcher>,
+        Option<IgnoreMatcher>,
+    ),
+    FxError,
+> {
+    let exclude_globs = config.exclude_globs.read().clone();
+    if !config.respect_ignore && exclude_globs.is_empty() {
+        return Ok((walk(directory, options)?, None, None));
     }
 
     let root = containing_root(&config.roots, directory).unwrap_or_else(|| directory.to_path_buf());
-    let mut seeded = IgnoreMatcher::new();
-    if !config.exclude_globs.is_empty() {
-        seeded.add_from_string(&root, &config.exclude_globs.join("\n"))?;
+    let mut traversal = IgnoreMatcher::new();
+    let mut repository_ignore = IgnoreMatcher::new();
+    let mut excludes = IgnoreMatcher::new();
+    if !exclude_globs.is_empty() {
+        traversal.add_from_string(&root, &exclude_globs.join("\n"))?;
+        excludes.add_from_string(&root, &exclude_globs.join("\n"))?;
     }
     let mut anchor = root.clone();
     for segment in directory
@@ -513,14 +532,16 @@ fn walk_for_reconcile(
         .flat_map(|path| path.iter())
     {
         if config.respect_ignore {
-            add_ignore_files(&mut seeded, &anchor);
+            add_ignore_files(&mut traversal, &anchor);
+            add_ignore_files(&mut repository_ignore, &anchor);
         }
         anchor = anchor.join(segment);
     }
     if config.respect_ignore {
-        add_ignore_files(&mut seeded, directory);
+        add_ignore_files(&mut traversal, directory);
+        add_ignore_files(&mut repository_ignore, directory);
     }
-    let walked = walk_with_ignore(directory, options, &seeded)?;
+    let walked = walk_with_ignore(directory, options, &traversal)?;
     // Keep ancestor rules that were seeded above the bounded walk, while
     // adding nested ignore files discovered during this reconciliation.
     if config.respect_ignore {
@@ -528,11 +549,15 @@ fn walk_for_reconcile(
             if entry.path.file_name().is_some_and(|name| {
                 mille_core::IGNORE_FILE_NAMES.contains(&name.to_string_lossy().as_ref())
             }) {
-                let _ = seeded.add_from_file(&entry.path);
+                let _ = repository_ignore.add_from_file(&entry.path);
             }
         }
     }
-    Ok((walked, Some(seeded)))
+    Ok((
+        walked,
+        config.respect_ignore.then_some(repository_ignore),
+        (!exclude_globs.is_empty()).then_some(excludes),
+    ))
 }
 
 fn add_ignore_files(matcher: &mut IgnoreMatcher, directory: &Path) {
@@ -547,7 +572,8 @@ fn add_ignore_files(matcher: &mut IgnoreMatcher, directory: &Path) {
 fn entry_from_walked(
     walked: &WalkedEntry,
     parent_id: Option<EntryId>,
-    matcher: Option<&IgnoreMatcher>,
+    repository_ignore: Option<&IgnoreMatcher>,
+    excludes: Option<&IgnoreMatcher>,
 ) -> Entry {
     let directory_like =
         walked.kind == EntryKind::Directory || walked.symlink_target_is_dir == Some(true);
@@ -561,7 +587,10 @@ fn entry_from_walked(
         ctime_ms: walked.ctime_ms,
         symlink_target_is_dir: walked.symlink_target_is_dir,
         path_segments: None,
-        is_ignored: matcher
+        is_ignored: repository_ignore
+            .map(|matcher| matcher.is_ignored(&walked.path, directory_like))
+            .unwrap_or(false),
+        is_excluded: excludes
             .map(|matcher| matcher.is_ignored(&walked.path, directory_like))
             .unwrap_or(false),
         is_readonly: walked.is_readonly,

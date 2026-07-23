@@ -9,8 +9,8 @@ import { DEFAULT_EXPLORER_SETTINGS, FileExplorer } from '../dist/index.js';
 const pairs = Number(process.env.MILLE_RECONFIGURE_PAIRS ?? 15_000);
 const unrelated = Number(process.env.MILLE_RECONFIGURE_UNRELATED ?? 20_000);
 const samples = Number(process.env.MILLE_RECONFIGURE_SAMPLES ?? 20);
-const updateBudgetMs = Number(process.env.MILLE_RECONFIGURE_UPDATE_P95_BUDGET_MS ?? 50);
-const readyBudgetMs = Number(process.env.MILLE_RECONFIGURE_READY_P95_BUDGET_MS ?? 100);
+const updateBudgetMs = Number(process.env.MILLE_RECONFIGURE_UPDATE_P95_BUDGET_MS ?? 125);
+const readyBudgetMs = Number(process.env.MILLE_RECONFIGURE_READY_P95_BUDGET_MS ?? 160);
 const noopBudgetMs = Number(process.env.MILLE_RECONFIGURE_NOOP_P95_BUDGET_MS ?? 0.1);
 const root = mkdtempSync(join(tmpdir(), 'mille-reconfigure-bench-'));
 
@@ -34,7 +34,9 @@ const alternate = {
   caseSensitive: true,
   foldersOnTop: false,
   showHiddenFiles: false,
+  showIgnoredFiles: false,
   compactFolders: false,
+  excludeGlobs: ['zz-note-*.md'],
   fileNestingPatterns: {
     '*.ts': ['${capture}.test.ts'],
   },
@@ -54,6 +56,8 @@ try {
   const expanded = new Set([rootEntry.id]);
   const updateTimings = [];
   const readyTimings = [];
+  const excludeAddTimings = [];
+  const excludeRemoveTimings = [];
 
   for (let sample = 0; sample < samples + 2; sample++) {
     const settings = sample % 2 === 0 ? alternate : baseline;
@@ -67,13 +71,17 @@ try {
     assert.equal(rows.length, 200);
     assert.equal(snapshot.showHiddenFiles, settings.showHiddenFiles);
     if (sample >= 2) {
-      updateTimings.push(updatedAt - start);
+      const updateMs = updatedAt - start;
+      updateTimings.push(updateMs);
       readyTimings.push(readyAt - start);
+      (settings === alternate ? excludeAddTimings : excludeRemoveTimings).push(updateMs);
     }
   }
 
   updateTimings.sort((a, b) => a - b);
   readyTimings.sort((a, b) => a - b);
+  excludeAddTimings.sort((a, b) => a - b);
+  excludeRemoveTimings.sort((a, b) => a - b);
   const stableSettings = samples % 2 === 0 ? baseline : alternate;
   const stableVersion = fx.getTreeVersion();
   const noopTimings = [];
@@ -90,6 +98,10 @@ try {
     populateMs: Number(populateMs.toFixed(2)),
     updateMedianMs: Number(percentile(updateTimings, 0.5).toFixed(2)),
     updateP95Ms: Number(percentile(updateTimings, 0.95).toFixed(2)),
+    excludeAddMedianMs: Number(percentile(excludeAddTimings, 0.5).toFixed(2)),
+    excludeAddP95Ms: Number(percentile(excludeAddTimings, 0.95).toFixed(2)),
+    excludeRemoveMedianMs: Number(percentile(excludeRemoveTimings, 0.5).toFixed(2)),
+    excludeRemoveP95Ms: Number(percentile(excludeRemoveTimings, 0.95).toFixed(2)),
     readyMedianMs: Number(percentile(readyTimings, 0.5).toFixed(2)),
     readyP95Ms: Number(percentile(readyTimings, 0.95).toFixed(2)),
     noopP95Ms: Number(percentile(noopTimings, 0.95).toFixed(3)),

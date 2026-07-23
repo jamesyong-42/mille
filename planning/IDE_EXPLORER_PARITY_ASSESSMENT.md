@@ -360,11 +360,15 @@ type, modified-time, case, folders-on-top, hidden, ignored, exclude-glob,
 compact-folder, and file-nesting behavior at explorer construction. Native and
 renderer-mirror projections share visibility, compact leaf identities, and
 authoritative nested child lists, and exclude globs apply to initial, lazy, and
-watcher-reconciliation walks. Remaining settings gaps include:
+watcher-reconciliation walks. Live settings updates now preserve separate
+repository-ignore and configured-exclude provenance, atomically reclassify
+indexed entries, and update future lazy walks, mutations, and watcher batches.
+The 50,001-entry gate changes 20,000 exclusion flags per toggle: 43.23/93.73 ms
+median/p95 for the complete atomic update, 114.14 ms ready p95 for 200 rows,
+and 0.004 ms no-op p95. Remaining settings gaps include:
 
 - locale-aware collation beyond the live natural/type/modified,
   case-sensitive, folders-on-top native ordering policy;
-- runtime exclude-glob reconfiguration with reversible ignore provenance;
 - UI controls for hidden/ignored visibility and exclusion settings;
 - same-display-name multi-root disambiguation for the new bounded, versioned,
   durably stored expansion/selection/focus/filter/scroll navigation state.

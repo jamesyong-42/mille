@@ -35,6 +35,7 @@ export type ExplorerProjectionSettings = Pick<
   | 'showHiddenFiles'
   | 'showIgnoredFiles'
   | 'compactFolders'
+  | 'excludeGlobs'
   | 'fileNestingPatterns'
 >;
 

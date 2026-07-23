@@ -629,17 +629,101 @@ impl EntryStore {
         compact_folders: bool,
         file_nesting: FileNestingPolicy,
     ) -> u64 {
+        self.reconfigure_projection_inner::<fn(&Path, &Entry) -> bool>(
+            sibling_order,
+            visibility,
+            compact_folders,
+            file_nesting,
+            None,
+        )
+    }
+
+    /// Reclassify only configured excludes while retaining every other
+    /// projection policy. This is used after mutations whose destination path
+    /// may enter or leave an exclude pattern.
+    pub fn reconfigure_exclusions<F>(&self, classify_excluded: F) -> u64
+    where
+        F: Fn(&Path, &Entry) -> bool,
+    {
+        let snapshot = self.inner.load_full();
+        let sibling_order = *self.sibling_order.read();
+        self.reconfigure_projection_with_exclusions(
+            sibling_order,
+            snapshot.visibility,
+            snapshot.compact_folders,
+            snapshot.file_nesting.clone(),
+            classify_excluded,
+        )
+    }
+
+    /// Atomically replace display policies and reclassify configured excludes.
+    ///
+    /// `classify_excluded` runs once for every indexed path while writers are
+    /// serialized. Repository-ignore provenance is retained independently on
+    /// each entry, so adding and removing exclude globs is reversible.
+    pub fn reconfigure_projection_with_exclusions<F>(
+        &self,
+        sibling_order: SiblingOrder,
+        visibility: VisibilityPolicy,
+        compact_folders: bool,
+        file_nesting: FileNestingPolicy,
+        classify_excluded: F,
+    ) -> u64
+    where
+        F: Fn(&Path, &Entry) -> bool,
+    {
+        self.reconfigure_projection_inner(
+            sibling_order,
+            visibility,
+            compact_folders,
+            file_nesting,
+            Some(classify_excluded),
+        )
+    }
+
+    fn reconfigure_projection_inner<F>(
+        &self,
+        sibling_order: SiblingOrder,
+        visibility: VisibilityPolicy,
+        compact_folders: bool,
+        file_nesting: FileNestingPolicy,
+        classify_excluded: Option<F>,
+    ) -> u64
+    where
+        F: Fn(&Path, &Entry) -> bool,
+    {
         let _guard = self.write_lock.lock();
         let current = self.inner.load_full();
-        if *self.sibling_order.read() == sibling_order
-            && current.visibility == visibility
-            && current.compact_folders == compact_folders
-            && current.file_nesting == file_nesting
-        {
+        let policy_changed = *self.sibling_order.read() != sibling_order
+            || current.visibility != visibility
+            || current.compact_folders != compact_folders
+            || current.file_nesting != file_nesting;
+        if !policy_changed && classify_excluded.is_none() {
             return current.tree_version;
         }
 
         let mut next = (*current).clone();
+        let mut exclusion_changed = Vec::new();
+        if let Some(classify_excluded) = classify_excluded {
+            for path_and_id in self.path_to_id.iter() {
+                let id = *path_and_id.value();
+                let Some(existing) = next.entries.get(&id) else {
+                    continue;
+                };
+                let excluded = classify_excluded(path_and_id.key(), existing);
+                if existing.is_excluded == excluded {
+                    continue;
+                }
+                let mut updated = (**existing).clone();
+                updated.is_excluded = excluded;
+                next.entries.insert(id, Arc::new(updated));
+                exclusion_changed.push(id);
+            }
+        }
+        if !policy_changed && exclusion_changed.is_empty() {
+            return current.tree_version;
+        }
+
         next.visibility = visibility;
         next.compact_folders = compact_folders;
         next.file_nesting = file_nesting;
@@ -690,6 +774,7 @@ impl EntryStore {
         self.inner.store(Arc::new(next));
         self.record_mutation(prev_tree_version, new_tree_version, |changes| {
             changes.projection_changed = true;
+            changes.changed_ids.extend(exclusion_changed);
             changes.child_set_changed.extend(changed_parents);
             changes.subtree_roots_changed.extend(changed_roots);
         });
@@ -749,6 +834,7 @@ mod tests {
             symlink_target_is_dir: None,
             path_segments: None,
             is_ignored: false,
+            is_excluded: false,
             is_readonly: false,
             is_hidden: false,
         }
@@ -1264,6 +1350,71 @@ mod tests {
             s.reconfigure_projection(updated_order, updated_visibility, true, updated_nesting);
         assert_eq!(unchanged, version);
         assert!(s.take_pending_changes().is_empty());
+    }
+
+    #[test]
+    fn configured_excludes_are_reversible_without_losing_repository_ignore_provenance() {
+        let visibility = VisibilityPolicy {
+            show_hidden_files: true,
+            show_ignored_files: false,
+        };
+        let s = EntryStore::with_projection_settings(
+            SiblingOrder::default(),
+            visibility,
+            false,
+            FileNestingPolicy::default(),
+        );
+        let root = s.insert("/r".into(), dir("r", None)).unwrap();
+        let generated = s
+            .insert("/r/generated.log".into(), leaf("generated.log", Some(root)))
+            .unwrap();
+        let mut repository_ignored = leaf("repository.log", Some(root));
+        repository_ignored.is_ignored = true;
+        let repository_ignored = s
+            .insert("/r/repository.log".into(), repository_ignored)
+            .unwrap();
+        let visible = s
+            .insert("/r/visible.txt".into(), leaf("visible.txt", Some(root)))
+            .unwrap();
+        let _ = s.take_pending_changes();
+
+        let added = s.reconfigure_projection_with_exclusions(
+            SiblingOrder::default(),
+            visibility,
+            false,
+            FileNestingPolicy::default(),
+            |path, _| path.ends_with("generated.log"),
+        );
+        let excluded = s.snapshot();
+        assert!(excluded.get(generated).unwrap().is_excluded);
+        assert!(excluded
+            .get(repository_ignored)
+            .unwrap()
+            .is_ignored_or_excluded());
+        assert_eq!(excluded.projected_children_of(root, false), vec![visible]);
+        assert_eq!(excluded.subtree_visible_count(root), 2);
+        let changes = s.take_pending_changes();
+        assert_eq!(changes.changed_ids, HashSet::from([generated]));
+
+        let removed = s.reconfigure_projection_with_exclusions(
+            SiblingOrder::default(),
+            visibility,
+            false,
+            FileNestingPolicy::default(),
+            |_, _| false,
+        );
+        let restored = s.snapshot();
+        assert_eq!(removed, added + 1);
+        assert!(!restored.get(generated).unwrap().is_ignored_or_excluded());
+        assert!(restored
+            .get(repository_ignored)
+            .unwrap()
+            .is_ignored_or_excluded());
+        assert_eq!(
+            restored.projected_children_of(root, false),
+            vec![generated, visible]
+        );
+        assert_eq!(restored.subtree_visible_count(root), 3);
     }
 
     // --- ChangeSet producer tests (commit 4.1) ---

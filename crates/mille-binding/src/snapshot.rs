@@ -274,7 +274,7 @@ impl MirrorSnapshot {
                         .path_segments
                         .clone()
                         .or_else(|| entry.path_segments.clone()),
-                    is_ignored: entry.is_ignored,
+                    is_ignored: entry.is_ignored_or_excluded(),
                     is_readonly: entry.is_readonly,
                     is_hidden: entry.is_hidden,
                     depth: r.depth,

@@ -38,6 +38,7 @@ pub struct ProjectionSettingsJs {
     pub show_hidden_files: bool,
     pub show_ignored_files: bool,
     pub compact_folders: bool,
+    pub exclude_globs: Vec<String>,
     pub file_nesting_rules: Vec<FileNestingRuleJs>,
 }
 
@@ -79,7 +80,6 @@ pub(crate) struct ResolvedOptions {
     pub walker_concurrency: usize,
     pub watch_debounce_ms: u64,
     pub compact_folders: bool,
-    pub exclude_globs: Vec<String>,
     pub snapshot_path: Option<PathBuf>,
     pub max_cached_entries: usize,
 }
@@ -93,6 +93,12 @@ pub struct FileExplorer {
     disposed: AtomicBool,
     pub(crate) roots: Vec<PathBuf>,
     pub(crate) options: ResolvedOptions,
+    /// Runtime-configurable exclude rules shared by initial/lazy walks and
+    /// watcher reconciliation.
+    pub(crate) exclude_globs: Arc<parking_lot::RwLock<Vec<String>>>,
+    /// Serializes classification against settings changes so a watcher batch
+    /// using an old matcher cannot overwrite freshly reclassified entries.
+    pub(crate) policy_gate: Arc<parking_lot::Mutex<()>>,
     /// Event fan-out for on('change' | 'event' | 'batch' | ...). Shared
     /// via Arc so background-thread emitters can clone one reference per
     /// producer.
@@ -128,6 +134,7 @@ impl FileExplorer {
                 .map(|rule| (rule.parent_pattern, rule.child_patterns)),
             case_sensitive,
         );
+        let exclude_globs = options.exclude_globs.take().unwrap_or_default();
         let resolved = ResolvedOptions {
             respect_ignore: options.respect_ignore.unwrap_or(true),
             follow_symlinks: match options.follow_symlinks.as_deref() {
@@ -141,7 +148,6 @@ impl FileExplorer {
                 .unwrap_or_else(num_cpus_or_8),
             watch_debounce_ms: options.watch_debounce_ms.unwrap_or(75) as u64,
             compact_folders: options.compact_folders.unwrap_or(true),
-            exclude_globs: options.exclude_globs.unwrap_or_default(),
             snapshot_path: options.snapshot_path.map(PathBuf::from),
             max_cached_entries: options
                 .max_cached_entries
@@ -175,6 +181,8 @@ impl FileExplorer {
             disposed: AtomicBool::new(false),
             roots,
             options: resolved,
+            exclude_globs: Arc::new(parking_lot::RwLock::new(exclude_globs)),
+            policy_gate: Arc::new(parking_lot::Mutex::new(())),
             events: Arc::new(EventBus::new()),
         })
     }
@@ -304,6 +312,9 @@ impl FileExplorer {
                 if inserted_ids.is_empty() {
                     return Ok(Some(entry.id.raw() as i64));
                 }
+                let _policy_guard = self.policy_gate.lock();
+                self.reclassify_current_excludes()
+                    .map_err(fx_error_to_napi)?;
                 let version = self.store.tree_version() as u32;
                 let notice = || ChangeNoticeJs {
                     tree_version: version,
@@ -344,9 +355,13 @@ impl FileExplorer {
     /// closes the race between initial scan results and live events.
     #[napi(js_name = "populateFromRoots")]
     pub async fn populate_from_roots(&self) -> Result<u32> {
-        use mille_core::{populate_store, walk, walk_with_ignore, IgnoreMatcher, WalkOptions};
+        use mille_core::{
+            populate_store_with_provenance, walk, walk_with_ignore, IgnoreMatcher, WalkOptions,
+        };
 
         self.ensure_watcher()?;
+        let _policy_guard = self.policy_gate.lock();
+        let exclude_globs = self.exclude_globs.read().clone();
         let mut total: u32 = 0;
         for root in &self.roots {
             let options = WalkOptions {
@@ -363,40 +378,54 @@ impl FileExplorer {
             // very first read_dir call. Nested ignore files are added
             // dynamically inside walk_with_ignore as subdirectories are
             // streamed.
-            let use_matcher = self.options.respect_ignore || !self.options.exclude_globs.is_empty();
-            let (walked, matcher) = if use_matcher {
-                let mut seeded = IgnoreMatcher::new();
+            let use_matcher = self.options.respect_ignore || !exclude_globs.is_empty();
+            let (walked, repository_ignore, excludes) = if use_matcher {
+                let mut traversal = IgnoreMatcher::new();
+                let mut repository_ignore = IgnoreMatcher::new();
+                let mut excludes = IgnoreMatcher::new();
                 if self.options.respect_ignore {
                     for name in mille_core::IGNORE_FILE_NAMES {
                         let candidate = root.join(name);
                         if candidate.is_file() {
-                            let _ = seeded.add_from_file(&candidate);
+                            let _ = traversal.add_from_file(&candidate);
+                            let _ = repository_ignore.add_from_file(&candidate);
                         }
                     }
                 }
-                add_exclude_globs(&mut seeded, root, &self.options.exclude_globs)
+                add_exclude_globs(&mut traversal, root, &exclude_globs)
                     .map_err(fx_error_to_napi)?;
-                let w = walk_with_ignore(root, options, &seeded).map_err(fx_error_to_napi)?;
+                add_exclude_globs(&mut excludes, root, &exclude_globs).map_err(fx_error_to_napi)?;
+                let w = walk_with_ignore(root, options, &traversal).map_err(fx_error_to_napi)?;
                 if self.options.respect_ignore {
                     for entry in &w {
                         if entry.path.file_name().is_some_and(|name| {
                             mille_core::IGNORE_FILE_NAMES.contains(&name.to_string_lossy().as_ref())
                         }) {
-                            let _ = seeded.add_from_file(&entry.path);
+                            let _ = repository_ignore.add_from_file(&entry.path);
                         }
                     }
                 }
-                (w, Some(seeded))
+                (
+                    w,
+                    self.options.respect_ignore.then_some(repository_ignore),
+                    (!exclude_globs.is_empty()).then_some(excludes),
+                )
             } else {
                 let w = walk(root, options).map_err(fx_error_to_napi)?;
-                (w, None)
+                (w, None, None)
             };
             let new_entries: Vec<_> = walked
                 .into_iter()
                 .filter(|entry| self.store.get_by_path(&entry.path).is_none())
                 .collect();
-            let ids = populate_store(&self.store, root, &new_entries, matcher.as_ref())
-                .map_err(fx_error_to_napi)?;
+            let ids = populate_store_with_provenance(
+                &self.store,
+                root,
+                &new_entries,
+                repository_ignore.as_ref(),
+                excludes.as_ref(),
+            )
+            .map_err(fx_error_to_napi)?;
             total = total.saturating_add(ids.len() as u32);
         }
         Ok(total)
@@ -425,9 +454,13 @@ impl FileExplorer {
         max_depth: Option<u32>,
         include_root: Option<bool>,
     ) -> Result<u32> {
-        use mille_core::{populate_store, walk, walk_with_ignore, IgnoreMatcher, WalkOptions};
+        use mille_core::{
+            populate_store_with_provenance, walk, walk_with_ignore, IgnoreMatcher, WalkOptions,
+        };
 
         self.ensure_watcher()?;
+        let _policy_guard = self.policy_gate.lock();
+        let exclude_globs = self.exclude_globs.read().clone();
         let p = PathBuf::from(&path);
         if !p.is_absolute() {
             return Err(Error::from_reason(format!(
@@ -459,11 +492,13 @@ impl FileExplorer {
         // v0.2 B3: respect_ignore now uses the symlink-aware walker so
         // lazy `setExpanded` walks on a pnpm monorepo don't accidentally
         // descend into the central store.
-        let use_matcher = self.options.respect_ignore || !self.options.exclude_globs.is_empty();
-        let (walked, matcher) = if use_matcher {
-            let mut seeded = IgnoreMatcher::new();
-            add_exclude_globs(&mut seeded, &root, &self.options.exclude_globs)
-                .map_err(fx_error_to_napi)?;
+        let use_matcher = self.options.respect_ignore || !exclude_globs.is_empty();
+        let (walked, repository_ignore, excludes) = if use_matcher {
+            let mut traversal = IgnoreMatcher::new();
+            let mut repository_ignore = IgnoreMatcher::new();
+            let mut excludes = IgnoreMatcher::new();
+            add_exclude_globs(&mut traversal, &root, &exclude_globs).map_err(fx_error_to_napi)?;
+            add_exclude_globs(&mut excludes, &root, &exclude_globs).map_err(fx_error_to_napi)?;
             // Seed with every ignore file on the path from the workspace
             // root down to the target directory — a lazy expand at
             // `repo/packages/foo` should still honor `repo/.gitignore`.
@@ -478,7 +513,8 @@ impl FileExplorer {
                     for name in mille_core::IGNORE_FILE_NAMES {
                         let candidate = anchor.join(name);
                         if candidate.is_file() {
-                            let _ = seeded.add_from_file(&candidate);
+                            let _ = traversal.add_from_file(&candidate);
+                            let _ = repository_ignore.add_from_file(&candidate);
                         }
                     }
                 }
@@ -488,24 +524,29 @@ impl FileExplorer {
                 for name in mille_core::IGNORE_FILE_NAMES {
                     let candidate = p.join(name);
                     if candidate.is_file() {
-                        let _ = seeded.add_from_file(&candidate);
+                        let _ = traversal.add_from_file(&candidate);
+                        let _ = repository_ignore.add_from_file(&candidate);
                     }
                 }
             }
-            let w = walk_with_ignore(&p, options, &seeded).map_err(fx_error_to_napi)?;
+            let w = walk_with_ignore(&p, options, &traversal).map_err(fx_error_to_napi)?;
             if self.options.respect_ignore {
                 for entry in &w {
                     if entry.path.file_name().is_some_and(|name| {
                         mille_core::IGNORE_FILE_NAMES.contains(&name.to_string_lossy().as_ref())
                     }) {
-                        let _ = seeded.add_from_file(&entry.path);
+                        let _ = repository_ignore.add_from_file(&entry.path);
                     }
                 }
             }
-            (w, Some(seeded))
+            (
+                w,
+                self.options.respect_ignore.then_some(repository_ignore),
+                (!exclude_globs.is_empty()).then_some(excludes),
+            )
         } else {
             let w = walk(&p, options).map_err(fx_error_to_napi)?;
-            (w, None)
+            (w, None, None)
         };
 
         // Avoid rebuilding entries the store already knows about. `insert`
@@ -519,8 +560,14 @@ impl FileExplorer {
             return Ok(0);
         }
 
-        let ids = populate_store(&self.store, &root, &filtered, matcher.as_ref())
-            .map_err(fx_error_to_napi)?;
+        let ids = populate_store_with_provenance(
+            &self.store,
+            &root,
+            &filtered,
+            repository_ignore.as_ref(),
+            excludes.as_ref(),
+        )
+        .map_err(fx_error_to_napi)?;
         Ok(ids.len() as u32)
     }
 
@@ -533,11 +580,18 @@ impl FileExplorer {
         }
     }
 
-    /// Atomically replace display-only settings without rebuilding or walking
-    /// the explorer. Ignore/exclude policy is intentionally not accepted here:
-    /// changing it requires filesystem reconciliation, not mere projection.
+    /// Atomically replace display-only settings and reclassify configured
+    /// excludes without rebuilding or walking the explorer.
     #[napi(js_name = "updateProjectionSettings")]
-    pub fn update_projection_settings(&self, settings: ProjectionSettingsJs) -> u32 {
+    pub fn update_projection_settings(&self, settings: ProjectionSettingsJs) -> Result<u32> {
+        let exclude_globs = settings.exclude_globs;
+        let _policy_guard = self.policy_gate.lock();
+        let excludes_changed = self.exclude_globs.read().as_slice() != exclude_globs.as_slice();
+        let exclude_matchers = if excludes_changed {
+            Some(compile_exclude_matchers(&self.roots, &exclude_globs).map_err(fx_error_to_napi)?)
+        } else {
+            None
+        };
         let previous_version = self.store.tree_version() as u32;
         let sibling_order = mille_core::sort::SiblingOrder {
             sort_by: match settings.sort_by.as_str() {
@@ -559,14 +613,35 @@ impl FileExplorer {
                 .map(|rule| (rule.parent_pattern, rule.child_patterns)),
             settings.case_sensitive,
         );
-        let version = self.store.reconfigure_projection(
-            sibling_order,
-            visibility,
-            settings.compact_folders,
-            nesting,
-        ) as u32;
+        let version = if let Some(exclude_matchers) = exclude_matchers.as_ref() {
+            self.store.reconfigure_projection_with_exclusions(
+                sibling_order,
+                visibility,
+                settings.compact_folders,
+                nesting,
+                |path, entry| {
+                    exclude_matchers
+                        .iter()
+                        .filter(|(root, _)| path.starts_with(root))
+                        .max_by_key(|(root, _)| root.components().count())
+                        .is_some_and(|(_, matcher)| {
+                            let directory_like = entry.kind == EntryKind::Directory
+                                || entry.symlink_target_is_dir == Some(true);
+                            matcher.is_ignored(path, directory_like)
+                        })
+                },
+            )
+        } else {
+            self.store.reconfigure_projection(
+                sibling_order,
+                visibility,
+                settings.compact_folders,
+                nesting,
+            )
+        } as u32;
+        *self.exclude_globs.write() = exclude_globs;
         if version == previous_version {
-            return version;
+            return Ok(version);
         }
         let notice = || ChangeNoticeJs {
             tree_version: version,
@@ -580,7 +655,7 @@ impl FileExplorer {
         };
         self.events.emit_change(Channel::Change, notice());
         self.events.emit_change(Channel::ChangeTree, notice());
-        version
+        Ok(version)
     }
 
     /// Drain the store's pending ChangeSet, atomically resetting it. Called
@@ -623,9 +698,12 @@ impl FileExplorer {
         self.record_intent(new_path.clone(), IntentKind::Create);
 
         // Stat and insert into the store.
-        let entry = stat_to_entry(&new_path, Some(parent_eid), name)
+        let mut entry = stat_to_entry(&new_path, Some(parent_eid), name)
             .await
             .map_err(fx_error_to_napi)?;
+        let _policy_guard = self.policy_gate.lock();
+        let exclude_matchers = self.current_exclude_matchers().map_err(fx_error_to_napi)?;
+        entry.is_excluded = Self::path_is_excluded(&new_path, &entry, &exclude_matchers);
         let new_id = self
             .store
             .insert(new_path, entry)
@@ -665,7 +743,10 @@ impl FileExplorer {
         self.record_intent(old_path.clone(), IntentKind::Rename);
         self.record_intent(new_path.clone(), IntentKind::Rename);
 
+        let _policy_guard = self.policy_gate.lock();
         self.store.rename(eid, new_path).map_err(fx_error_to_napi)?;
+        self.reclassify_current_excludes()
+            .map_err(fx_error_to_napi)?;
 
         let arc = self
             .store
@@ -718,7 +799,10 @@ impl FileExplorer {
 
         // Store still only supports leaf rename today; reparenting to a
         // different parent lands with the Phase 2 walker refactor.
+        let _policy_guard = self.policy_gate.lock();
         self.store.rename(eid, new_path).map_err(fx_error_to_napi)?;
+        self.reclassify_current_excludes()
+            .map_err(fx_error_to_napi)?;
 
         let arc = self
             .store
@@ -832,9 +916,12 @@ impl FileExplorer {
             .map_err(|e| fx_error_to_napi(io_to_fx(e, dst_path.clone())))?;
         self.record_intent(dst_path.clone(), IntentKind::Create);
 
-        let entry = stat_to_entry(&dst_path, Some(new_parent_eid), effective_name)
+        let mut entry = stat_to_entry(&dst_path, Some(new_parent_eid), effective_name)
             .await
             .map_err(fx_error_to_napi)?;
+        let _policy_guard = self.policy_gate.lock();
+        let exclude_matchers = self.current_exclude_matchers().map_err(fx_error_to_napi)?;
+        entry.is_excluded = Self::path_is_excluded(&dst_path, &entry, &exclude_matchers);
         let new_id = self
             .store
             .insert(dst_path, entry)
@@ -907,6 +994,7 @@ impl FileExplorer {
             .await
             .map_err(fx_error_to_napi)?;
         updated.is_ignored = existing.is_ignored;
+        updated.is_excluded = existing.is_excluded;
         updated.path_segments = existing.path_segments.clone();
         self.store
             .update(existing.id, updated)
@@ -1135,6 +1223,36 @@ impl FileExplorer {
 }
 
 impl FileExplorer {
+    fn current_exclude_matchers(
+        &self,
+    ) -> std::result::Result<Vec<(PathBuf, mille_core::IgnoreMatcher)>, FxError> {
+        compile_exclude_matchers(&self.roots, &self.exclude_globs.read())
+    }
+
+    fn path_is_excluded(
+        path: &std::path::Path,
+        entry: &mille_core::Entry,
+        matchers: &[(PathBuf, mille_core::IgnoreMatcher)],
+    ) -> bool {
+        matchers
+            .iter()
+            .filter(|(root, _)| path.starts_with(root))
+            .max_by_key(|(root, _)| root.components().count())
+            .is_some_and(|(_, matcher)| {
+                let directory_like =
+                    entry.kind == EntryKind::Directory || entry.symlink_target_is_dir == Some(true);
+                matcher.is_ignored(path, directory_like)
+            })
+    }
+
+    /// Caller holds `policy_gate`.
+    fn reclassify_current_excludes(&self) -> std::result::Result<u64, FxError> {
+        let matchers = self.current_exclude_matchers()?;
+        Ok(self
+            .store
+            .reconfigure_exclusions(|path, entry| Self::path_is_excluded(path, entry, &matchers)))
+    }
+
     fn ensure_watcher(&self) -> Result<()> {
         if self.disposed.load(Ordering::Acquire) {
             return Err(Error::from_reason("FileExplorer is disposed"));
@@ -1153,7 +1271,8 @@ impl FileExplorer {
             crate::watch_runtime::WatchConfig {
                 roots: self.roots.clone(),
                 respect_ignore: self.options.respect_ignore,
-                exclude_globs: self.options.exclude_globs.clone(),
+                exclude_globs: Arc::clone(&self.exclude_globs),
+                policy_gate: Arc::clone(&self.policy_gate),
                 follow_symlinks: self.options.follow_symlinks,
                 walker_concurrency: self.options.walker_concurrency,
                 debounce_ms: self.options.watch_debounce_ms,
@@ -1193,6 +1312,20 @@ fn add_exclude_globs(
         return Ok(());
     }
     matcher.add_from_string(root, &globs.join("\n"))
+}
+
+fn compile_exclude_matchers(
+    roots: &[PathBuf],
+    globs: &[String],
+) -> std::result::Result<Vec<(PathBuf, mille_core::IgnoreMatcher)>, FxError> {
+    roots
+        .iter()
+        .map(|root| {
+            let mut matcher = mille_core::IgnoreMatcher::new();
+            add_exclude_globs(&mut matcher, root, globs)?;
+            Ok((root.clone(), matcher))
+        })
+        .collect()
 }
 
 /// Mirror of api.d.ts `WriteFileOptions`.

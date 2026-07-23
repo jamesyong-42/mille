@@ -47,8 +47,9 @@ pnpm bench:reconfigure
 ```
 
 The harness builds a 50,001-entry wide directory and alternates full display
-policies 20 times, including visibility, sibling ordering, and 15,000 nesting
-pairs. It reports atomic native update latency separately from the first
-200-row ready projection, plus the idempotent no-op path. Default p95 gates are
-50 ms update, 100 ms ready, and 0.1 ms no-op. Fixture size and budgets use the
-`MILLE_RECONFIGURE_*` environment variables.
+policies 20 times, including visibility, sibling ordering, 15,000 nesting
+pairs, and configured exclusions that reclassify 20,000 entries per toggle. It
+reports add/remove exclusion latency, aggregate atomic native update latency,
+the first 200-row ready projection, and the idempotent no-op path. Default p95
+gates are 125 ms update, 160 ms ready, and 0.1 ms no-op. Fixture size and
+budgets use the `MILLE_RECONFIGURE_*` environment variables.

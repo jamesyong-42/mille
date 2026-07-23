@@ -26,7 +26,7 @@ use crate::snapshot::StoreSnapshot;
 
 /// Bump when the on-disk shape changes in a way that makes older readers
 /// unsafe. Callers get `FxError::Unsupported` on mismatch.
-pub const CURRENT_FORMAT_VERSION: u32 = 1;
+pub const CURRENT_FORMAT_VERSION: u32 = 2;
 
 /// Stable bincode config. The workspace is pinned to bincode 2.x; the
 /// `standard()` preset is the same one `entry.rs` already round-trips with,
@@ -204,16 +204,23 @@ pub fn read_snapshot(path: &Path) -> Result<ResumeSnapshot, FxError> {
     f.read_to_end(&mut bytes)
         .map_err(|e| ErrorCode::from_io_error(&e, path.to_path_buf()))?;
 
+    // Peek the leading field before decoding the version-specific body. A
+    // provenance field was added to Entry in format v2, so trying to decode a
+    // v1 body as v2 would otherwise fail with UnexpectedEnd before callers
+    // receive the intended, actionable version-mismatch error.
+    let (format_version, _used): (u32, usize) =
+        bincode::serde::decode_from_slice(&bytes, bincode_cfg())
+            .map_err(|e| FxError::InternalBug(format!("bincode version decode: {e}")))?;
+    if format_version != CURRENT_FORMAT_VERSION {
+        return Err(FxError::Unsupported(format!(
+            "snapshot format v{}, expected v{}",
+            format_version, CURRENT_FORMAT_VERSION
+        )));
+    }
+
     let (resume, _used): (ResumeSnapshot, usize) =
         bincode::serde::decode_from_slice(&bytes, bincode_cfg())
             .map_err(|e| FxError::InternalBug(format!("bincode decode: {e}")))?;
-
-    if resume.format_version != CURRENT_FORMAT_VERSION {
-        return Err(FxError::Unsupported(format!(
-            "snapshot format v{}, expected v{}",
-            resume.format_version, CURRENT_FORMAT_VERSION
-        )));
-    }
 
     Ok(resume)
 }
@@ -412,6 +419,7 @@ mod tests {
                     symlink_target_is_dir: None,
                     path_segments: None,
                     is_ignored: false,
+                    is_excluded: false,
                     is_readonly: false,
                     is_hidden: false,
                 },
@@ -431,6 +439,7 @@ mod tests {
                     symlink_target_is_dir: None,
                     path_segments: None,
                     is_ignored: false,
+                    is_excluded: false,
                     is_readonly: false,
                     is_hidden: false,
                 },
@@ -512,6 +521,18 @@ mod tests {
 
         let err = read_snapshot(&path).unwrap_err();
         assert!(matches!(err, FxError::Unsupported(_)), "got {err:?}");
+    }
+
+    #[test]
+    fn legacy_format_is_rejected_before_decoding_its_entry_shape() {
+        let td = TempDir::new().unwrap();
+        let path = td.path().join("legacy.bin");
+        let version_only = bincode::serde::encode_to_vec(1u32, bincode_cfg()).unwrap();
+        fs::write(&path, version_only).unwrap();
+
+        let err = read_snapshot(&path).unwrap_err();
+        assert!(matches!(err, FxError::Unsupported(_)), "got {err:?}");
+        assert!(err.to_string().contains("format v1"));
     }
 
     #[test]

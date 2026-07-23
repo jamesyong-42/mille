@@ -81,7 +81,7 @@ pub fn search(snap: &StoreSnapshot, query: &str, options: &SearchOptions) -> Vec
     let mut indices_buf: Vec<u32> = Vec::new();
 
     for (id, entry) in snap.entries_iter() {
-        if !options.include_ignored && (entry.is_ignored || entry.is_hidden) {
+        if !options.include_ignored && (entry.is_ignored_or_excluded() || entry.is_hidden) {
             continue;
         }
         let haystack = Utf32String::from(entry.name.as_str());
@@ -128,6 +128,7 @@ mod tests {
             symlink_target_is_dir: None,
             path_segments: None,
             is_ignored: false,
+            is_excluded: false,
             is_readonly: false,
             is_hidden: false,
         }

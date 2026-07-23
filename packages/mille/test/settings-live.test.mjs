@@ -22,7 +22,9 @@ const UPDATED = {
   caseSensitive: true,
   foldersOnTop: false,
   showHiddenFiles: false,
+  showIgnoredFiles: false,
   compactFolders: false,
+  excludeGlobs: ['*.txt'],
   fileNestingPatterns: {
     '*.ts': ['${capture}.test.ts'],
   },
@@ -80,7 +82,7 @@ test('local projection settings update atomically and no-op idempotently', async
     assert.equal(version, before.treeVersion + 1);
     assert.equal(after.treeVersion, version);
     assert.equal(after.showHiddenFiles, false);
-    assert.deepEqual(names(after, rootEntry.id), ['a.txt', 'source.ts', 'z-dir']);
+    assert.deepEqual(names(after, rootEntry.id), ['source.ts', 'z-dir']);
     const source = after
       .visibleRows({ expanded: new Set([rootEntry.id]), offset: 0, limit: 100 })
       .find((row) => row.name === 'source.ts');
@@ -92,6 +94,71 @@ test('local projection settings update atomically and no-op idempotently', async
     await new Promise((resolve) => setTimeout(resolve, 20));
     assert.equal(changes, 1);
     subscription.dispose();
+  } finally {
+    await fx.dispose();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('exclude globs add and remove without erasing repository-ignore provenance', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'mille-excludes-live-'));
+  writeFileSync(join(root, '.gitignore'), 'repository.log\n');
+  writeFileSync(join(root, 'repository.log'), '');
+  writeFileSync(join(root, 'generated.log'), '');
+  writeFileSync(join(root, 'visible.txt'), '');
+  const settings = {
+    ...INITIAL,
+    showHiddenFiles: false,
+    showIgnoredFiles: false,
+  };
+  const fx = new FileExplorer({ roots: [root], settings });
+  try {
+    await fx.populateFromRoots();
+    const before = fx.getSnapshot();
+    const rootEntry = before.roots()[0];
+    assert.ok(rootEntry);
+    const generatedId = await fx.resolvePath(join(root, 'generated.log'));
+    const repositoryId = await fx.resolvePath(join(root, 'repository.log'));
+    assert.ok(generatedId !== null);
+    assert.ok(repositoryId !== null);
+    assert.deepEqual(names(before, rootEntry.id), ['generated.log', 'visible.txt']);
+    assert.equal(before.getById(generatedId)?.isIgnored, false);
+    assert.equal(before.getById(repositoryId)?.isIgnored, true);
+
+    const excludedVersion = fx.updateProjectionSettings({
+      ...settings,
+      excludeGlobs: ['*.log'],
+    });
+    const excluded = fx.getSnapshot();
+    assert.equal(excluded.treeVersion, excludedVersion);
+    assert.deepEqual(names(excluded, rootEntry.id), ['visible.txt']);
+    assert.equal(excluded.getById(generatedId)?.isIgnored, true);
+    assert.equal(excluded.getById(repositoryId)?.isIgnored, true);
+    assert.deepEqual(names(before, rootEntry.id), ['generated.log', 'visible.txt']);
+
+    const created = await fx.create(rootEntry.id, 'created.log', 0);
+    assert.equal(created.isIgnored, true);
+    writeFileSync(join(root, 'future.log'), '');
+    await fx.prefetch(rootEntry.id, { depth: 1 });
+    const futureId = await fx.resolvePath(join(root, 'future.log'));
+    assert.ok(futureId !== null);
+    assert.equal(fx.getSnapshot().getById(futureId)?.isIgnored, true);
+    assert.deepEqual(names(fx.getSnapshot(), rootEntry.id), ['visible.txt']);
+    const versionBeforeRestore = fx.getTreeVersion();
+    const restoredVersion = fx.updateProjectionSettings(settings);
+    const restored = fx.getSnapshot();
+    assert.equal(restoredVersion, versionBeforeRestore + 1);
+    assert.deepEqual(names(restored, rootEntry.id), [
+      'created.log',
+      'future.log',
+      'generated.log',
+      'visible.txt',
+    ]);
+    assert.equal(restored.getById(generatedId)?.isIgnored, false);
+    assert.equal(restored.getById(created.id)?.isIgnored, false);
+    assert.equal(restored.getById(futureId)?.isIgnored, false);
+    assert.equal(restored.getById(repositoryId)?.isIgnored, true);
+    assert.equal(fx.updateProjectionSettings(settings), restoredVersion);
   } finally {
     await fx.dispose();
     rmSync(root, { recursive: true, force: true });
@@ -126,8 +193,8 @@ test('one port update reaches every client before the initiator resolves', async
     assert.equal(clientB.getSnapshot().treeVersion, version);
     assert.equal(clientA.getSnapshot().showHiddenFiles, false);
     assert.equal(clientB.getSnapshot().showHiddenFiles, false);
-    assert.deepEqual(names(clientA.getSnapshot(), rootEntry.id), ['a.txt', 'source.ts', 'z-dir']);
-    assert.deepEqual(names(clientB.getSnapshot(), rootEntry.id), ['a.txt', 'source.ts', 'z-dir']);
+    assert.deepEqual(names(clientA.getSnapshot(), rootEntry.id), ['source.ts', 'z-dir']);
+    assert.deepEqual(names(clientB.getSnapshot(), rootEntry.id), ['source.ts', 'z-dir']);
     assert.ok(names(retained, rootEntry.id).includes('.hidden'));
     assert.ok(names(retained, rootEntry.id).includes('source.test.ts'));
 

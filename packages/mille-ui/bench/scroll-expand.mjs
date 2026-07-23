@@ -54,7 +54,7 @@ if (typeof globalThis.ResizeObserver === 'undefined') {
 }
 
 // React / package imports must come AFTER the globals are installed.
-const { createElement, act, memo } = await import('react');
+const { createElement, createRef, act, memo } = await import('react');
 const { createRoot } = await import('react-dom/client');
 
 const { FileTree, FileTreeRow } = await import('../dist/index.js');
@@ -704,6 +704,86 @@ async function runTypeahead(rows, { key, label, expectMatch }) {
   };
 }
 
+async function runReveal(rows) {
+  const fx = createFakeEngine();
+  let maxProjectionReadRows = 0;
+  let projectionRowsRead = 0;
+  const snapshot = createFakeSnapshot({ rows, treeVersion: 1 });
+  fx.emitDelta({
+    ...snapshot,
+    visibleRows: (options) => {
+      if (options.limit !== Number.MAX_SAFE_INTEGER) {
+        maxProjectionReadRows = Math.max(maxProjectionReadRows, options.limit);
+        projectionRowsRead += options.limit;
+      }
+      return snapshot.visibleRows(options);
+    },
+  });
+  const { container, root } = mountContainer();
+  const obs = makeObservers({ height: 600 });
+  const ref = createRef();
+  let focusedId = null;
+  await act(async () => {
+    root.render(
+      createElement(FileTree, {
+        ref,
+        fx,
+        ariaLabel: 'bench-deep-reveal',
+        rowHeight: 22,
+        overscan: 10,
+        onFocusedIdChange: (id) => {
+          focusedId = id;
+        },
+        __testObserveElementRect: obs.observeElementRect,
+        __testObserveElementOffset: obs.observeElementOffset,
+      }),
+    );
+  });
+  maxProjectionReadRows = 0;
+  projectionRowsRead = 0;
+  const targetIndex = 400_000;
+  const targetId = rows[targetIndex]?.id;
+  if (targetId === undefined || !ref.current) {
+    throw new Error('deep reveal target or FileTree ref is missing');
+  }
+  const tree = container.querySelector('[role="tree"]');
+  if (!tree) throw new Error('deep reveal tree is missing');
+  let scrollRequested = false;
+  tree.scrollTo = (...args) => {
+    const top = typeof args[0] === 'object' ? args[0]?.top : args[1];
+    if (typeof top === 'number' && top > 0) scrollRequested = true;
+  };
+  let scrollTop = 0;
+  Object.defineProperty(tree, 'scrollTop', {
+    configurable: true,
+    get: () => scrollTop,
+    set: (top) => {
+      scrollTop = top;
+      if (typeof top === 'number' && top > 0) scrollRequested = true;
+    },
+  });
+
+  let revealAccepted = false;
+  const result = await measureAsync('reveal row 400k (500k rows)', async () => {
+    await act(async () => {
+      revealAccepted = ref.current.revealId(targetId);
+    });
+  });
+  const rendered = container.querySelectorAll('[role="treeitem"]').length;
+
+  await act(async () => root.unmount());
+  container.remove();
+  return {
+    ...result,
+    rendered,
+    interactionPreserved: revealAccepted && focusedId === targetId,
+    scrollRequested,
+    maxMaterializedRows: maxProjectionReadRows,
+    projectionRowsRead,
+    targetIndex,
+  };
+}
+
 async function runAnchoredInsert(rows) {
   const fx = createFakeEngine();
   let maxProjectionReadRows = 0;
@@ -871,6 +951,8 @@ async function main() {
     expectMatch: false,
   });
   results.push(typeaheadMissResult);
+  const revealResult = await runReveal(rows);
+  results.push(revealResult);
   const anchorResult = await runAnchoredInsert(rows);
   results.push(anchorResult);
 
@@ -891,6 +973,9 @@ async function main() {
   );
   console.log(
     `      Typeahead projection reads: near=${typeaheadNearResult.projectionRowsRead.toLocaleString()}, miss=${typeaheadMissResult.projectionRowsRead.toLocaleString()} rows; ${Math.max(typeaheadNearResult.maxMaterializedRows, typeaheadMissResult.maxMaterializedRows)} max per read.`,
+  );
+  console.log(
+    `      Reveal projection reads: ${revealResult.projectionRowsRead.toLocaleString()} rows total, ${revealResult.maxMaterializedRows} max per read.`,
   );
   if (anchorResult.driftPx > 0.5) {
     throw new Error(`viewport anchor drift ${anchorResult.driftPx.toFixed(2)} px exceeds 0.5 px`);
@@ -952,6 +1037,17 @@ async function main() {
   ) {
     throw new Error(
       `full-wrap typeahead read max=${typeaheadMissResult.maxMaterializedRows}, total=${typeaheadMissResult.projectionRowsRead} rows`,
+    );
+  }
+  if (!revealResult.interactionPreserved || !revealResult.scrollRequested) {
+    throw new Error('deep reveal did not focus and scroll to its target');
+  }
+  if (
+    revealResult.maxMaterializedRows > 256 ||
+    revealResult.projectionRowsRead > revealResult.targetIndex + 1_024
+  ) {
+    throw new Error(
+      `deep reveal read max=${revealResult.maxMaterializedRows}, total=${revealResult.projectionRowsRead} rows`,
     );
   }
   if (!decorationResult.decorationVisible) {

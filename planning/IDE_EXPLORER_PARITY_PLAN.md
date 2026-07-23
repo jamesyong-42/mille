@@ -400,6 +400,21 @@ allocation, but worst-case misses remain O(n); Select All, long ranges,
 reveal/path fallback, rare off-viewport recovery, and wide-folder ordered-id
 metadata remain Phase 2.4 work.
 
+Ninth bounded-reveal result (2026-07-22): imperative `revealId` and rare
+off-viewport id recovery no longer fall back to one complete visible-row array.
+Exact lookup scans 256-row windows, while reveal now records a pending target,
+expands all ancestors in one state update, completes after the expanded or
+hydrated projection arrives, focuses the stable id, and directly requests the
+fixed-height row offset. The harness exposed and fixed a real behavior gap:
+focus previously changed without a deep scroll. On the 500,000-row gate,
+revealing row 400,000 now focuses and scrolls correctly while reading 400,204
+rows total with a 256-row maximum per request. Five timings ranged from 36.85
+to 103.19 ms with a 42.29 ms median, so the full allocation is gone but exact
+lookup remains O(n) and can still exceed a frame under noise. All 311 UI tests
+and all 12 playground harness tests passed. Indexed visible positions are now
+the clear next architecture step; Select All, long-range selection, path-walk
+fallback, and wide-folder ordered-id metadata also remain.
+
 #### 2.5 Define state under deletion and errors
 
 - Move focus to the nearest logical sibling or parent when the focused row is

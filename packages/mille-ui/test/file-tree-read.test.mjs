@@ -44,7 +44,7 @@ if (typeof globalThis.ResizeObserver === 'undefined') {
   installGlobal('ResizeObserver', ResizeObserverMock);
 }
 
-const { createElement, act } = await import('react');
+const { createElement, createRef, act } = await import('react');
 const { createRoot } = await import('react-dom/client');
 
 const { FileTree } = await import('../dist/index.js');
@@ -584,6 +584,70 @@ test('local keyboard navigation reads a bounded row neighborhood', async () => {
   assert.ok(
     requestedLimits.reduce((total, limit) => total + limit, 0) <= 1_024,
     `typeahead requested ${requestedLimits.reduce((total, limit) => total + limit, 0)} rows total for a near match`,
+  );
+
+  await act(async () => { root.unmount(); });
+  container.remove();
+});
+
+test('imperative reveal scans a deep projection in bounded windows', async () => {
+  const fx = createFakeEngine();
+  const rows = buildRows(10_000);
+  const baseSnapshot = createFakeSnapshot({ rows, treeVersion: 1 });
+  const requestedLimits = [];
+  fx.emitDelta({
+    ...baseSnapshot,
+    visibleRows: (options) => {
+      requestedLimits.push(options.limit);
+      return baseSnapshot.visibleRows(options);
+    },
+  });
+  requestedLimits.length = 0;
+
+  const { container, root } = mount();
+  const obs = makeObservers({ height: 400 });
+  const ref = createRef();
+  let observedFocusedId = null;
+  await act(async () => {
+    root.render(
+      createElement(FileTree, {
+        ref,
+        fx,
+        ariaLabel: 'Bounded reveal',
+        rowHeight: 20,
+        overscan: 10,
+        onFocusedIdChange: (id) => {
+          observedFocusedId = id;
+        },
+        __testObserveElementRect: obs.observeElementRect,
+        __testObserveElementOffset: obs.observeElementOffset,
+      }),
+    );
+  });
+  requestedLimits.length = 0;
+  const targetIndex = 9_000;
+  const targetId = rows[targetIndex].id;
+  const tree = container.querySelector('[role="tree"]');
+  assert.ok(tree);
+  let requestedScrollTop = null;
+  tree.scrollTo = (options) => {
+    requestedScrollTop = options.top;
+  };
+
+  await act(async () => {
+    assert.equal(ref.current.revealId(targetId), true);
+  });
+
+  assert.equal(observedFocusedId, targetId);
+  assert.equal(requestedScrollTop, targetIndex * 20);
+  assert.ok(requestedLimits.length > 1, 'deep reveal should scan multiple windows');
+  assert.ok(
+    Math.max(...requestedLimits) <= 256,
+    `reveal requested ${Math.max(...requestedLimits)} rows at once`,
+  );
+  assert.ok(
+    requestedLimits.reduce((total, limit) => total + limit, 0) <= rows.length + 512,
+    `reveal requested ${requestedLimits.reduce((total, limit) => total + limit, 0)} rows total`,
   );
 
   await act(async () => { root.unmount(); });

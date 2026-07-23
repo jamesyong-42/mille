@@ -542,14 +542,20 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
     [expanded, addExpanded, removeExpanded, toggle],
   );
 
+  const findExactVisibleRowIndex = useCallback(
+    (id: EntryId, hintIndex = mountedViewportOffset): number =>
+      projection.findRowIndex(id, hintIndex, projection.visibleCount.known),
+    [mountedViewportOffset, projection],
+  );
+
   const findVisibleRowIndex = useCallback(
     (id: EntryId, hintIndex = mountedViewportOffset): number => {
       const boundedIndex = projection.findRowIndex(id, hintIndex);
       return boundedIndex !== -1
         ? boundedIndex
-        : readAllVisibleRows().findIndex((row) => row.id === id);
+        : findExactVisibleRowIndex(id, hintIndex);
     },
-    [mountedViewportOffset, projection, readAllVisibleRows],
+    [mountedViewportOffset, projection, findExactVisibleRowIndex],
   );
 
   const rowsLookup = useMemo<KeyboardRowLookup>(
@@ -998,6 +1004,19 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
     [snapshot],
   );
 
+  const pendingRevealIdRef = useRef<EntryId | null>(null);
+  const scrollToRevealedIndex = useCallback(
+    (index: number) => {
+      const scroller = scrollerRef.current;
+      if (scroller) {
+        scroller.scrollTo({ top: index * rowHeight });
+      } else {
+        scrollToIndex(index, { align: 'start' });
+      }
+    },
+    [rowHeight, scrollToIndex],
+  );
+
   const revealId = useCallback(
     (id: EntryId): boolean => {
       // Verify the id actually exists in the current mirror. If not we
@@ -1005,30 +1024,46 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
       // should retry once the next delta lands.
       if (snapshot.getById(id) === null) return false;
 
-      // Expand every ancestor (top-down order doesn't matter because
-      // each `add` is idempotent and the sets commute).
-      for (const ancestorId of ancestorsOf(id)) {
-        addExpanded(ancestorId);
+      const ancestors = ancestorsOf(id);
+      const needsExpansion = ancestors.some((ancestorId) => !expanded.has(ancestorId));
+      pendingRevealIdRef.current = id;
+      selection.setFocused(id);
+      if (needsExpansion) {
+        setManyExpanded({ add: ancestors });
+        return true;
       }
 
-      // Once expanded, the next render's `visibleRows` will contain the
-      // target. Today's list may still be stale (we just dispatched
-      // setState calls via `addExpanded`), but we can look up by
-      // walking `visibleRows` as-is; if the row isn't there yet, fall
-      // back to zero.
-      const idx = readAllVisibleRows().findIndex((r) => r.id === id);
+      const idx = findExactVisibleRowIndex(id);
       if (idx >= 0) {
-        scrollToIndex(idx, { align: 'start' });
-        selection.setFocused(id);
-      } else {
-        // Queue a focus-only update — the re-rendered tree's
-        // `onContainerFocus` + roving tabindex will pick this up.
-        selection.setFocused(id);
+        scrollToRevealedIndex(idx);
+        pendingRevealIdRef.current = null;
       }
       return true;
     },
-    [snapshot, ancestorsOf, addExpanded, readAllVisibleRows, scrollToIndex, selection],
+    [
+      snapshot,
+      ancestorsOf,
+      expanded,
+      setManyExpanded,
+      selection,
+      findExactVisibleRowIndex,
+      scrollToRevealedIndex,
+    ],
   );
+
+  useLayoutEffect(() => {
+    const id = pendingRevealIdRef.current;
+    if (id === null) return;
+    if (snapshot.getById(id) === null) {
+      pendingRevealIdRef.current = null;
+      return;
+    }
+    const index = findExactVisibleRowIndex(id);
+    if (index === -1) return;
+    scrollToRevealedIndex(index);
+    selection.setFocused(id);
+    pendingRevealIdRef.current = null;
+  }, [snapshot, findExactVisibleRowIndex, scrollToRevealedIndex, selection]);
 
   // `fx.getByUri` is async; when the engine exposes it we use it to
   // turn a workspace-relative path into an `EntryId`. Many minimal

@@ -30,15 +30,15 @@ layers of work:
 The scores below are directional, not a claim of mathematical precision. A
 mature IDE explorer is the 10/10 reference point.
 
-| Area                                 | Score | Current assessment                                                                                                                                                                |
-| ------------------------------------ | ----: | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Filesystem and renderer architecture |   8.5 | Strong native walker, roots-only handshake, binary ordered lazy hydration, bounded viewport mirror, windowed React rendering, anchoring, and local keyboard access                |
-| Core tree interaction                |   7.2 | Keyboard navigation, multi-selection, resilient inline rename, create/delete, clipboard, filtering, context menus, and drag/drop                                                  |
-| Visual behavior                      |   7.4 | Viewport, focus, selection, and rename drafts survive churn; animation is row-scoped, storm-bounded, and reduced-motion aware; broader theme/sticky-root scenarios remain         |
-| Accessibility                        |   6.0 | Good ARIA tree semantics and keyboard tests; no real assistive-technology matrix                                                                                                  |
-| Reliability and recovery             |   5.5 | Deterministic soak gates converge, but repeated Electron watcher stalls and direct native startup misses remain unresolved; crash/platform stress also remains                    |
-| Performance confidence               |   7.3 | Binary-wire, bounded-hydration, windowed 500,000-row UI, and Electron gates cover payload, paint, React duration, projection, anchoring, keyboard access, retention, and eviction |
-| Explorer workflow breadth            |   3.5 | Important workspace, settings, editor, source-control, history, and remote-filesystem behavior is absent or host-only                                                             |
+| Area                                 | Score | Current assessment                                                                                                                                                           |
+| ------------------------------------ | ----: | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Filesystem and renderer architecture |   8.5 | Strong native walker, roots-only handshake, binary ordered lazy hydration, bounded viewport mirror, windowed React rendering, anchoring, and local keyboard access           |
+| Core tree interaction                |   7.3 | Keyboard navigation, multi-selection, reliable deep reveal, resilient inline rename, create/delete, clipboard, filtering, context menus, and drag/drop                       |
+| Visual behavior                      |   7.4 | Viewport, focus, selection, and rename drafts survive churn; animation is row-scoped, storm-bounded, and reduced-motion aware; broader theme/sticky-root scenarios remain    |
+| Accessibility                        |   6.0 | Good ARIA tree semantics and keyboard tests; no real assistive-technology matrix                                                                                             |
+| Reliability and recovery             |   5.5 | Deterministic soak gates converge, but repeated Electron watcher stalls and direct native startup misses remain unresolved; crash/platform stress also remains               |
+| Performance confidence               |   7.4 | Binary-wire, bounded-hydration, windowed 500,000-row UI, and Electron gates cover payload, paint, React duration, projection, anchoring, navigation, retention, and eviction |
+| Explorer workflow breadth            |   3.5 | Important workspace, settings, editor, source-control, history, and remote-filesystem behavior is absent or host-only                                                        |
 
 As a reusable tree widget, Mille is approximately **6.5-7/10**. As a complete
 IDE explorer experience, it is approximately **5/10**.
@@ -166,10 +166,18 @@ ms for the full-wrap miss. This removes the full-order allocation, not the
 worst-case O(n) scan. Current validation is 310/310 UI tests and 12/12
 playground harness tests.
 
+Deep imperative reveal now uses the windowed projection too. It holds a pending
+stable id across ancestor expansion/hydration, then focuses and scrolls to the
+exact fixed-height offset. The new gate caught the prior focus-without-scroll
+behavior. Revealing row 400,000 reads 400,204 rows total with a 256-row request
+cap; five runs had a 42.29 ms median and a 103.19 ms maximum. This removes the
+full-array allocation and fixes correctness, but it does not remove the O(n)
+lookup cost. Current validation is 311/311 UI tests and 12/12 playground
+harness tests.
+
 Remaining scaling gaps are O(n) ordered-id metadata for an extremely wide
-expanded folder; full-order reads for Select All, long ranges, reveal/path
-fallback, and rare off-viewport recovery; and the O(n) worst-case typeahead
-scan.
+expanded folder; full-order reads for Select All, long ranges, and path-walk
+fallback; and O(n) worst-case scans for typeahead and exact visible-id lookup.
 
 ## What is already strong
 

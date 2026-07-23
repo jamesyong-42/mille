@@ -391,10 +391,12 @@ export class PortFileExplorer {
     newName?: string,
     options?: TransferOptions,
   ): Promise<unknown> {
-    const args: Record<string, unknown> = { id, newParentId };
-    if (newName !== undefined) args.newName = newName;
-    if (options !== undefined) args.options = options;
-    return this.mutate('copy', args);
+    return this.runTransfer(options, (nativeOptions) => {
+      const args: Record<string, unknown> = { id, newParentId };
+      if (newName !== undefined) args.newName = newName;
+      if (nativeOptions !== undefined) args.options = nativeOptions;
+      return this.mutate('copy', args);
+    });
   }
 
   copyFromPath(
@@ -403,10 +405,55 @@ export class PortFileExplorer {
     newName?: string,
     options?: TransferOptions,
   ): Promise<unknown> {
-    const args: Record<string, unknown> = { sourcePath, newParentId };
-    if (newName !== undefined) args.newName = newName;
-    if (options !== undefined) args.options = options;
-    return this.mutate('copyFromPath', args);
+    return this.runTransfer(options, (nativeOptions) => {
+      const args: Record<string, unknown> = { sourcePath, newParentId };
+      if (newName !== undefined) args.newName = newName;
+      if (nativeOptions !== undefined) args.options = nativeOptions;
+      return this.mutate('copyFromPath', args);
+    });
+  }
+
+  private async runTransfer(
+    options: TransferOptions | undefined,
+    invoke: (nativeOptions: TransferOptions | undefined) => Promise<unknown>,
+  ): Promise<unknown> {
+    const signal = options?.signal;
+    let operationId = options?.operationId;
+    if (signal !== undefined && (operationId === undefined || operationId.length === 0)) {
+      operationId = `op-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+    }
+    const forNative: TransferOptions | undefined = (() => {
+      if (options === undefined && operationId === undefined) return undefined;
+      const out: TransferOptions = {};
+      if (options?.crossRoot !== undefined) {
+        (out as { crossRoot: boolean }).crossRoot = options.crossRoot;
+      }
+      if (options?.collision !== undefined) {
+        (out as { collision: TransferOptions['collision'] }).collision = options.collision;
+      }
+      if (operationId !== undefined) {
+        (out as { operationId: string }).operationId = operationId;
+      }
+      if (options?.reportProgress !== undefined) {
+        (out as { reportProgress: boolean }).reportProgress = options.reportProgress;
+      }
+      return out;
+    })();
+    if (signal !== undefined && operationId !== undefined) {
+      if (signal.aborted) {
+        throw new FileSystemError('ECANCELED', 'transfer aborted');
+      }
+      const onAbort = (): void => {
+        this.cancelOperation(operationId!);
+      };
+      signal.addEventListener('abort', onAbort, { once: true });
+      try {
+        return await invoke(forNative);
+      } finally {
+        signal.removeEventListener('abort', onAbort);
+      }
+    }
+    return invoke(forNative);
   }
 
   async probeDestination(
@@ -418,6 +465,12 @@ export class PortFileExplorer {
       throw new FileSystemError('EUNKNOWN', 'invalid probeDestination response');
     }
     return result as { status: string; existingName?: string; path?: string };
+  }
+
+  cancelOperation(operationId: string): boolean {
+    // Best-effort fire-and-forget; host applies cancel immediately.
+    void this.call('cancelOperation', [operationId]).catch(() => undefined);
+    return true;
   }
 
   async readFile(id: number): Promise<Uint8Array> {

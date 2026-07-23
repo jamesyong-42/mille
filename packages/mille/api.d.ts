@@ -151,6 +151,17 @@ export interface TransferOptions {
    * - `merge` — for directories, merge children; files overwrite
    */
   readonly collision?: CollisionPolicy;
+  /**
+   * Host-supplied id for progress and cancellation. When set, recursive
+   * copies emit `OP_PROGRESS` / `OP_COMPLETE` / `OP_CANCELLED` warnings and
+   * honor `cancelOperation(operationId)`. The TypeScript client also accepts
+   * `signal` and auto-registers an operation id when one is not provided.
+   */
+  readonly operationId?: string;
+  /** Emit progress warnings. Defaults to true when `operationId` is set. */
+  readonly reportProgress?: boolean;
+  /** AbortSignal for cooperative cancellation of recursive transfers. */
+  readonly signal?: AbortSignal;
 }
 
 export interface ResyncOptions {
@@ -410,7 +421,20 @@ export type WarningCode =
   | 'FSEVENTS_LIMIT' // macOS FSEvents path limit hit
   | 'ENTRY_CAP_REACHED' // maxCachedEntries exceeded; tail is lazy-only
   | 'SYMLINK_CYCLE' // cycle detected; link not descended
-  | 'SNAPSHOT_STALE'; // resume snapshot too old; cold-walking
+  | 'SNAPSHOT_STALE' // resume snapshot too old; cold-walking
+  | 'OP_PROGRESS' // long transfer progress: detail is JSON TransferProgress
+  | 'OP_COMPLETE' // long transfer finished: detail is JSON TransferProgress
+  | 'OP_CANCELLED'; // long transfer cancelled: detail is JSON TransferProgress
+
+/** JSON payload in warning.detail for OP_* transfer events. */
+export interface TransferProgress {
+  readonly operationId: string;
+  readonly phase?: 'copy';
+  readonly done?: number;
+  readonly total?: number;
+  readonly path?: string;
+  readonly status?: 'completed' | 'failed' | 'cancelled';
+}
 
 export type FileSystemEvent =
   | {
@@ -643,6 +667,8 @@ export declare class FileExplorer implements Disposable {
    * Hosts use this to prompt only when a real collision exists.
    */
   probeDestination(parentId: EntryId, name: string): Promise<DestinationProbe>;
+  /** Cancel a long transfer previously started with `operationId`. */
+  cancelOperation(operationId: string): boolean;
 
   // I/O
   readFile(id: EntryId, signal?: AbortSignal): Promise<Uint8Array>;

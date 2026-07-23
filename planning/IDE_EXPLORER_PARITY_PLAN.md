@@ -1084,6 +1084,19 @@ directory symlinks and detects cycles. Regression coverage lives in
 - Coalesce watcher echoes with library-owned mutations without hiding external
   changes.
 
+First progress/cancel result (2026-07-23): `TransferOptions.operationId` and
+`reportProgress` drive cooperative long-copy tracking. Recursive
+`copy` / `copyFromPath` pre-count entries, emit `OP_PROGRESS` /
+`OP_COMPLETE` / `OP_CANCELLED` warnings with JSON detail, and honor
+`cancelOperation(operationId)` between recursive steps. Partial non-merge
+destinations are cleaned up on cancel. The TypeScript client maps
+`AbortSignal` onto a generated operation id. Three integration tests cover
+progress emission, cancel cleanup, and AbortSignal; `pnpm bench:transfer-progress`
+gates a progress-aware 256-file import. On release macOS arm64 the gate measured
+67.631 ms median / 72.196 ms p95 against a 250 ms ceiling with progress events
+emitted. This completes the planned Phase 4.3 progress/cancellation surface;
+watcher coalescing refinements remain available as follow-ups if needed.
+
 #### 4.4 Add recovery and undo
 
 - Make trash the safe default where the platform supports it.

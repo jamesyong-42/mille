@@ -1069,6 +1069,30 @@ containment-checked after symlink resolution so workspace roots cannot be
 escaped. Self-overwrite is rejected. Hosts that need UI prompts can use
 `FileTree` `dragDrop.onCollision` (invoked only when `probeDestination` reports
 a collision) and `onDropError` for failed imports.
+
+### Progress and cancellation
+
+Long recursive copies accept an `operationId` (and optional `reportProgress`)
+on `TransferOptions`. While the operation runs the explorer emits warnings:
+
+| Code | Meaning |
+| --- | --- |
+| `OP_PROGRESS` | `detail` JSON: `{ operationId, phase, done, total, path? }` |
+| `OP_COMPLETE` | finished successfully or failed (`status`, `done`, `total`) |
+| `OP_CANCELLED` | cancelled cooperatively (`status: "cancelled"`) |
+
+```ts
+const sub = fx.on('warning', (w) => {
+  if (w.code === 'OP_PROGRESS') console.log(JSON.parse(w.detail!));
+});
+await fx.copyFromPath(src, parentId, undefined, {
+  operationId: 'import-1',
+  // or: signal: abortController.signal  // auto-generates an operation id
+});
+fx.cancelOperation('import-1'); // cooperative; checked between recursive steps
+```
+
+Cancelled non-merge copies best-effort remove the partial destination.
 Same-volume directory moves preserve the complete known subtree identity;
 cross-device moves return `EUNSUPPORTED` without partial store mutation until
 the Phase 4 copy/delete fallback lands. Progress, cancellation, and undo

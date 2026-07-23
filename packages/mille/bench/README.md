@@ -134,6 +134,17 @@ complete reverse-path rewrite, and public path verification. It enforces a
 16 ms p95 gate; fixture size, warmups, samples, and budget use
 `MILLE_CROSS_ROOT_*`.
 
+## Transfer progress
+
+```sh
+pnpm bench:transfer-progress
+```
+
+The harness imports a 256-file external directory with `operationId` progress
+enabled for 12 measured samples (2 warmups). Every sample requires at least one
+`OP_PROGRESS` warning. Default p95 gate is 250 ms; fixture size, samples, and
+budget use the `MILLE_TRANSFER_PROGRESS_*` environment variables.
+
 ## Collision policy
 
 ```sh

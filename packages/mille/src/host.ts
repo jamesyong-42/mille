@@ -1198,6 +1198,13 @@ class FileExplorerHostImpl implements FileExplorerHost {
         }
         return this.explorer.probeDestination(parentId as EntryId, name);
       }
+      case 'cancelOperation': {
+        const [operationId] = args;
+        if (typeof operationId !== 'string' || operationId.length === 0) {
+          throw new Error('cancelOperation requires a non-empty operationId');
+        }
+        return this.explorer.cancelOperation(operationId);
+      }
       case 'resync': {
         const [id, recursive] = args;
         if (

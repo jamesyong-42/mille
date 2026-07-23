@@ -4,6 +4,10 @@
 
 ### Added
 
+- **Transfer progress and cancellation** — recursive copies accept
+  `operationId` / `AbortSignal`, emit `OP_PROGRESS` / `OP_COMPLETE` /
+  `OP_CANCELLED` warnings, and honor `cancelOperation` between recursive steps
+  with partial-destination cleanup on cancel.
 - **Collision policy expansion** — transfer options and DnD accept
   `overwrite`, `skip`, and `merge` in addition to `error`/`rename`. Case-only
   sibling names collide on case-insensitive volumes. `dragDrop.onCollision`

@@ -32,6 +32,7 @@
     "bench:resync": "node packages/mille/bench/resync.mjs",
     "bench:copy-from-path": "node packages/mille/bench/copy-from-path.mjs",
     "bench:collision": "node packages/mille/bench/collision-policy.mjs",
+    "bench:transfer-progress": "node packages/mille/bench/transfer-progress.mjs",
     "bench:cross-root": "node packages/mille/bench/cross-root-transfer.mjs",
     "bench:open-policy": "node apps/playground/scripts/editor-tab-churn-bench.mjs",
     "bench:active-policy": "node packages/mille-ui/bench/active-entry-policy.mjs",

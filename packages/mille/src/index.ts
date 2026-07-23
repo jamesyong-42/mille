@@ -28,6 +28,7 @@ export type {
   SearchOptions,
   ResyncOptions,
   TransferOptions,
+  TransferProgress,
   Uri,
   VisibleRow,
   VisibleRowCount,

@@ -3,8 +3,10 @@
 //! Owns the entry store, live filesystem watcher, mutations, snapshots,
 //! typed event fan-out, and deterministic shutdown for local mode.
 
+use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use tokio_util::sync::CancellationToken;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -117,6 +119,9 @@ pub struct FileExplorer {
     /// via Arc so background-thread emitters can clone one reference per
     /// producer.
     pub(crate) events: Arc<EventBus>,
+    /// In-flight long operations keyed by host-supplied operation id.
+    /// `cancelOperation` trips the matching token between recursive steps.
+    pub(crate) operations: Arc<parking_lot::Mutex<HashMap<String, CancellationToken>>>,
 }
 
 #[napi]
@@ -200,7 +205,59 @@ impl FileExplorer {
             exclude_globs: Arc::new(parking_lot::RwLock::new(exclude_globs)),
             policy_gate: Arc::new(parking_lot::Mutex::new(())),
             events: Arc::new(EventBus::new()),
+            operations: Arc::new(parking_lot::Mutex::new(HashMap::new())),
         })
+    }
+
+    /// Cancel an in-flight transfer identified by `operation_id`. Returns
+    /// true when a matching operation was found and signalled.
+    #[napi(js_name = "cancelOperation")]
+    pub fn cancel_operation(&self, operation_id: String) -> bool {
+        let map = self.operations.lock();
+        if let Some(token) = map.get(&operation_id) {
+            token.cancel();
+            true
+        } else {
+            false
+        }
+    }
+
+    fn begin_copy_progress(
+        &self,
+        options: Option<&TransferOptionsJs>,
+    ) -> Option<CopyProgressCtx> {
+        let operation_id = options.and_then(|o| o.operation_id.clone())?;
+        if operation_id.is_empty() {
+            return None;
+        }
+        let report = options
+            .and_then(|o| o.report_progress)
+            .unwrap_or(true);
+        let token = CancellationToken::new();
+        {
+            let mut map = self.operations.lock();
+            map.insert(operation_id.clone(), token.clone());
+        }
+        if !report {
+            // Still register for cancellation without progress spam.
+        }
+        Some(CopyProgressCtx {
+            operation_id,
+            token,
+            events: Arc::clone(&self.events),
+            done: AtomicU64::new(0),
+            total: AtomicU64::new(0),
+            report_every: 16,
+        })
+    }
+
+    fn end_copy_progress(&self, progress: Option<&CopyProgressCtx>, status: &str) {
+        let Some(progress) = progress else {
+            return;
+        };
+        progress.emit_complete(status);
+        let mut map = self.operations.lock();
+        map.remove(&progress.operation_id);
     }
 
     /// Local-mode baseline capabilities. Phase 5 wave 3+ will recompute
@@ -1677,17 +1734,31 @@ impl FileExplorer {
         }
 
         if src_entry.kind == EntryKind::Directory {
+            let progress = self.begin_copy_progress(options.as_ref());
+            if let Some(ref progress) = progress {
+                match count_copy_entries(&src_path).await {
+                    Ok(total) => progress.total.store(total.max(1), Ordering::Relaxed),
+                    Err(_) => progress.total.store(1, Ordering::Relaxed),
+                }
+            }
             let copy_result = if matches!(dest.action, DestAction::Merge) {
-                merge_tree_on_disk(&src_path, &dst_path).await
+                merge_tree_on_disk_with_progress(&src_path, &dst_path, progress.as_ref()).await
             } else {
-                copy_tree_on_disk(&src_path, &dst_path).await
+                copy_tree_on_disk_with_progress(&src_path, &dst_path, progress.as_ref()).await
             };
             if let Err(error) = copy_result {
+                let status = if matches!(error, FxError::Cancelled) {
+                    "cancelled"
+                } else {
+                    "failed"
+                };
+                self.end_copy_progress(progress.as_ref(), status);
                 if !matches!(dest.action, DestAction::Merge) {
                     let _ = remove_path_best_effort(&dst_path).await;
                 }
                 return Err(fx_error_to_napi(error));
             }
+            self.end_copy_progress(progress.as_ref(), "completed");
             self.record_intent(dst_path.clone(), IntentKind::Create);
             // Authoritatively reconcile the destination subtree so merge
             // updates existing entries (size/mtime/kind) and drops stale ones.
@@ -1720,10 +1791,22 @@ impl FileExplorer {
             return Ok(EntryJs::from_core(arc.as_ref()));
         }
 
-        if let Err(error) = copy_tree_on_disk(&src_path, &dst_path).await {
+        let progress = self.begin_copy_progress(options.as_ref());
+        if let Some(ref progress) = progress {
+            progress.total.store(1, Ordering::Relaxed);
+        }
+        if let Err(error) = copy_tree_on_disk_with_progress(&src_path, &dst_path, progress.as_ref()).await
+        {
+            let status = if matches!(error, FxError::Cancelled) {
+                "cancelled"
+            } else {
+                "failed"
+            };
+            self.end_copy_progress(progress.as_ref(), status);
             let _ = remove_path_best_effort(&dst_path).await;
             return Err(fx_error_to_napi(error));
         }
+        self.end_copy_progress(progress.as_ref(), "completed");
         self.record_intent(dst_path.clone(), IntentKind::Create);
 
         let mut entry = stat_to_entry(&dst_path, Some(new_parent_eid), effective_name)
@@ -1895,20 +1978,34 @@ impl FileExplorer {
             remove_path_best_effort(&dst_path).await;
         }
 
-        // On mid-copy failure, remove any partial destination so we never
-        // leave empty placeholder files behind (except merge into an existing
-        // tree, where partial cleanup would destroy unrelated content).
+        // On mid-copy failure or cancel, remove any partial destination so we
+        // never leave empty placeholder files behind (except merge into an
+        // existing tree, where partial cleanup would destroy unrelated content).
+        let progress = self.begin_copy_progress(options.as_ref());
+        if let Some(ref progress) = progress {
+            match count_copy_entries(&src_path).await {
+                Ok(total) => progress.total.store(total.max(1), Ordering::Relaxed),
+                Err(_) => progress.total.store(1, Ordering::Relaxed),
+            }
+        }
         let copy_result = if matches!(dest.action, DestAction::Merge) {
-            merge_tree_on_disk(&src_path, &dst_path).await
+            merge_tree_on_disk_with_progress(&src_path, &dst_path, progress.as_ref()).await
         } else {
-            copy_tree_on_disk(&src_path, &dst_path).await
+            copy_tree_on_disk_with_progress(&src_path, &dst_path, progress.as_ref()).await
         };
         if let Err(error) = copy_result {
+            let status = if matches!(error, FxError::Cancelled) {
+                "cancelled"
+            } else {
+                "failed"
+            };
+            self.end_copy_progress(progress.as_ref(), status);
             if !matches!(dest.action, DestAction::Merge) {
                 let _ = remove_path_best_effort(&dst_path).await;
             }
             return Err(fx_error_to_napi(error));
         }
+        self.end_copy_progress(progress.as_ref(), "completed");
         self.record_intent(dst_path.clone(), IntentKind::Create);
 
         // Index the new material. Files insert directly; directories walk
@@ -2689,6 +2786,142 @@ fn path_is_self_or_descendant(child: &Path, ancestor: &Path) -> bool {
     }
 }
 
+/// Progress + cancellation context for long recursive copies.
+struct CopyProgressCtx {
+    operation_id: String,
+    token: CancellationToken,
+    events: Arc<EventBus>,
+    done: AtomicU64,
+    total: AtomicU64,
+    /// Emit at most once per this many completed items.
+    report_every: u64,
+}
+
+impl CopyProgressCtx {
+    fn check(&self) -> std::result::Result<(), FxError> {
+        if self.token.is_cancelled() {
+            Err(FxError::Cancelled)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn bump(&self, path: &Path) {
+        let done = self.done.fetch_add(1, Ordering::Relaxed) + 1;
+        let total = self.total.load(Ordering::Relaxed).max(done);
+        if done == 1 || done == total || done % self.report_every == 0 {
+            self.emit_progress(done, total, path);
+        }
+    }
+
+    fn emit_progress(&self, done: u64, total: u64, path: &Path) {
+        let detail = format!(
+            r#"{{"operationId":{},"phase":"copy","done":{},"total":{},"path":{}}}"#,
+            serde_json_string(&self.operation_id),
+            done,
+            total,
+            serde_json_string(&path.to_string_lossy()),
+        );
+        self.events.emit_warning(crate::types::WarningPayloadJs {
+            code: "OP_PROGRESS".into(),
+            detail: Some(detail),
+        });
+    }
+
+    fn emit_complete(&self, status: &str) {
+        let done = self.done.load(Ordering::Relaxed);
+        let total = self.total.load(Ordering::Relaxed).max(done);
+        let detail = format!(
+            r#"{{"operationId":{},"status":{},"done":{},"total":{}}}"#,
+            serde_json_string(&self.operation_id),
+            serde_json_string(status),
+            done,
+            total,
+        );
+        let code = if status == "cancelled" {
+            "OP_CANCELLED"
+        } else {
+            "OP_COMPLETE"
+        };
+        self.events.emit_warning(crate::types::WarningPayloadJs {
+            code: code.into(),
+            detail: Some(detail),
+        });
+    }
+}
+
+fn serde_json_string(s: &str) -> String {
+    // Minimal JSON string escape without pulling serde_json into every call.
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for ch in s.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if c.is_control() => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+async fn count_copy_entries(src: &Path) -> std::result::Result<u64, FxError> {
+    count_copy_entries_guarded(src, &mut Vec::new()).await
+}
+
+async fn count_copy_entries_guarded(
+    src: &Path,
+    stack: &mut Vec<PathBuf>,
+) -> std::result::Result<u64, FxError> {
+    let meta = tokio::fs::symlink_metadata(src)
+        .await
+        .map_err(|e| io_to_fx(e, src.to_path_buf()))?;
+    if meta.file_type().is_symlink() {
+        // Directory symlinks are not descended (matches copy_tree).
+        if tokio::fs::metadata(src).await.map(|m| m.is_dir()).unwrap_or(false)
+            && meta.file_type().is_symlink()
+        {
+            // Still count the symlink node itself as one entry when we refuse
+            // to follow; the copy will error. Count as 1 for progress totals
+            // on file symlinks only.
+            return Ok(1);
+        }
+        return Ok(1);
+    }
+    if meta.is_file() {
+        return Ok(1);
+    }
+    if !meta.is_dir() {
+        return Ok(1);
+    }
+    let src_key = tokio::fs::canonicalize(src)
+        .await
+        .unwrap_or_else(|_| src.to_path_buf());
+    if stack.iter().any(|seen| seen == &src_key) {
+        return Ok(0);
+    }
+    stack.push(src_key);
+    let mut total = 1u64; // directory itself
+    let mut rd = tokio::fs::read_dir(src)
+        .await
+        .map_err(|e| io_to_fx(e, src.to_path_buf()))?;
+    while let Some(entry) = rd
+        .next_entry()
+        .await
+        .map_err(|e| io_to_fx(e, src.to_path_buf()))?
+    {
+        total = total.saturating_add(
+            Box::pin(count_copy_entries_guarded(&entry.path(), stack)).await?,
+        );
+    }
+    stack.pop();
+    Ok(total)
+}
+
 /// Recursively copy a file or directory tree on disk.
 /// Directory symlinks are *not* followed — they are recreated as symlinks
 /// when the platform supports it, otherwise copied as empty placeholders
@@ -2697,14 +2930,26 @@ async fn copy_tree_on_disk(
     src: &Path,
     dst: &Path,
 ) -> std::result::Result<(), FxError> {
-    copy_tree_on_disk_guarded(src, dst, &mut Vec::new()).await
+    copy_tree_on_disk_guarded(src, dst, &mut Vec::new(), None).await
+}
+
+async fn copy_tree_on_disk_with_progress(
+    src: &Path,
+    dst: &Path,
+    progress: Option<&CopyProgressCtx>,
+) -> std::result::Result<(), FxError> {
+    copy_tree_on_disk_guarded(src, dst, &mut Vec::new(), progress).await
 }
 
 async fn copy_tree_on_disk_guarded(
     src: &Path,
     dst: &Path,
     stack: &mut Vec<PathBuf>,
+    progress: Option<&CopyProgressCtx>,
 ) -> std::result::Result<(), FxError> {
+    if let Some(p) = progress {
+        p.check()?;
+    }
     let meta = tokio::fs::symlink_metadata(src)
         .await
         .map_err(|e| io_to_fx(e, src.to_path_buf()))?;
@@ -2723,6 +2968,9 @@ async fn copy_tree_on_disk_guarded(
                 tokio::fs::copy(src, dst)
                     .await
                     .map_err(|e| io_to_fx(e, dst.to_path_buf()))?;
+                if let Some(p) = progress {
+                    p.bump(dst);
+                }
                 return Ok(());
             }
             Err(error) => {
@@ -2732,6 +2980,9 @@ async fn copy_tree_on_disk_guarded(
                     .map_err(|e| io_to_fx(e, src.to_path_buf()))?;
                 create_symlink(&target, dst).await?;
                 let _ = error;
+                if let Some(p) = progress {
+                    p.bump(dst);
+                }
                 return Ok(());
             }
         }
@@ -2741,6 +2992,9 @@ async fn copy_tree_on_disk_guarded(
         tokio::fs::copy(src, dst)
             .await
             .map_err(|e| io_to_fx(e, dst.to_path_buf()))?;
+        if let Some(p) = progress {
+            p.bump(dst);
+        }
         return Ok(());
     }
     if !meta.is_dir() {
@@ -2765,6 +3019,9 @@ async fn copy_tree_on_disk_guarded(
     tokio::fs::create_dir(dst)
         .await
         .map_err(|e| io_to_fx(e, dst.to_path_buf()))?;
+    if let Some(p) = progress {
+        p.bump(dst);
+    }
     let mut rd = tokio::fs::read_dir(src)
         .await
         .map_err(|e| io_to_fx(e, src.to_path_buf()))?;
@@ -2773,10 +3030,19 @@ async fn copy_tree_on_disk_guarded(
         .await
         .map_err(|e| io_to_fx(e, src.to_path_buf()))?
     {
+        if let Some(p) = progress {
+            p.check()?;
+        }
         let name = entry.file_name();
         let child_src = entry.path();
         let child_dst = dst.join(&name);
-        Box::pin(copy_tree_on_disk_guarded(&child_src, &child_dst, stack)).await?;
+        Box::pin(copy_tree_on_disk_guarded(
+            &child_src,
+            &child_dst,
+            stack,
+            progress,
+        ))
+        .await?;
     }
     stack.pop();
     Ok(())
@@ -2825,6 +3091,14 @@ async fn merge_tree_on_disk(
     src: &Path,
     dst: &Path,
 ) -> std::result::Result<(), FxError> {
+    merge_tree_on_disk_with_progress(src, dst, None).await
+}
+
+async fn merge_tree_on_disk_with_progress(
+    src: &Path,
+    dst: &Path,
+    progress: Option<&CopyProgressCtx>,
+) -> std::result::Result<(), FxError> {
     let src_meta = tokio::fs::symlink_metadata(src)
         .await
         .map_err(|e| io_to_fx(e, src.to_path_buf()))?;
@@ -2846,7 +3120,7 @@ async fn merge_tree_on_disk(
 
     match tokio::fs::symlink_metadata(dst).await {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return copy_tree_on_disk(src, dst).await;
+            return copy_tree_on_disk_with_progress(src, dst, progress).await;
         }
         Err(error) => return Err(io_to_fx(error, dst.to_path_buf())),
         Ok(dst_meta) => {
@@ -2861,14 +3135,22 @@ async fn merge_tree_on_disk(
                     .await
                     .map_err(|e| io_to_fx(e, src.to_path_buf()))?
                 {
+                    if let Some(p) = progress {
+                        p.check()?;
+                    }
                     let name = entry.file_name();
-                    Box::pin(merge_tree_on_disk(&entry.path(), &dst.join(name))).await?;
+                    Box::pin(merge_tree_on_disk_with_progress(
+                        &entry.path(),
+                        &dst.join(name),
+                        progress,
+                    ))
+                    .await?;
                 }
                 return Ok(());
             }
             // File-to-file or kind mismatch: replace destination.
             remove_path_best_effort(dst).await;
-            return copy_tree_on_disk(src, dst).await;
+            return copy_tree_on_disk_with_progress(src, dst, progress).await;
         }
     }
 }

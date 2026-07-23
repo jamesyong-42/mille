@@ -28,7 +28,7 @@
 import { basename, join as joinPath, sep as pathSep } from 'node:path';
 
 import { native } from './native.js';
-import { wrap, wrapSync } from './errors.js';
+import { FileSystemError, wrap, wrapSync } from './errors.js';
 import { decodeBulkRows, type VisibleRow as DecodedRow } from './decode.js';
 import type { ChangeSet } from './delta.js';
 import { DecorationStore, type DecorationProvider } from './decorations.js';
@@ -99,6 +99,15 @@ export interface DestinationProbe {
   readonly path?: string;
 }
 
+export interface TransferProgress {
+  readonly operationId: string;
+  readonly phase?: 'copy';
+  readonly done?: number;
+  readonly total?: number;
+  readonly path?: string;
+  readonly status?: 'completed' | 'failed' | 'cancelled';
+}
+
 export interface TransferOptions {
   /** Cross-root transfers are denied unless explicitly enabled. */
   readonly crossRoot?: boolean;
@@ -111,6 +120,12 @@ export interface TransferOptions {
    * - `merge` — for directories, merge children; files overwrite
    */
   readonly collision?: CollisionPolicy;
+  /** Host-supplied id for progress/cancel tracking. */
+  readonly operationId?: string;
+  /** Emit progress warnings. Defaults to true when `operationId` is set. */
+  readonly reportProgress?: boolean;
+  /** AbortSignal for cooperative cancellation of recursive transfers. */
+  readonly signal?: AbortSignal;
 }
 
 export interface ResyncOptions {
@@ -255,6 +270,7 @@ type NativeFx = {
     parentId: number,
     name: string,
   ): Promise<{ status: string; existingName?: string; path?: string }>;
+  cancelOperation(operationId: string): boolean;
   readFile(id: number): Promise<Buffer>;
   readText(id: number, encoding?: string): Promise<string>;
   writeFile(id: number, data: Buffer, options?: { atomic?: boolean }): Promise<void>;
@@ -915,7 +931,9 @@ export class FileExplorer {
     newName?: string,
     options?: TransferOptions,
   ): Promise<Entry> {
-    return wrap(this.nativeFx.copy(id, newParentId, newName, options));
+    return this.runTransfer(options, (nativeOptions) =>
+      wrap(this.nativeFx.copy(id, newParentId, newName, nativeOptions)),
+    );
   }
 
   /**
@@ -928,7 +946,20 @@ export class FileExplorer {
     newName?: string,
     options?: TransferOptions,
   ): Promise<Entry> {
-    return wrap(this.nativeFx.copyFromPath(sourcePath, newParentId, newName, options));
+    return this.runTransfer(options, (nativeOptions) =>
+      wrap(this.nativeFx.copyFromPath(sourcePath, newParentId, newName, nativeOptions)),
+    );
+  }
+
+  /**
+   * Cancel a long transfer previously started with `operationId`.
+   * Returns true when a matching in-flight operation was signalled.
+   */
+  cancelOperation(operationId: string): boolean {
+    if (typeof this.nativeFx.cancelOperation !== 'function') {
+      return false;
+    }
+    return Boolean(this.nativeFx.cancelOperation(operationId));
   }
 
   async probeDestination(parentId: EntryId, name: string): Promise<DestinationProbe> {
@@ -944,6 +975,59 @@ export class FileExplorer {
         : null),
       ...(raw.path !== undefined && raw.path !== null ? { path: raw.path } : null),
     };
+  }
+
+  /**
+   * Normalize transfer options for native: attach a generated operation id when
+   * only `signal` is provided, and link AbortSignal → cancelOperation.
+   */
+  private async runTransfer<T>(
+    options: TransferOptions | undefined,
+    invoke: (nativeOptions: TransferOptions | undefined) => Promise<T>,
+  ): Promise<T> {
+    const signal = options?.signal;
+    let operationId = options?.operationId;
+    let generated = false;
+    if (signal !== undefined && (operationId === undefined || operationId.length === 0)) {
+      operationId = `op-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+      generated = true;
+    }
+    // Native does not accept AbortSignal; strip it before the boundary.
+    const forNative: TransferOptions | undefined = (() => {
+      if (options === undefined && operationId === undefined) return undefined;
+      const out: TransferOptions = {};
+      if (options?.crossRoot !== undefined) {
+        (out as { crossRoot: boolean }).crossRoot = options.crossRoot;
+      }
+      if (options?.collision !== undefined) {
+        (out as { collision: TransferOptions['collision'] }).collision = options.collision;
+      }
+      if (operationId !== undefined) {
+        (out as { operationId: string }).operationId = operationId;
+      }
+      if (options?.reportProgress !== undefined) {
+        (out as { reportProgress: boolean }).reportProgress = options.reportProgress;
+      }
+      return out;
+    })();
+
+    if (signal !== undefined && operationId !== undefined) {
+      if (signal.aborted) {
+        const err = new FileSystemError('ECANCELED', 'transfer aborted');
+        throw err;
+      }
+      const onAbort = (): void => {
+        this.cancelOperation(operationId!);
+      };
+      signal.addEventListener('abort', onAbort, { once: true });
+      try {
+        return await invoke(forNative);
+      } finally {
+        signal.removeEventListener('abort', onAbort);
+        void generated;
+      }
+    }
+    return invoke(forNative);
   }
 
   // ─── I/O ────────────────────────────────────────────────────────────

@@ -33,6 +33,12 @@ pub struct TransferOptionsJs {
     pub cross_root: Option<bool>,
     /// `"error"` (default), `"rename"`, `"overwrite"`, `"skip"`, or `"merge"`.
     pub collision: Option<String>,
+    /// Host-supplied id for progress/cancel tracking. When set, recursive
+    /// copies emit `OP_PROGRESS` / `OP_COMPLETE` warnings and honor
+    /// `cancelOperation(operationId)`.
+    pub operation_id: Option<String>,
+    /// Emit progress warnings. Defaults to true when `operation_id` is set.
+    pub report_progress: Option<bool>,
 }
 
 /// Resolve an entry identity through the store's exact bidirectional path

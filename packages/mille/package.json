@@ -67,6 +67,7 @@
     "bench:resync": "node bench/resync.mjs",
     "bench:copy-from-path": "node bench/copy-from-path.mjs",
     "bench:collision": "node bench/collision-policy.mjs",
+    "bench:transfer-progress": "node bench/transfer-progress.mjs",
     "bench:cross-root": "node bench/cross-root-transfer.mjs",
     "bench:watch:soak": "node bench/watch-soak.mjs",
     "artifacts": "napi artifacts",

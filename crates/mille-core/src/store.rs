@@ -295,6 +295,84 @@ impl EntryStore {
         Ok((new_tree_version, added_ids, removed_ids))
     }
 
+    /// Keep a configured root visible while atomically evicting its stale
+    /// descendants after the directory becomes unavailable.
+    ///
+    /// The root id, path index, and root order are preserved. Repeating the
+    /// transition is a version-free no-op.
+    pub fn mark_root_unavailable(&self, root_id: EntryId) -> Result<(u64, Vec<EntryId>), FxError> {
+        let _guard = self.write_lock.lock();
+        let visibility = *self.visibility.read();
+        let current = self.inner.load_full();
+        let root = current
+            .entries
+            .get(&root_id)
+            .cloned()
+            .ok_or_else(|| FxError::InvalidInput(format!("root {:?} not found", root_id)))?;
+        if root.parent_id.is_some() || !current.roots.contains(&root_id) {
+            return Err(FxError::InvalidInput(format!(
+                "entry {:?} is not a workspace root",
+                root_id
+            )));
+        }
+
+        let mut removed_ids = Vec::new();
+        let mut stack = current
+            .children
+            .get(&root_id)
+            .map(|children| children.to_vec())
+            .unwrap_or_default();
+        while let Some(id) = stack.pop() {
+            removed_ids.push(id);
+            if let Some(children) = current.children.get(&id) {
+                stack.extend(children.iter().copied());
+            }
+        }
+        if root.kind == EntryKind::Unavailable && removed_ids.is_empty() {
+            return Ok((current.tree_version, Vec::new()));
+        }
+
+        let mut unavailable = (*root).clone();
+        unavailable.kind = EntryKind::Unavailable;
+        unavailable.size = 0;
+        unavailable.symlink_target_is_dir = None;
+        unavailable.path_segments = None;
+        unavailable.is_readonly = true;
+
+        let mut next = (*current).clone();
+        for id in &removed_ids {
+            next.entries.remove(id);
+            next.children.remove(id);
+            next.direct_child_counts.remove(id);
+            next.descendant_visible_counts.remove(id);
+            next.descendant_total_sizes.remove(id);
+        }
+        next.entries.insert(root_id, Arc::new(unavailable.clone()));
+        next.children.remove(&root_id);
+        next.direct_child_counts.insert(root_id, 0);
+        next.descendant_visible_counts
+            .insert(root_id, visibility.includes(&unavailable) as u32);
+        next.descendant_total_sizes.insert(root_id, 0);
+
+        let prev_tree_version = next.tree_version;
+        next.tree_version += 1;
+        let new_tree_version = next.tree_version;
+        self.inner.store(Arc::new(next));
+
+        for id in &removed_ids {
+            if let Some((_, path)) = self.id_to_path.remove(id) {
+                self.path_to_id.remove(path.as_ref());
+            }
+        }
+
+        self.record_mutation(prev_tree_version, new_tree_version, |changes| {
+            changes.changed_ids.insert(root_id);
+            changes.changed_ids.extend(removed_ids.iter().copied());
+            changes.child_set_changed.insert(root_id);
+        });
+        Ok((new_tree_version, removed_ids))
+    }
+
     /// Snapshot the path index below `root`. The returned paths include
     /// `root` itself when it is known. Watch reconciliation uses this to
     /// compare a bounded disk walk with the authoritative in-memory view.
@@ -1280,6 +1358,50 @@ mod tests {
             assert_eq!(s.tree_version(), version);
             assert_eq!(s.snapshot().roots(), &[a]);
         }
+    }
+
+    #[test]
+    fn unavailable_root_preserves_identity_and_evicts_descendants_atomically() {
+        let s = EntryStore::new();
+        let root = s
+            .insert("/workspace".into(), dir("workspace", None))
+            .unwrap();
+        let folder = s
+            .insert("/workspace/src".into(), dir("src", Some(root)))
+            .unwrap();
+        let leaf = s
+            .insert(
+                "/workspace/src/main.rs".into(),
+                leaf("main.rs", Some(folder)),
+            )
+            .unwrap();
+        let retained = s.snapshot();
+        s.take_pending_changes();
+
+        let (version, removed) = s.mark_root_unavailable(root).unwrap();
+        let current = s.snapshot();
+        assert_eq!(current.tree_version(), version);
+        assert_eq!(current.roots(), &[root]);
+        assert_eq!(current.get(root).unwrap().kind, EntryKind::Unavailable);
+        assert!(current.get(root).unwrap().is_readonly);
+        assert_eq!(current.children_of(root), &[]);
+        assert_eq!(removed, vec![folder, leaf]);
+        assert_eq!(s.path_for_id(root), Some(PathBuf::from("/workspace")));
+        assert_eq!(s.path_for_id(folder), None);
+        assert_eq!(s.path_for_id(leaf), None);
+        assert_eq!(retained.get(leaf).unwrap().name, "main.rs");
+
+        let changes = s.take_pending_changes();
+        assert!(changes.changed_ids.contains(&root));
+        assert!(changes.changed_ids.contains(&folder));
+        assert!(changes.changed_ids.contains(&leaf));
+        assert!(changes.child_set_changed.contains(&root));
+
+        assert_eq!(
+            s.mark_root_unavailable(root).unwrap(),
+            (version, Vec::new())
+        );
+        assert!(s.take_pending_changes().is_empty());
     }
 
     #[test]

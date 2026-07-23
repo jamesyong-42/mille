@@ -237,6 +237,53 @@ test('FileTree rows carry role=treeitem with aria-level matching depth', async (
   container.remove();
 });
 
+test('unavailable roots stay visible with disabled non-draggable presentation', async () => {
+  const fx = createFakeEngine();
+  fx.emitDelta(
+    createFakeSnapshot({
+      rows: [
+        makeRow({
+          id: 1,
+          parentId: null,
+          name: 'offline-workspace',
+          depth: 0,
+          kind: 4,
+          hasChildren: false,
+          isExpanded: false,
+        }),
+      ],
+      treeVersion: 1,
+    }),
+  );
+  const { container, root } = mount();
+  const obs = makeObservers({ height: 100 });
+
+  await act(async () => {
+    root.render(
+      createElement(FileTree, {
+        fx,
+        ariaLabel: 'Unavailable root',
+        __testObserveElementRect: obs.observeElementRect,
+        __testObserveElementOffset: obs.observeElementOffset,
+      }),
+    );
+  });
+
+  const row = container.querySelector('[role="treeitem"]');
+  assert.ok(row);
+  assert.equal(row.getAttribute('data-mille-kind'), 'unavailable');
+  assert.equal(row.getAttribute('data-mille-unavailable'), 'true');
+  assert.equal(row.getAttribute('aria-disabled'), 'true');
+  assert.equal(row.getAttribute('title'), 'Workspace folder is unavailable');
+  assert.equal(row.hasAttribute('draggable'), false);
+  assert.equal(row.hasAttribute('aria-expanded'), false);
+
+  await act(async () => {
+    root.unmount();
+  });
+  container.remove();
+});
+
 // ─── Test 3: scroll shifts the virtual window ─────────────────────────
 
 test('scrolling the tree shifts the rendered virtual items', async () => {

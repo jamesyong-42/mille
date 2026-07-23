@@ -28,6 +28,7 @@
     "bench:multi-root": "node packages/mille/bench/multi-root-resolution.mjs",
     "bench:root-reorder": "node packages/mille/bench/root-reorder.mjs",
     "bench:root-churn": "node packages/mille/bench/workspace-root-churn.mjs",
+    "bench:root-availability": "node packages/mille/bench/root-availability.mjs",
     "bench:watch": "node scripts/watch-bench.mjs",
     "bench:watch:soak": "node scripts/watch-soak.mjs",
     "lint": "pnpm -r --if-present lint",

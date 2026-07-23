@@ -1011,6 +1011,21 @@ Port calls resolve only after every attached mirror receives the membership
 change. Watch registrations, exclude matching, and later path resolution all
 use the replacement list.
 
+Configured roots that disappear or become unreadable remain in the tree with
+their original ID and `EntryKind.Unavailable`; known descendants are removed
+so stale files cannot be opened. Re-stat roots without walking their contents:
+
+```ts
+await fx.refreshWorkspaceRoots();
+```
+
+When a root returns, the same entry becomes a lazy directory again. Local
+watcher deletion/recreation hints use the same transition, while
+`refreshWorkspaceRoots()` is the deterministic fallback for disconnected
+mounts and permission changes. Port refreshes resolve after all attached
+mirrors are current. The default `FileTree` renders unavailable roots as
+disabled, non-draggable folder rows with no disclosure affordance.
+
 Counts, indexes, typeahead, host viewports, and port mirrors use the same leaf
 identity. In roots-only mode the host follows the chain with bounded depth-1
 reads and stops at the first branch; it does not eagerly walk the subtree.

@@ -35,6 +35,7 @@ import { FileTreeContext } from '../context.js';
 // Numeric enum matching api.d.ts §EntryKind.
 const KIND_DIRECTORY = 1;
 const KIND_SYMLINK = 2;
+const KIND_UNAVAILABLE = 4;
 
 /** JetBrains "library root" folder names — entire subtree gets the tint. */
 function isLibraryRootName(name: string): boolean {
@@ -92,6 +93,8 @@ export interface UseFileTreeRowRowProps {
   readonly 'aria-posinset'?: number;
   readonly 'aria-selected': boolean;
   readonly 'aria-expanded'?: boolean;
+  readonly 'aria-disabled'?: true;
+  readonly title?: string;
   readonly 'data-mille-row-id': EntryId;
   readonly 'data-mille-depth': number;
   readonly 'data-mille-selected'?: 'true';
@@ -114,6 +117,8 @@ export interface UseFileTreeRowRowProps {
   readonly 'data-mille-under-library-root'?: 'true';
   /** Symlink whose target is a directory (pnpm/npm workspace link). */
   readonly 'data-mille-symlink-dir'?: 'true';
+  /** Configured workspace root is currently missing or inaccessible. */
+  readonly 'data-mille-unavailable'?: 'true';
   readonly 'data-mille-entering'?: 'true';
   readonly 'data-mille-repositioning'?: 'true';
   readonly className?: string;
@@ -273,6 +278,7 @@ export function useFileTreeRow(props: FileTreeRowProps): UseFileTreeRowResult {
   const isSymlinkDir =
     row.symlinkTargetIsDir === true ||
     (row.kind === KIND_SYMLINK && hasChildren);
+  const isUnavailable = row.kind === KIND_UNAVAILABLE;
 
   // Row DOM ref. Published up through `registerRowElement` so the
   // tree's keyboard handler can synthesize `contextmenu` events here
@@ -307,7 +313,7 @@ export function useFileTreeRow(props: FileTreeRowProps): UseFileTreeRowResult {
     typeof onRenameCommit === 'function' &&
     typeof onRenameCancel === 'function';
 
-  const dndEnabled = disableDragDrop !== true;
+  const dndEnabled = disableDragDrop !== true && !isUnavailable;
 
   const rowStyle: CSSProperties = useMemo(() => {
     return {
@@ -349,6 +355,10 @@ export function useFileTreeRow(props: FileTreeRowProps): UseFileTreeRowResult {
     if (ariaProps['aria-setsize'] !== undefined) out['aria-setsize'] = ariaProps['aria-setsize'];
     if (ariaProps['aria-posinset'] !== undefined) out['aria-posinset'] = ariaProps['aria-posinset'];
     if (hasChildren) out['aria-expanded'] = expanded;
+    if (isUnavailable) {
+      out['aria-disabled'] = true;
+      out.title = 'Workspace folder is unavailable';
+    }
     // Kind attribute so host themes can style directories (e.g. uppercase
     // folder labels) without re-implementing the row view.
     out['data-mille-kind'] =
@@ -356,7 +366,9 @@ export function useFileTreeRow(props: FileTreeRowProps): UseFileTreeRowResult {
         ? 'directory'
         : row.kind === KIND_SYMLINK
           ? 'symlink'
-          : 'file';
+          : row.kind === KIND_UNAVAILABLE
+            ? 'unavailable'
+            : 'file';
     if (selected) out['data-mille-selected'] = t;
     if (focused) out['data-mille-focused'] = t;
     if (pending) out['data-mille-pending'] = t;
@@ -376,6 +388,7 @@ export function useFileTreeRow(props: FileTreeRowProps): UseFileTreeRowResult {
     if (isLibraryRoot) out['data-mille-library-root'] = t;
     if (underLibraryRoot) out['data-mille-under-library-root'] = t;
     if (isSymlinkDir) out['data-mille-symlink-dir'] = t;
+    if (isUnavailable) out['data-mille-unavailable'] = t;
     if (dndEnabled) {
       out.draggable = true;
       if (onDragStart) out.onDragStart = onDragStart;
@@ -400,6 +413,7 @@ export function useFileTreeRow(props: FileTreeRowProps): UseFileTreeRowResult {
     isLibraryRoot,
     underLibraryRoot,
     isSymlinkDir,
+    isUnavailable,
     depth,
     className,
     rowStyle,
@@ -439,7 +453,9 @@ export function useFileTreeRow(props: FileTreeRowProps): UseFileTreeRowResult {
   // Symlink-to-dir (pnpm workspace links) should render as folders —
   // same affordance JetBrains uses for linked packages.
   const isDirLike =
-    row.kind === KIND_DIRECTORY || row.symlinkTargetIsDir === true;
+    row.kind === KIND_DIRECTORY ||
+    row.kind === KIND_UNAVAILABLE ||
+    row.symlinkTargetIsDir === true;
   const iconProps: UseFileTreeRowIconProps = {
     entry: isDirLike && row.kind !== KIND_DIRECTORY ? { ...row, kind: KIND_DIRECTORY } : row,
     expanded,

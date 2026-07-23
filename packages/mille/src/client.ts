@@ -189,6 +189,7 @@ type NativeFx = {
   updateProjectionSettings(settings: NativeProjectionSettings): number;
   reorderRoots(ids: number[]): number;
   updateWorkspaceRoots(roots: string[]): Promise<number>;
+  refreshWorkspaceRoots(): Promise<number>;
   populateFromRoots(): Promise<number>;
   // Phase B2 — bounded-depth walk of a single path. Older native builds
   // (pre-v0.2) may not ship this method; the TS wrapper guards with
@@ -480,6 +481,15 @@ export class FileExplorer {
     const version = await wrap(this.nativeFx.updateWorkspaceRoots(rootPaths));
     this.rootPaths.splice(0, this.rootPaths.length, ...rootPaths);
     return version;
+  }
+
+  /**
+   * Re-stat configured roots without scanning descendants. Missing or
+   * inaccessible roots remain visible as unavailable; restored roots retain
+   * identity and hydrate lazily.
+   */
+  refreshWorkspaceRoots(): Promise<number> {
+    return wrap(this.nativeFx.refreshWorkspaceRoots());
   }
 
   get capabilities(): number {

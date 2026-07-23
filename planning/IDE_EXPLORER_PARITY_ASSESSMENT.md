@@ -342,9 +342,9 @@ maintaining focus.
 Several features are primitives that require host work rather than complete
 end-user behavior:
 
-- the engine represents multiple roots, but there is no add/remove/reorder root
-  workflow in the explorer; duplicate basenames are now identity-safe and
-  visually numbered, but custom aliases and unavailable-root states remain;
+- the engine now supports live add/remove/reorder, duplicate-basename identity,
+  and unavailable-root recovery, but the product explorer still needs a root
+  management workflow, custom aliases, and explicit cross-root collision UX;
 - `revealPath` exists, but automatic active-editor synchronization is not a
   product setting;
 - a decoration pipeline exists, but Problems, tests, and source-control states

@@ -108,3 +108,15 @@ filesystem validation, one immutable native publication, subtree/index
 removal, lazy root insertion, and public snapshot verification. It separately
 measures identical-list no-ops and enforces a 16 ms replacement p95 gate.
 Fixture size, candidates, samples, and budget use `MILLE_ROOT_CHURN_*`.
+
+## Workspace-root availability
+
+```sh
+pnpm bench:root-availability
+```
+
+The harness repeatedly disconnects and restores an 8,193-entry workspace
+across 30 measured cycles. It verifies stable root identity, complete stale
+subtree eviction, lazy recovery, and version-free healthy refreshes. Both
+disappearance and recovery enforce a 16 ms p95 gate; fixture size, warmups,
+samples, and budget use `MILLE_ROOT_AVAILABILITY_*`.

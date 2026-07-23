@@ -80,6 +80,12 @@
   opacity: 0.5;
 }
 
+/* Keep disconnected workspace roots visible, but clearly non-interactive. */
+.mille-row[data-mille-unavailable="true"] {
+  opacity: var(--mille-unavailable-opacity, 0.55);
+  font-style: italic;
+}
+
 /*
  * Phase 11 — drag-and-drop visual state.
  *

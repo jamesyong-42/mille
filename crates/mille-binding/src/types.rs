@@ -31,7 +31,8 @@ pub struct EntryJs {
     pub id: i64,
     pub parent_id: Option<i64>,
     pub name: String,
-    /// `EntryKind` numeric variant (0=File, 1=Directory, 2=Symlink, 3=Unknown).
+    /// `EntryKind` numeric variant
+    /// (0=File, 1=Directory, 2=Symlink, 3=Unknown, 4=Unavailable).
     pub kind: u8,
     pub size: i64,
     pub mtime_ms: i64,

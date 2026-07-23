@@ -788,8 +788,28 @@ Rust atomicity/idempotence tests, local failure/retained-snapshot/lazy-hydration
 tests, two-client hydrated-descendant eviction, and added/removed-root watcher
 coverage lock the behavior down. The 32,770-entry, 100-sample churn gate
 measured 9.033 ms median and 10.712 ms p95 against a 16 ms p95 budget;
-same-list no-op measured 0.017/0.049 ms median/p95. Phase 3.2 still needs
-unavailable-root states and explicit cross-root operation/collision policy.
+same-list no-op measured 0.017/0.049 ms median/p95. Unavailable-root states are
+covered by the next result; explicit cross-root operation/collision policy
+remains.
+
+Unavailable-root result (2026-07-23): configured roots now retain their row,
+path, order, and entry identity when missing, disconnected, or unreadable.
+`EntryKind.Unavailable` travels through the existing one-byte kind field, so
+local snapshots, bulk rows, host deltas, and port mirrors need no parallel
+status cache or protocol expansion. The transition atomically replaces the
+root record, evicts every known descendant and reverse-path index, and is an
+idempotent no-op while the root remains offline. `refreshWorkspaceRoots`
+re-stats and probes directory readability without walking descendants,
+re-registers recovered watchers, and is a local/port synchronization point;
+watcher root deletion/recreation hints share the same store transition.
+Recovery preserves the root ID and returns it as a lazy directory. The default
+React row is visibly unavailable, ARIA-disabled, non-draggable, and has no
+disclosure affordance. Rust retained-snapshot/index/idempotence coverage plus
+local missing/disappearance/recovery/permission, two-client port, and UI tests
+cover the contract. The 8,193-entry, 30-sample gate measured disappearance at
+4.136/4.860 ms median/p95, recovery at 0.253/0.368 ms, and healthy no-op refresh
+at 0.152/0.265 ms against a 16 ms p95 budget. Phase 3.2 now only needs explicit
+cross-root operation and collision policy.
 
 #### 3.3 Persist navigation state
 

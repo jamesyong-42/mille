@@ -99,3 +99,4 @@ export type IconResolver = (
  * other value = file. (See engine SPEC §4.2.)
  */
 export const ENTRY_KIND_DIRECTORY = 1;
+export const ENTRY_KIND_UNAVAILABLE = 4;

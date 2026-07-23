@@ -1166,6 +1166,11 @@ class FileExplorerHostImpl implements FileExplorerHost {
         await this.flushTickNow();
         return version;
       }
+      case 'refreshWorkspaceRoots': {
+        const version = await this.explorer.refreshWorkspaceRoots();
+        await this.flushTickNow();
+        return version;
+      }
       case 'resolvePath': {
         const path = args[0];
         if (typeof path !== 'string') throw new Error('resolvePath requires a string path');

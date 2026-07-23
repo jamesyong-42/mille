@@ -330,6 +330,15 @@ export class PortFileExplorer {
     return result;
   }
 
+  /** Re-stat root availability and resolve after every mirror is current. */
+  async refreshWorkspaceRoots(): Promise<number> {
+    const result = await this.call('refreshWorkspaceRoots', []);
+    if (typeof result !== 'number') {
+      throw new FileSystemError('EUNKNOWN', 'invalid refreshWorkspaceRoots response');
+    }
+    return result;
+  }
+
   // ─── Mutations ────────────────────────────────────────────────────
 
   create(parentId: number, name: string, kind: number): Promise<unknown> {

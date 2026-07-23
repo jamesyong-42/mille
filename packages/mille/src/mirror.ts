@@ -45,7 +45,7 @@ export interface ClientEntry {
   id: number;
   parentId: number | null;
   name: string;
-  /** 0=File, 1=Directory, 2=Symlink, 3=Unknown — mirrors EntryKind. */
+  /** 0=File, 1=Directory, 2=Symlink, 3=Unknown, 4=Unavailable. */
   kind: number;
   size: number;
   mtimeMs: number;

@@ -107,6 +107,8 @@ export const enum EntryKind {
   Directory = 1,
   Symlink = 2,
   Unknown = 3,
+  /** Configured workspace root that is currently missing or inaccessible. */
+  Unavailable = 4,
 }
 
 /** One row in the flat-array model. Produced in Rust, shipped as bincode Buffer. */
@@ -529,6 +531,13 @@ export declare class FileExplorer implements Disposable {
    * publishing. The asynchronous result is a mirror synchronization point.
    */
   updateWorkspaceRoots(roots: readonly (Uri | string)[]): Promise<TreeVersion>;
+
+  /**
+   * Re-stat configured roots without walking descendants. Missing or
+   * inaccessible roots remain visible as unavailable; restored roots retain
+   * identity. Port calls resolve after every attached mirror is current.
+   */
+  refreshWorkspaceRoots(): Promise<TreeVersion>;
 
   /** Async URI → entry. May return null if the URI isn't under a known root. */
   getByUri(uri: Uri): Promise<Entry | null>;

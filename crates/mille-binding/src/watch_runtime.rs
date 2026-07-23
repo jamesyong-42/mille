@@ -271,11 +271,19 @@ fn reconcile_event(
         FsChangeEvent::Deleted { path } => {
             let mut out = ReconcileOutcome::default();
             if let Some(entry) = store.get_by_path(path) {
-                let parent = entry.parent_id;
-                let removed = store.remove_subtree(entry.id);
-                out.changed_ids.extend(removed.iter().map(|entry| entry.id));
-                if let Some(parent) = parent {
-                    out.child_set_changed.insert(parent);
+                if entry.parent_id.is_none() && config.roots.read().iter().any(|root| root == path)
+                {
+                    let (_, removed) = store.mark_root_unavailable(entry.id)?;
+                    out.changed_ids.insert(entry.id);
+                    out.changed_ids.extend(removed);
+                    out.child_set_changed.insert(entry.id);
+                } else {
+                    let parent = entry.parent_id;
+                    let removed = store.remove_subtree(entry.id);
+                    out.changed_ids.extend(removed.iter().map(|entry| entry.id));
+                    if let Some(parent) = parent {
+                        out.child_set_changed.insert(parent);
+                    }
                 }
             } else {
                 out.merge(reconcile_nearest_parent(store, config, path, Some(1))?);
@@ -397,11 +405,19 @@ fn reconcile_directory(
     let mut out = ReconcileOutcome::default();
     if !directory.exists() {
         if let Some(entry) = store.get_by_path(directory) {
-            let parent = entry.parent_id;
-            let removed = store.remove_subtree(entry.id);
-            out.changed_ids.extend(removed.iter().map(|entry| entry.id));
-            if let Some(parent) = parent {
-                out.child_set_changed.insert(parent);
+            if entry.parent_id.is_none() && config.roots.read().iter().any(|root| root == directory)
+            {
+                let (_, removed) = store.mark_root_unavailable(entry.id)?;
+                out.changed_ids.insert(entry.id);
+                out.changed_ids.extend(removed);
+                out.child_set_changed.insert(entry.id);
+            } else {
+                let parent = entry.parent_id;
+                let removed = store.remove_subtree(entry.id);
+                out.changed_ids.extend(removed.iter().map(|entry| entry.id));
+                if let Some(parent) = parent {
+                    out.child_set_changed.insert(parent);
+                }
             }
         }
         return Ok(out);

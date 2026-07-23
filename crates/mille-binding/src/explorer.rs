@@ -13,7 +13,9 @@ use napi::threadsafe_function::ThreadsafeFunction;
 use napi::Error;
 use napi_derive::napi;
 
-use mille_core::{EntryId, EntryKind, EntryStore, FxError, IntentCache, IntentKind, Watcher};
+use mille_core::{
+    Entry, EntryId, EntryKind, EntryStore, FxError, IntentCache, IntentKind, Watcher,
+};
 
 use crate::error::{fx_error_to_napi, io_to_fx};
 use crate::events::{Channel, EventBus};
@@ -393,41 +395,69 @@ impl FileExplorer {
             // dynamically inside walk_with_ignore as subdirectories are
             // streamed.
             let use_matcher = self.options.respect_ignore || !exclude_globs.is_empty();
-            let (walked, repository_ignore, excludes) = if use_matcher {
-                let mut traversal = IgnoreMatcher::new();
-                let mut repository_ignore = IgnoreMatcher::new();
-                let mut excludes = IgnoreMatcher::new();
-                if self.options.respect_ignore {
-                    for name in mille_core::IGNORE_FILE_NAMES {
-                        let candidate = root.join(name);
-                        if candidate.is_file() {
-                            let _ = traversal.add_from_file(&candidate);
-                            let _ = repository_ignore.add_from_file(&candidate);
+            let walk_result: std::result::Result<_, FxError> = (|| {
+                if use_matcher {
+                    let mut traversal = IgnoreMatcher::new();
+                    let mut repository_ignore = IgnoreMatcher::new();
+                    let mut excludes = IgnoreMatcher::new();
+                    if self.options.respect_ignore {
+                        for name in mille_core::IGNORE_FILE_NAMES {
+                            let candidate = root.join(name);
+                            if candidate.is_file() {
+                                let _ = traversal.add_from_file(&candidate);
+                                let _ = repository_ignore.add_from_file(&candidate);
+                            }
                         }
                     }
-                }
-                add_exclude_globs(&mut traversal, root, &exclude_globs)
-                    .map_err(fx_error_to_napi)?;
-                add_exclude_globs(&mut excludes, root, &exclude_globs).map_err(fx_error_to_napi)?;
-                let w = walk_with_ignore(root, options, &traversal).map_err(fx_error_to_napi)?;
-                if self.options.respect_ignore {
-                    for entry in &w {
-                        if entry.path.file_name().is_some_and(|name| {
-                            mille_core::IGNORE_FILE_NAMES.contains(&name.to_string_lossy().as_ref())
-                        }) {
-                            let _ = repository_ignore.add_from_file(&entry.path);
+                    add_exclude_globs(&mut traversal, root, &exclude_globs)?;
+                    add_exclude_globs(&mut excludes, root, &exclude_globs)?;
+                    let w = walk_with_ignore(root, options, &traversal)?;
+                    if self.options.respect_ignore {
+                        for entry in &w {
+                            if entry.path.file_name().is_some_and(|name| {
+                                mille_core::IGNORE_FILE_NAMES
+                                    .contains(&name.to_string_lossy().as_ref())
+                            }) {
+                                let _ = repository_ignore.add_from_file(&entry.path);
+                            }
                         }
                     }
+                    Ok((
+                        w,
+                        self.options.respect_ignore.then_some(repository_ignore),
+                        (!exclude_globs.is_empty()).then_some(excludes),
+                    ))
+                } else {
+                    Ok((walk(root, options)?, None, None))
                 }
-                (
-                    w,
-                    self.options.respect_ignore.then_some(repository_ignore),
-                    (!exclude_globs.is_empty()).then_some(excludes),
-                )
-            } else {
-                let w = walk(root, options).map_err(fx_error_to_napi)?;
-                (w, None, None)
+            })();
+            let (walked, repository_ignore, excludes) = match walk_result {
+                Ok(result) => result,
+                Err(error) if matches!(&error, FxError::Io { .. }) => {
+                    self.mark_configured_root_unavailable(root)
+                        .map_err(fx_error_to_napi)?;
+                    continue;
+                }
+                Err(error) => return Err(fx_error_to_napi(error)),
             };
+            if let Some(walked_root) = walked.iter().find(|entry| entry.path == *root) {
+                if let Some(existing) = self.store.get_by_path(root) {
+                    if existing.kind == EntryKind::Unavailable {
+                        let mut restored = stat_to_entry(root, None, walked_root.name.clone())
+                            .await
+                            .map_err(fx_error_to_napi)?;
+                        restored.is_ignored = repository_ignore
+                            .as_ref()
+                            .is_some_and(|matcher| matcher.is_ignored(root, true));
+                        restored.is_excluded = excludes
+                            .as_ref()
+                            .is_some_and(|matcher| matcher.is_ignored(root, true));
+                        self.store
+                            .update(existing.id, restored)
+                            .map_err(fx_error_to_napi)?;
+                    }
+                }
+            }
             let new_entries: Vec<_> = walked
                 .into_iter()
                 .filter(|entry| self.store.get_by_path(&entry.path).is_none())
@@ -443,6 +473,148 @@ impl FileExplorer {
             total = total.saturating_add(ids.len() as u32);
         }
         Ok(total)
+    }
+
+    /// Re-stat configured roots without walking descendants.
+    ///
+    /// Missing or inaccessible roots remain visible as `Unavailable` with
+    /// stable identity and no stale children. Restored roots keep that id and
+    /// become lazy directories again. One public change notice covers the
+    /// complete refresh, and the returned version is a synchronization point.
+    #[napi(js_name = "refreshWorkspaceRoots")]
+    pub async fn refresh_workspace_roots(&self) -> Result<u32> {
+        self.ensure_watcher()?;
+        let roots = self.roots.read().clone();
+        let mut observed = Vec::with_capacity(roots.len());
+        for root in &roots {
+            let name = root
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| root.to_string_lossy().into_owned());
+            let observation = match stat_to_entry(root, None, name).await {
+                Ok(entry)
+                    if entry.kind == EntryKind::Directory
+                        || entry.symlink_target_is_dir == Some(true) =>
+                {
+                    match tokio::fs::read_dir(root).await {
+                        Ok(_) => Ok(entry),
+                        Err(error) => Err(io_to_fx(error, root.clone())),
+                    }
+                }
+                other => other,
+            };
+            observed.push(observation);
+        }
+
+        let _policy_guard = self.policy_gate.lock();
+        let exclude_matchers = self.current_exclude_matchers().map_err(fx_error_to_napi)?;
+        let previous_version = self.store.tree_version();
+        let mut changed_ids = Vec::new();
+        let mut child_set_changed = Vec::new();
+        let mut became_unavailable = Vec::new();
+        let mut became_available = Vec::new();
+        for (root, observation) in roots.iter().zip(observed) {
+            let existing = self.store.get_by_path(root);
+            let available = observation.as_ref().is_ok_and(|entry| {
+                entry.kind == EntryKind::Directory || entry.symlink_target_is_dir == Some(true)
+            });
+            if available {
+                let mut entry = observation.expect("availability checked above");
+                entry.is_excluded = Self::path_is_excluded(root, &entry, &exclude_matchers);
+                if let Some(existing) = existing {
+                    let was_unavailable = existing.kind == EntryKind::Unavailable;
+                    if self
+                        .store
+                        .update(existing.id, entry)
+                        .map_err(fx_error_to_napi)?
+                    {
+                        changed_ids.push(existing.id);
+                    }
+                    if was_unavailable {
+                        became_available.push(root.clone());
+                    }
+                } else {
+                    let id = self
+                        .store
+                        .insert(root.clone(), entry)
+                        .map_err(fx_error_to_napi)?;
+                    changed_ids.push(id);
+                    became_available.push(root.clone());
+                }
+            } else if let Some(existing) = existing {
+                let was_available = existing.kind != EntryKind::Unavailable;
+                let (_, removed) = self
+                    .store
+                    .mark_root_unavailable(existing.id)
+                    .map_err(fx_error_to_napi)?;
+                if was_available {
+                    changed_ids.push(existing.id);
+                    changed_ids.extend(removed);
+                    child_set_changed.push(existing.id);
+                    became_unavailable.push(root.clone());
+                }
+            } else {
+                self.mark_configured_root_unavailable(root)
+                    .map_err(fx_error_to_napi)?;
+                if let Some(inserted) = self.store.get_by_path(root) {
+                    changed_ids.push(inserted.id);
+                }
+                became_unavailable.push(root.clone());
+            }
+        }
+
+        let ordered_ids: Vec<EntryId> = roots
+            .iter()
+            .filter_map(|root| self.store.get_by_path(root).map(|entry| entry.id))
+            .collect();
+        if ordered_ids.len() == roots.len() {
+            self.store
+                .reorder_roots(&ordered_ids)
+                .map_err(fx_error_to_napi)?;
+        }
+
+        let watcher_guard = match self.watcher.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if let Some(watcher) = watcher_guard.as_ref() {
+            let options = mille_core::WatcherOptions {
+                recursive: true,
+                debounce_ms: Some(self.options.watch_debounce_ms),
+            };
+            for root in became_unavailable {
+                let _ = watcher.unwatch(&root);
+            }
+            for root in became_available {
+                if let Err(error) = watcher.watch(&root, options.clone()) {
+                    self.events.emit_warning(WarningPayloadJs {
+                        code: "WNOWATCH".into(),
+                        detail: Some(format!("failed to watch {}: {error}", root.display())),
+                    });
+                }
+            }
+        }
+        drop(watcher_guard);
+
+        let version = self.store.tree_version();
+        if version != previous_version {
+            changed_ids.extend(ordered_ids);
+            changed_ids.sort_unstable();
+            changed_ids.dedup();
+            let notice = || ChangeNoticeJs {
+                tree_version: version as u32,
+                decoration_version: 0,
+                tree_changed: true,
+                decorations_changed: false,
+                changed_ids: changed_ids.iter().map(|id| id.raw() as i64).collect(),
+                child_set_changed: child_set_changed.iter().map(|id| id.raw() as i64).collect(),
+                decoration_changed_ids: Vec::new(),
+                coarse_subtrees: Vec::new(),
+            };
+            self.events.emit_change(Channel::Change, notice());
+            self.events.emit_change(Channel::ChangeTree, notice());
+        }
+        Ok(version as u32)
     }
 
     /// Bounded-depth walk starting at `path`. We filter the walk output
@@ -507,61 +679,91 @@ impl FileExplorer {
         // lazy `setExpanded` walks on a pnpm monorepo don't accidentally
         // descend into the central store.
         let use_matcher = self.options.respect_ignore || !exclude_globs.is_empty();
-        let (walked, repository_ignore, excludes) = if use_matcher {
-            let mut traversal = IgnoreMatcher::new();
-            let mut repository_ignore = IgnoreMatcher::new();
-            let mut excludes = IgnoreMatcher::new();
-            add_exclude_globs(&mut traversal, &root, &exclude_globs).map_err(fx_error_to_napi)?;
-            add_exclude_globs(&mut excludes, &root, &exclude_globs).map_err(fx_error_to_napi)?;
-            // Seed with every ignore file on the path from the workspace
-            // root down to the target directory — a lazy expand at
-            // `repo/packages/foo` should still honor `repo/.gitignore`.
-            let mut anchor = root.clone();
-            for seg in p
-                .strip_prefix(&root)
-                .ok()
-                .into_iter()
-                .flat_map(|r| r.iter())
-            {
+        let walk_result: std::result::Result<_, FxError> = (|| {
+            if use_matcher {
+                let mut traversal = IgnoreMatcher::new();
+                let mut repository_ignore = IgnoreMatcher::new();
+                let mut excludes = IgnoreMatcher::new();
+                add_exclude_globs(&mut traversal, &root, &exclude_globs)?;
+                add_exclude_globs(&mut excludes, &root, &exclude_globs)?;
+                // Seed with every ignore file on the path from the workspace
+                // root down to the target directory — a lazy expand at
+                // `repo/packages/foo` should still honor `repo/.gitignore`.
+                let mut anchor = root.clone();
+                for seg in p
+                    .strip_prefix(&root)
+                    .ok()
+                    .into_iter()
+                    .flat_map(|r| r.iter())
+                {
+                    if self.options.respect_ignore {
+                        for name in mille_core::IGNORE_FILE_NAMES {
+                            let candidate = anchor.join(name);
+                            if candidate.is_file() {
+                                let _ = traversal.add_from_file(&candidate);
+                                let _ = repository_ignore.add_from_file(&candidate);
+                            }
+                        }
+                    }
+                    anchor = anchor.join(seg);
+                }
                 if self.options.respect_ignore {
                     for name in mille_core::IGNORE_FILE_NAMES {
-                        let candidate = anchor.join(name);
+                        let candidate = p.join(name);
                         if candidate.is_file() {
                             let _ = traversal.add_from_file(&candidate);
                             let _ = repository_ignore.add_from_file(&candidate);
                         }
                     }
                 }
-                anchor = anchor.join(seg);
-            }
-            if self.options.respect_ignore {
-                for name in mille_core::IGNORE_FILE_NAMES {
-                    let candidate = p.join(name);
-                    if candidate.is_file() {
-                        let _ = traversal.add_from_file(&candidate);
-                        let _ = repository_ignore.add_from_file(&candidate);
+                let w = walk_with_ignore(&p, options, &traversal)?;
+                if self.options.respect_ignore {
+                    for entry in &w {
+                        if entry.path.file_name().is_some_and(|name| {
+                            mille_core::IGNORE_FILE_NAMES.contains(&name.to_string_lossy().as_ref())
+                        }) {
+                            let _ = repository_ignore.add_from_file(&entry.path);
+                        }
                     }
                 }
+                Ok((
+                    w,
+                    self.options.respect_ignore.then_some(repository_ignore),
+                    (!exclude_globs.is_empty()).then_some(excludes),
+                ))
+            } else {
+                Ok((walk(&p, options)?, None, None))
             }
-            let w = walk_with_ignore(&p, options, &traversal).map_err(fx_error_to_napi)?;
-            if self.options.respect_ignore {
-                for entry in &w {
-                    if entry.path.file_name().is_some_and(|name| {
-                        mille_core::IGNORE_FILE_NAMES.contains(&name.to_string_lossy().as_ref())
-                    }) {
-                        let _ = repository_ignore.add_from_file(&entry.path);
-                    }
-                }
+        })();
+        let (walked, repository_ignore, excludes) = match walk_result {
+            Ok(result) => result,
+            Err(error) if p == root && matches!(&error, FxError::Io { .. }) => {
+                self.mark_configured_root_unavailable(&root)
+                    .map_err(fx_error_to_napi)?;
+                return Ok(0);
             }
-            (
-                w,
-                self.options.respect_ignore.then_some(repository_ignore),
-                (!exclude_globs.is_empty()).then_some(excludes),
-            )
-        } else {
-            let w = walk(&p, options).map_err(fx_error_to_napi)?;
-            (w, None, None)
+            Err(error) => return Err(fx_error_to_napi(error)),
         };
+        if p == root {
+            if let Some(walked_root) = walked.iter().find(|entry| entry.path == root) {
+                if let Some(existing) = self.store.get_by_path(&root) {
+                    if existing.kind == EntryKind::Unavailable {
+                        let mut restored = stat_to_entry(&root, None, walked_root.name.clone())
+                            .await
+                            .map_err(fx_error_to_napi)?;
+                        restored.is_ignored = repository_ignore
+                            .as_ref()
+                            .is_some_and(|matcher| matcher.is_ignored(&root, true));
+                        restored.is_excluded = excludes
+                            .as_ref()
+                            .is_some_and(|matcher| matcher.is_ignored(&root, true));
+                        self.store
+                            .update(existing.id, restored)
+                            .map_err(fx_error_to_napi)?;
+                    }
+                }
+            }
+        }
 
         // Avoid rebuilding entries the store already knows about. `insert`
         // independently enforces path idempotence for watcher/walker races.
@@ -1450,6 +1652,45 @@ impl FileExplorer {
 }
 
 impl FileExplorer {
+    /// Caller holds `policy_gate`.
+    fn mark_configured_root_unavailable(
+        &self,
+        root: &std::path::Path,
+    ) -> std::result::Result<u64, FxError> {
+        if let Some(existing) = self.store.get_by_path(root) {
+            return self
+                .store
+                .mark_root_unavailable(existing.id)
+                .map(|(version, _)| version);
+        }
+        let name = root
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| root.to_string_lossy().into_owned());
+        let id = self.store.insert(
+            root.to_path_buf(),
+            Entry {
+                id: EntryId(0),
+                parent_id: None,
+                name,
+                kind: EntryKind::Unavailable,
+                size: 0,
+                mtime_ms: 0,
+                ctime_ms: 0,
+                symlink_target_is_dir: None,
+                path_segments: None,
+                is_ignored: false,
+                is_excluded: false,
+                is_readonly: true,
+                is_hidden: false,
+            },
+        )?;
+        Ok(self
+            .store
+            .get_by_id(id)
+            .map_or(0, |_| self.store.tree_version()))
+    }
+
     fn current_exclude_matchers(
         &self,
     ) -> std::result::Result<Vec<(PathBuf, mille_core::IgnoreMatcher)>, FxError> {

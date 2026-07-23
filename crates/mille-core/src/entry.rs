@@ -47,6 +47,12 @@ pub enum EntryKind {
     Directory = 1,
     Symlink = 2,
     Unknown = 3,
+    /// A configured workspace root that is currently missing or inaccessible.
+    ///
+    /// The root entry and its identity remain published while known
+    /// descendants are evicted. A later successful reconciliation restores
+    /// the concrete directory/symlink kind without allocating a new id.
+    Unavailable = 4,
 }
 
 /// One row in the flat-array model. Fields match `api.d.ts` Entry exactly.
@@ -185,5 +191,6 @@ mod tests {
         assert_eq!(EntryKind::Directory as u8, 1);
         assert_eq!(EntryKind::Symlink as u8, 2);
         assert_eq!(EntryKind::Unknown as u8, 3);
+        assert_eq!(EntryKind::Unavailable as u8, 4);
     }
 }

@@ -18,6 +18,7 @@
 
 import {
   ENTRY_KIND_DIRECTORY,
+  ENTRY_KIND_UNAVAILABLE,
   type IconDefinition,
   type IconResolver,
   type IconResolverOptions,
@@ -198,7 +199,9 @@ export function createIconResolver(
 
   const resolver: IconResolver = (entry, opts?: IconResolverOptions) => {
     const nameLower = entry.name.toLowerCase();
-    const isDir = entry.kind === ENTRY_KIND_DIRECTORY;
+    const isDir =
+      entry.kind === ENTRY_KIND_DIRECTORY ||
+      entry.kind === ENTRY_KIND_UNAVAILABLE;
     const expanded = opts?.expanded === true;
     const rootLevel = opts?.rootLevel === true;
     const key = isDir

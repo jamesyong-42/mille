@@ -10,7 +10,7 @@
 
 import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { MessageChannel } from 'node:worker_threads';
@@ -75,6 +75,61 @@ test('call getTreeVersion round-trips via callResult', async () => {
     const client = await connectFileExplorer(port2);
     const v = await client.call('getTreeVersion');
     assert.equal(typeof v, 'number');
+    await client.dispose();
+    await host.dispose();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('resolvePath round-trips through the host path index', async () => {
+  const dir = tempRoot();
+  try {
+    writeFileSync(join(dir, 'indexed.txt'), 'indexed');
+    const host = await createFileExplorerHost({ roots: [dir] });
+    await host.local.populateFromRoots();
+    const expected = await host.local.resolvePath('indexed.txt');
+    assert.equal(typeof expected, 'number');
+
+    const { port1, port2 } = new MessageChannel();
+    host.attachPort(port1);
+    const client = await connectFileExplorer(port2);
+    assert.equal(await client.resolvePath('indexed.txt'), expected);
+    assert.equal(await client.resolvePath('missing.txt'), null);
+    await client.dispose();
+    await host.dispose();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('resolvePath hydrates only a lazy target ancestor chain into the port mirror', async () => {
+  const dir = tempRoot();
+  try {
+    mkdirSync(join(dir, 'one', 'two'), { recursive: true });
+    writeFileSync(join(dir, 'one', 'two', 'target.txt'), 'target');
+    writeFileSync(join(dir, 'unrelated.txt'), 'cold');
+    const host = await createFileExplorerHost({ roots: [dir], initialWalk: 'roots-only' });
+    const { port1, port2 } = new MessageChannel();
+    host.attachPort(port1);
+    const client = await connectFileExplorer(port2);
+    await waitFor(() => client.getSnapshot().roots().length === 1);
+    assert.equal(client.getSnapshot().roots()[0].name, dir.split('/').at(-1));
+
+    const id = await client.resolvePath('one/two/target.txt');
+    assert.equal(typeof id, 'number');
+    const snapshot = client.getSnapshot();
+    const names = [];
+    let cursor = id;
+    while (cursor !== null) {
+      const entry = snapshot.getById(cursor);
+      assert.ok(entry, `resolved chain entry ${cursor} should be mirrored`);
+      names.push(entry.name);
+      cursor = entry.parentId;
+    }
+    assert.deepEqual(names.slice(0, 3), ['target.txt', 'two', 'one']);
+    assert.equal(await client.resolvePath('not-there.txt'), null);
+
     await client.dispose();
     await host.dispose();
   } finally {

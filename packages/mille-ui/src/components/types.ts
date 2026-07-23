@@ -51,6 +51,8 @@ export type VirtualizerOffsetObserver = (
  */
 export interface FileTreeEngine {
   getSnapshot(): FileTreeSnapshotLike;
+  /** Optional indexed workspace-relative path resolver. */
+  resolvePath?(path: string): Promise<EntryId | null> | EntryId | null;
   on(event: 'change', listener: (n?: unknown) => void): { dispose(): void };
   setExpanded(diff: {
     readonly add?: readonly EntryId[];
@@ -269,11 +271,11 @@ export interface FileTreeRef {
    * resolve. Returns `true` on success.
    *
    * Resolution strategy:
-   *   1. If the engine exposes `getByUri`, build a URI of the form
-   *      `mille://<root>/<path>` and look up the entry.
-   *   2. Otherwise walk the snapshot's children level-by-level,
+   *   1. If the engine exposes `resolvePath`, use its authoritative path index.
+   *   2. Otherwise try the legacy `getByUri` contract.
+   *   3. Otherwise walk the snapshot's children level-by-level,
    *      matching each path segment against `entry.name`.
-   *   3. If neither resolves, returns `false`.
+   *   4. If none resolves, returns `false`.
    */
   revealPath(path: string): Promise<boolean>;
 

@@ -408,6 +408,11 @@ export declare class FileExplorer implements Disposable {
 
   /** Async URI → entry. May return null if the URI isn't under a known root. */
   getByUri(uri: Uri): Promise<Entry | null>;
+  /**
+   * Resolve an absolute or workspace-relative path through the engine index.
+   * Lazy stores hydrate only the target's ancestor chain.
+   */
+  resolvePath(path: string): Promise<EntryId | null>;
 
   // Children (one level, paginated) — async form. Prefer `getSnapshot()`
   // for already-loaded data; use `list` for uncached / paginated reads.

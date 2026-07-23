@@ -957,6 +957,92 @@ async function runReveal(rows) {
   };
 }
 
+async function runPathReveal(rows) {
+  const fx = createFakeEngine();
+  let maxProjectionReadRows = 0;
+  let projectionRowsRead = 0;
+  let indexLookups = 0;
+  let pathLookups = 0;
+  const snapshot = createFakeSnapshot({ rows, treeVersion: 1 });
+  fx.emitDelta({
+    ...snapshot,
+    visibleRows: (options) => {
+      if (options.limit !== Number.MAX_SAFE_INTEGER) {
+        maxProjectionReadRows = Math.max(maxProjectionReadRows, options.limit);
+        projectionRowsRead += options.limit;
+      }
+      return snapshot.visibleRows(options);
+    },
+    visibleRowIndex: (id, expanded, includeIgnored) => {
+      indexLookups += 1;
+      return snapshot.visibleRowIndex(id, expanded, includeIgnored);
+    },
+  });
+  const targetIndex = 400_000;
+  const targetId = rows[targetIndex]?.id;
+  const targetPath = 'packages/deep/target.ts';
+  if (targetId === undefined) throw new Error('path reveal target is missing');
+  const indexedFx = {
+    ...fx,
+    resolvePath: async (path) => {
+      pathLookups += 1;
+      return path === targetPath ? targetId : null;
+    },
+  };
+  const { container, root } = mountContainer();
+  const obs = makeObservers({ height: 600 });
+  const ref = createRef();
+  let focusedId = null;
+  await act(async () => {
+    root.render(
+      createElement(FileTree, {
+        ref,
+        fx: indexedFx,
+        ariaLabel: 'bench-path-reveal',
+        rowHeight: 22,
+        overscan: 10,
+        onFocusedIdChange: (id) => {
+          focusedId = id;
+        },
+        __testObserveElementRect: obs.observeElementRect,
+        __testObserveElementOffset: obs.observeElementOffset,
+      }),
+    );
+  });
+  maxProjectionReadRows = 0;
+  projectionRowsRead = 0;
+  indexLookups = 0;
+  pathLookups = 0;
+  const tree = container.querySelector('[role="tree"]');
+  if (!tree || !ref.current) throw new Error('path reveal tree or ref is missing');
+  let scrollRequested = false;
+  tree.scrollTo = (...args) => {
+    const top = typeof args[0] === 'object' ? args[0]?.top : args[1];
+    if (typeof top === 'number' && top > 0) scrollRequested = true;
+  };
+
+  let revealAccepted = false;
+  const result = await measureAsync('reveal path to row 400k', async () => {
+    await act(async () => {
+      revealAccepted = await ref.current.revealPath(targetPath);
+    });
+  });
+  const rendered = container.querySelectorAll('[role="treeitem"]').length;
+
+  await act(async () => root.unmount());
+  container.remove();
+  return {
+    ...result,
+    rendered,
+    interactionPreserved:
+      revealAccepted && focusedId === targetId && scrollRequested,
+    maxMaterializedRows: maxProjectionReadRows,
+    projectionRowsRead,
+    indexLookups,
+    pathLookups,
+  };
+}
+
 async function runAnchoredInsert(rows) {
   const fx = createFakeEngine();
   let maxProjectionReadRows = 0;
@@ -1130,6 +1216,8 @@ async function main() {
   results.push(typeaheadMissResult);
   const revealResult = await runReveal(rows);
   results.push(revealResult);
+  const pathRevealResult = await runPathReveal(rows);
+  results.push(pathRevealResult);
   const anchorResult = await runAnchoredInsert(rows);
   results.push(anchorResult);
 
@@ -1159,6 +1247,9 @@ async function main() {
   );
   console.log(
     `      Reveal lookup: ${revealResult.indexLookups} exact index query; ${revealResult.projectionRowsRead.toLocaleString()} viewport rows read, ${revealResult.maxMaterializedRows} max per read.`,
+  );
+  console.log(
+    `      Path reveal: ${pathRevealResult.pathLookups} indexed path query + ${pathRevealResult.indexLookups} exact position query; ${pathRevealResult.projectionRowsRead.toLocaleString()} viewport rows.`,
   );
   if (anchorResult.driftPx > 0.5) {
     throw new Error(`viewport anchor drift ${anchorResult.driftPx.toFixed(2)} px exceeds 0.5 px`);
@@ -1259,6 +1350,19 @@ async function main() {
   ) {
     throw new Error(
       `deep reveal read max=${revealResult.maxMaterializedRows}, total=${revealResult.projectionRowsRead} rows`,
+    );
+  }
+  if (!pathRevealResult.interactionPreserved) {
+    throw new Error('indexed path reveal did not focus and scroll to its target');
+  }
+  if (
+    pathRevealResult.pathLookups !== 1 ||
+    pathRevealResult.indexLookups !== 1 ||
+    pathRevealResult.maxMaterializedRows > 100 ||
+    pathRevealResult.projectionRowsRead > 100
+  ) {
+    throw new Error(
+      `path reveal used ${pathRevealResult.pathLookups} path / ${pathRevealResult.indexLookups} position queries and ${pathRevealResult.projectionRowsRead} rows`,
     );
   }
   if (!decorationResult.decorationVisible) {

@@ -181,6 +181,7 @@ export type EventName =
 type NativeFx = {
   readonly capabilities: number;
   getTreeVersion(): number;
+  resolvePath?(path: string): Promise<number | null>;
   getSnapshot(): NativeSnapshot;
   takePendingChanges(): NativeChangeSet;
   populateFromRoots(): Promise<number>;
@@ -458,6 +459,24 @@ export class FileExplorer {
     }
     const finalEntry = lastSnap.getById(curId);
     return finalEntry === null ? null : (finalEntry as unknown as Entry);
+  }
+
+  /** Resolve a workspace-relative path without materializing or walking rows. */
+  async resolvePath(path: string): Promise<EntryId | null> {
+    const nativeResolve = this.nativeFx.resolvePath;
+    if (typeof nativeResolve === 'function') {
+      return (await nativeResolve.call(this.nativeFx, path)) ?? null;
+    }
+
+    // Compatibility with pre-resolvePath native artifacts.
+    for (const root of this.rootPaths) {
+      const entry = await this.getByUri({
+        scheme: 'file',
+        path: path.length === 0 ? root : joinPosix(root, path),
+      });
+      if (entry !== null) return entry.id;
+    }
+    return null;
   }
 
   /**

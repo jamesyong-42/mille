@@ -191,10 +191,22 @@ in selected identities. Current validation is 314/314 UI tests, 12/12
 playground tests, 160/160 non-watcher core tests, and 41/41 focused native/port
 tests.
 
+Path reveal now has an authoritative indexed contract instead of relying on a
+URI-shape mismatch or a full visible-order fallback. Known paths use the native
+reverse index; a collapsed, unindexed path hydrates only its ancestor chain.
+The host sends that depth-bounded chain to the renderer mirror, which pins it
+through the reveal handoff without treating it as a complete directory list.
+React then waits for the hydrated snapshot before expanding, focusing, and
+scrolling. On the 500,000-row gate, revealing row 400,000 used one path query,
+one exact-position query, and 38 complete row records; the current run reported
+36.86 ms and the preceding five-run median was 35.61 ms. The direct lazy-native
+and lazy host/port regression paths pass, with the port round trip measured at
+26.38 ms. Current UI validation is 316/316 tests.
+
 Remaining scaling gaps are O(n) ordered-id metadata for an extremely wide
-expanded folder; path-walk fallback; O(n) worst-case typeahead; and replacing
-the exact visible-id query's single traversal with a maintained rank structure
-if large native traces show that cost is material.
+expanded folder; O(n) worst-case typeahead; and replacing the exact visible-id
+query's single traversal with a maintained rank structure if large native
+traces show that cost is material.
 
 ## What is already strong
 

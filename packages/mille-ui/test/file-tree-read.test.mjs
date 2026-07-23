@@ -757,3 +757,140 @@ test('imperative reveal uses one exact-position lookup for a deep projection', a
   await act(async () => { root.unmount(); });
   container.remove();
 });
+
+test('path reveal uses the engine index without scanning the visible projection', async () => {
+  const fx = createFakeEngine();
+  const rows = buildRows(10_000);
+  const baseSnapshot = createFakeSnapshot({ rows, treeVersion: 1 });
+  const requestedLimits = [];
+  let indexLookups = 0;
+  fx.emitDelta({
+    ...baseSnapshot,
+    visibleRows: (options) => {
+      requestedLimits.push(options.limit);
+      return baseSnapshot.visibleRows(options);
+    },
+    visibleRowIndex: (id, expanded, includeIgnored) => {
+      indexLookups += 1;
+      return baseSnapshot.visibleRowIndex(id, expanded, includeIgnored);
+    },
+  });
+  const targetIndex = 9_000;
+  const target = rows[targetIndex];
+  const rootEntry = rows.find((row) => row.id === target.parentId);
+  assert.ok(rootEntry);
+  const targetPath = `${rootEntry.name}/${target.name}`;
+  const pathLookups = [];
+  const indexedFx = {
+    ...fx,
+    resolvePath: async (path) => {
+      pathLookups.push(path);
+      return path === targetPath ? target.id : null;
+    },
+  };
+
+  const { container, root } = mount();
+  const obs = makeObservers({ height: 400 });
+  const ref = createRef();
+  let observedFocusedId = null;
+  await act(async () => {
+    root.render(
+      createElement(FileTree, {
+        ref,
+        fx: indexedFx,
+        ariaLabel: 'Indexed path reveal',
+        rowHeight: 20,
+        overscan: 10,
+        onFocusedIdChange: (id) => {
+          observedFocusedId = id;
+        },
+        __testObserveElementRect: obs.observeElementRect,
+        __testObserveElementOffset: obs.observeElementOffset,
+      }),
+    );
+  });
+  requestedLimits.length = 0;
+  const tree = container.querySelector('[role="tree"]');
+  assert.ok(tree);
+  let requestedScrollTop = null;
+  tree.scrollTo = (options) => {
+    requestedScrollTop = options.top;
+  };
+
+  let accepted = false;
+  await act(async () => {
+    accepted = await ref.current.revealPath(targetPath);
+  });
+
+  assert.equal(accepted, true);
+  assert.deepEqual(pathLookups, [targetPath]);
+  assert.equal(indexLookups, 1);
+  assert.equal(observedFocusedId, target.id);
+  assert.equal(requestedScrollTop, targetIndex * 20);
+  assert.ok(
+    requestedLimits.reduce((total, limit) => total + limit, 0) <= 100,
+    `path reveal materialized ${requestedLimits.reduce((total, limit) => total + limit, 0)} rows`,
+  );
+
+  await act(async () => { root.unmount(); });
+  container.remove();
+});
+
+test('path reveal waits for a resolver-hydrated snapshot before expanding and focusing', async () => {
+  const fx = createFakeEngine();
+  const rootRow = makeRow({
+    id: 1, parentId: null, name: 'root', depth: 0,
+    kind: 1, hasChildren: true, isExpanded: true,
+  });
+  const folderRow = makeRow({
+    id: 2, parentId: 1, name: 'nested', depth: 1,
+    kind: 1, hasChildren: true, isExpanded: false,
+  });
+  const targetRow = makeRow({
+    id: 3, parentId: 2, name: 'target.txt', depth: 2,
+    kind: 0, hasChildren: false, isExpanded: false,
+  });
+  fx.emitDelta(createFakeSnapshot({ rows: [rootRow], treeVersion: 1 }));
+  const indexedFx = {
+    ...fx,
+    resolvePath: async () => {
+      // Publish before the promise resumes, matching PortFileExplorer's
+      // bounded path-chain hydration timing.
+      fx.emitDelta(createFakeSnapshot({
+        rows: [rootRow, folderRow, targetRow],
+        treeVersion: 2,
+      }));
+      return targetRow.id;
+    },
+  };
+
+  const { container, root } = mount();
+  const obs = makeObservers({ height: 400 });
+  const ref = createRef();
+  let focusedId = null;
+  await act(async () => {
+    root.render(createElement(FileTree, {
+      ref,
+      fx: indexedFx,
+      ariaLabel: 'Lazy path reveal',
+      rowHeight: 20,
+      onFocusedIdChange: (id) => { focusedId = id; },
+      __testObserveElementRect: obs.observeElementRect,
+      __testObserveElementOffset: obs.observeElementOffset,
+    }));
+  });
+
+  let accepted = false;
+  await act(async () => {
+    accepted = await ref.current.revealPath('nested/target.txt');
+  });
+  assert.equal(accepted, true);
+  assert.equal(focusedId, targetRow.id);
+  assert.ok(
+    fx.calls.setExpanded.some((diff) => diff.add.includes(folderRow.id)),
+    'hydrated ancestor should be expanded before reveal completes',
+  );
+
+  await act(async () => { root.unmount(); });
+  container.remove();
+});

@@ -3,7 +3,7 @@
 //! Owns the entry store, live filesystem watcher, mutations, snapshots,
 //! typed event fan-out, and deterministic shutdown for local mode.
 
-use std::path::PathBuf;
+use std::path::{Component, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
@@ -139,6 +139,136 @@ impl FileExplorer {
     #[napi(js_name = "getTreeVersion")]
     pub fn get_tree_version(&self) -> u32 {
         self.store.tree_version() as u32
+    }
+
+    /// Resolve an absolute or workspace-relative path through the store's
+    /// reverse path index. A path that exists below a configured root but is
+    /// not indexed yet is hydrated one ancestor at a time, keeping lazy-mode
+    /// reveal work proportional to path depth rather than workspace size.
+    /// Relative paths are tested below every configured root; a leading root
+    /// folder name is accepted as well.
+    #[napi(js_name = "resolvePath")]
+    pub async fn resolve_path(&self, path: String) -> Result<Option<i64>> {
+        let input = PathBuf::from(path);
+        if input
+            .components()
+            .any(|part| matches!(part, Component::ParentDir))
+        {
+            return Ok(None);
+        }
+
+        let mut candidates: Vec<(PathBuf, PathBuf)> = Vec::new();
+        for root in &self.roots {
+            let candidate = if input.is_absolute() {
+                if !input.starts_with(root) {
+                    continue;
+                }
+                input.clone()
+            } else if input.components().next().map(|part| part.as_os_str()) == root.file_name() {
+                match root.parent() {
+                    Some(parent) => parent.join(&input),
+                    None => continue,
+                }
+            } else if input.as_os_str().is_empty() {
+                root.clone()
+            } else {
+                root.join(&input)
+            };
+            if candidate.starts_with(root) {
+                candidates.push((root.clone(), candidate));
+            }
+        }
+
+        for (root, candidate) in candidates {
+            if let Some(entry) = self.store.get_by_path(&candidate) {
+                return Ok(Some(entry.id.raw() as i64));
+            }
+
+            match tokio::fs::symlink_metadata(&candidate).await {
+                Ok(_) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(fx_error_to_napi(io_to_fx(error, candidate))),
+            }
+
+            let mut current = root.clone();
+            let mut inserted_ids: Vec<i64> = Vec::new();
+            let mut child_set_changed: Vec<i64> = Vec::new();
+            let relative = candidate.strip_prefix(&root).map_err(|_| {
+                Error::from_reason("resolved path escaped its configured workspace root")
+            })?;
+
+            // The root itself may not have been seeded yet (`initialWalk:
+            // 'none'`). Insert it first, then hydrate exactly the requested
+            // descendant chain.
+            let root_name = root
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| root.to_string_lossy().into_owned());
+            let root_id = match self.store.get_by_path(&root) {
+                Some(entry) => entry.id,
+                None => {
+                    let entry = stat_to_entry(&root, None, root_name)
+                        .await
+                        .map_err(fx_error_to_napi)?;
+                    self.store
+                        .insert(root.clone(), entry)
+                        .map_err(fx_error_to_napi)
+                        .map(|id| {
+                            inserted_ids.push(id.raw() as i64);
+                            id
+                        })?
+                }
+            };
+            let mut parent_id = Some(root_id);
+
+            for part in relative.components() {
+                let Component::Normal(name) = part else {
+                    continue;
+                };
+                current.push(name);
+                let id = match self.store.get_by_path(&current) {
+                    Some(entry) => entry.id,
+                    None => {
+                        let entry =
+                            stat_to_entry(&current, parent_id, name.to_string_lossy().into_owned())
+                                .await
+                                .map_err(fx_error_to_napi)?;
+                        self.store
+                            .insert(current.clone(), entry)
+                            .map_err(fx_error_to_napi)
+                            .map(|id| {
+                                inserted_ids.push(id.raw() as i64);
+                                if let Some(parent) = parent_id {
+                                    child_set_changed.push(parent.raw() as i64);
+                                }
+                                id
+                            })?
+                    }
+                };
+                parent_id = Some(id);
+            }
+
+            if let Some(entry) = self.store.get_by_path(&candidate) {
+                if inserted_ids.is_empty() {
+                    return Ok(Some(entry.id.raw() as i64));
+                }
+                let version = self.store.tree_version() as u32;
+                let notice = || ChangeNoticeJs {
+                    tree_version: version,
+                    decoration_version: 0,
+                    tree_changed: true,
+                    decorations_changed: false,
+                    changed_ids: inserted_ids.clone(),
+                    child_set_changed: child_set_changed.clone(),
+                    decoration_changed_ids: Vec::new(),
+                    coarse_subtrees: Vec::new(),
+                };
+                self.events.emit_change(Channel::Change, notice());
+                self.events.emit_change(Channel::ChangeTree, notice());
+                return Ok(Some(entry.id.raw() as i64));
+            }
+        }
+        Ok(None)
     }
 
     /// Walk every configured root via `mille_core::walk` + `populate_store`

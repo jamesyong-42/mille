@@ -12,7 +12,7 @@
 import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
 import { createMirror } from '../dist/mirror.js';
-import { applySnapshot, applyDelta } from '../dist/mirror-reducer.js';
+import { applySnapshot, applyDelta, hydrateLookupEntries } from '../dist/mirror-reducer.js';
 import { encodeClientEntries } from '../dist/entry-codec.js';
 
 function entry(overrides = {}) {
@@ -280,4 +280,22 @@ test('applyDelta does not mutate the source state', () => {
   assert.equal(state.directChildCounts.size, 1, 'source counts untouched');
   assert.equal(state.volatileSubtrees.has(5), true, 'source flags untouched');
   assert.equal(state.volatileSubtrees.has(9), false, 'source flags untouched');
+});
+
+test('hydrateLookupEntries merges and pins a path chain without inventing child lists', () => {
+  const state = createMirror();
+  state.byId.set(99, entry({ id: 99, name: 'cold' }));
+  const chain = [
+    entry({ id: 3, parentId: 2, name: 'target.txt' }),
+    entry({ id: 2, parentId: 1, name: 'nested', kind: 1 }),
+    entry({ id: 1, parentId: null, name: 'root', kind: 1 }),
+  ];
+
+  const next = hydrateLookupEntries(state, chain, 7, 2);
+  assert.equal(next.treeVersion, 7);
+  assert.equal(next.byId.get(3).name, 'target.txt');
+  assert.equal(next.byId.get(2).parentId, 1);
+  assert.equal(next.byId.has(99), false, 'cold entry is evicted before the reveal chain');
+  assert.equal(next.children.size, 0, 'partial path must not masquerade as a directory listing');
+  assert.equal(state.byId.has(3), false, 'source state remains immutable');
 });

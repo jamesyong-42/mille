@@ -983,19 +983,19 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
   // tree programmatically (command palette, "Reset" button, etc.). All
   // state mutators delegate to the existing hooks (`selection.clear`,
   // `filterState.clear`, `clipboard.clear`, `addExpanded`, …); the
-  // `revealPath` implementation sniffs for `fx.getByUri` first and
-  // falls back to a snapshot child-walk.
+  // `revealPath` prefers `fx.resolvePath`, then falls back to the legacy
+  // URI and snapshot child-walk strategies.
 
   // Computing an ancestor chain from a target id to its root walks
   // `entry.parentId`. Returned leaf-first; callers reverse for
   // top-down expansion. Short-circuits when any ancestor is missing.
   const ancestorsOf = useCallback(
-    (id: EntryId): readonly EntryId[] => {
+    (id: EntryId, source: FileTreeSnapshotLike = snapshot): readonly EntryId[] => {
       const chain: EntryId[] = [];
       let cursor: EntryId | null = id;
       let guard = 0;
       while (cursor !== null && guard < 10_000) {
-        const entry = snapshot.getById(cursor);
+        const entry = source.getById(cursor);
         if (entry === null) break;
         if (entry.parentId === null) break;
         chain.push(entry.parentId);
@@ -1058,7 +1058,11 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
     const id = pendingRevealIdRef.current;
     if (id === null) return;
     if (snapshot.getById(id) === null) {
-      pendingRevealIdRef.current = null;
+      return;
+    }
+    const ancestors = ancestorsOf(id);
+    if (ancestors.some((ancestorId) => !expanded.has(ancestorId))) {
+      setManyExpanded({ add: ancestors });
       return;
     }
     const index = findExactVisibleRowIndex(id);
@@ -1066,13 +1070,19 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
     scrollToRevealedIndex(index);
     selection.setFocused(id);
     pendingRevealIdRef.current = null;
-  }, [snapshot, findExactVisibleRowIndex, scrollToRevealedIndex, selection]);
+  }, [
+    snapshot,
+    ancestorsOf,
+    expanded,
+    setManyExpanded,
+    findExactVisibleRowIndex,
+    scrollToRevealedIndex,
+    selection,
+  ]);
 
-  // `fx.getByUri` is async; when the engine exposes it we use it to
-  // turn a workspace-relative path into an `EntryId`. Many minimal
-  // engines (fakes, port clients) don't implement it — we fall back to
-  // a depth-first name-match walk over the snapshot's already-known
-  // children. Both paths return `null` when resolution fails.
+  // Prefer the engine's indexed workspace-relative resolver. Legacy engines
+  // may expose getByUri or only snapshot children; those remain compatibility
+  // fallbacks. Every strategy returns `null` when resolution fails.
   const resolvePath = useCallback(
     async (path: string): Promise<EntryId | null> => {
       const trimmed = path.replace(/^\/+/, '').replace(/\/+$/, '');
@@ -1082,22 +1092,31 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
       }
       const segments = trimmed.split('/');
 
-      // Strategy 1 — engine-native URI lookup when available.
+      // Strategy 1 — authoritative engine/host path index.
+      if (typeof fx.resolvePath === 'function') {
+        try {
+          const id = await fx.resolvePath(trimmed);
+          if (typeof id === 'number') return id;
+        } catch {
+          // Compatibility fallbacks below may still resolve a known path.
+        }
+      }
+
+      // Strategy 2 — engine URI lookup when available.
       const fxWithUri = fx as unknown as {
-        getByUri?: (uri: string) => Promise<{ id: EntryId } | null>;
+        getByUri?: (uri: { scheme: string; path: string }) =>
+          | Promise<{ id: EntryId } | null>
+          | { id: EntryId }
+          | null;
       };
       if (typeof fxWithUri.getByUri === 'function') {
         try {
-          // Build a synthetic `mille://` URI relative to the first
-          // root. The engine resolves whatever URI forms it accepts;
-          // we pass several common shapes to improve the hit rate.
           const firstRoot = snapshot.roots()[0];
-          const candidates: string[] = [];
+          const candidates: Array<{ scheme: string; path: string }> = [];
           if (firstRoot) {
-            candidates.push(`mille://${firstRoot.name}/${trimmed}`);
+            candidates.push({ scheme: 'mille', path: `/${firstRoot.name}/${trimmed}` });
           }
-          candidates.push(`file:///${trimmed}`);
-          candidates.push(trimmed);
+          candidates.push({ scheme: 'file', path: trimmed });
           for (const uri of candidates) {
             const entry = await fxWithUri.getByUri(uri);
             if (entry && typeof entry.id === 'number') {
@@ -1109,17 +1128,22 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
         }
       }
 
-      // Strategy 2 — depth-first walk over each root's children.
+      // Strategy 3 — depth-first walk over each root's children.
       // Matches the first segment against any root by name; subsequent
       // segments against direct children. Uses the snapshot's
       // already-loaded entries only (no engine RPC).
       const roots = snapshot.roots();
       const snapAny = snapshot as unknown as {
-        childrenOf?: (id: EntryId) => readonly Entry[];
+        childrenOf?: (id: EntryId) => readonly (Entry | EntryId)[];
       };
       const childrenOf = (parentId: EntryId): readonly Entry[] => {
         if (typeof snapAny.childrenOf === 'function') {
-          return snapAny.childrenOf(parentId);
+          const out: Entry[] = [];
+          for (const child of snapAny.childrenOf(parentId)) {
+            const entry = typeof child === 'number' ? snapshot.getById(child) : child;
+            if (entry !== null) out.push(entry);
+          }
+          return out;
         }
         // Fallback: scan the lazily materialized visible order for entries
         // whose parentId matches. Unexpanded subtrees won't be represented. Callers
@@ -1200,9 +1224,20 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
     async (path: string): Promise<boolean> => {
       const id = await resolvePath(path);
       if (id === null) return false;
-      return revealId(id);
+      if (snapshot.getById(id) !== null) return revealId(id);
+
+      // An indexed resolver may have hydrated a previously-collapsed path
+      // while this callback still holds the pre-request React snapshot. Read
+      // the engine once more, stage the ancestor expansion, and let the
+      // layout effect finish after useSyncExternalStore publishes the update.
+      const latest = fx.getSnapshot();
+      pendingRevealIdRef.current = id;
+      if (latest.getById(id) !== null) {
+        setManyExpanded({ add: ancestorsOf(id, latest) });
+      }
+      return true;
     },
-    [resolvePath, revealId],
+    [resolvePath, snapshot, revealId, fx, setManyExpanded, ancestorsOf],
   );
 
   const focusFilter = useCallback((): boolean => {

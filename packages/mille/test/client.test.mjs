@@ -212,6 +212,33 @@ test('populateFromRoots seeds the store with entries', async () => {
     for (let index = 0; index < visible.length; index += 1) {
       assert.equal(snap.visibleRowIndex(visible[index].id, expanded), index);
     }
+    const aTxt = visible.find((row) => row.name === 'a.txt');
+    assert.ok(aTxt);
+    assert.equal(await fx.resolvePath('a.txt'), aTxt.id);
+    assert.equal(await fx.resolvePath(`${walkRoot.name}/a.txt`), aTxt.id);
+    assert.equal(await fx.resolvePath('missing.txt'), null);
+    await fx.dispose();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('resolvePath hydrates an unindexed path without a full workspace walk', async () => {
+  const dir = tempRoot();
+  try {
+    mkdirSync(join(dir, 'deep', 'nested'), { recursive: true });
+    writeFileSync(join(dir, 'deep', 'nested', 'target.txt'), 'target');
+    writeFileSync(join(dir, 'cold.txt'), 'cold');
+    const fx = new FileExplorer({ roots: [dir] });
+
+    const id = await fx.resolvePath('deep/nested/target.txt');
+    assert.equal(typeof id, 'number');
+    assert.equal(await fx.resolvePath(join(dir, 'deep', 'nested', 'target.txt')), id);
+    const snapshot = fx.getSnapshot();
+    assert.equal(snapshot.getById(id).name, 'target.txt');
+    assert.equal(snapshot.roots().length, 1);
+    assert.equal(snapshot.directChildCount(snapshot.roots()[0].id), 1);
+    assert.equal(await fx.resolvePath('../outside.txt'), null);
     await fx.dispose();
   } finally {
     rmSync(dir, { recursive: true, force: true });

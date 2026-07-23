@@ -26,7 +26,7 @@ pnpm --filter @vibecook/mille-ui build
 
 The harness builds a synthetic 500,000-row snapshot with 1,000
 pre-expanded folders, mounts `<FileTree>` against a fake engine
-(`createFakeEngine()`), and times thirteen operations with
+(`createFakeEngine()`), and times fourteen operations with
 `performance.now()`:
 
 | Scenario | What happens |
@@ -43,6 +43,7 @@ pre-expanded folders, mounts `<FileTree>` against a fake engine
 | **typeahead near match** | Finds and focuses the next nearby prefix match through bounded windows; fails above 256 rows per read or 1,024 rows total. |
 | **typeahead full-wrap miss** | Scans the complete order without one giant allocation, preserves focus, and requires every read to remain at or below 256 rows. |
 | **reveal row 400k** | Expands the target's ancestors, focuses it, and requests a deep scroll through one exact-position query plus a bounded viewport read. |
+| **reveal path to row 400k** | Resolves a workspace-relative path through one indexed engine query, then performs the same bounded exact-position reveal. |
 | **insert 1000 above viewport** | Preserves the top row's pixel offset, focus, and selection; fails above 0.5 px drift, on interaction-state loss, or if anchor lookup reads more than 256 rows at once / 4,096 rows total. |
 
 Output is a small markdown table. Timing numbers are reporters; virtualization,
@@ -67,6 +68,8 @@ The deep reveal scenario requires exactly one snapshot position query, at most
 after expansion. The native Criterion suite separately measures the query's
 worst-position DFS cost, because happy-dom cannot represent native traversal
 work.
+Path reveal additionally requires exactly one indexed path query and rejects any
+fallback that scans the complete visible projection.
 
 ## Why happy-dom
 

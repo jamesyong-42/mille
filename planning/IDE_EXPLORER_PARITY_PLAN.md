@@ -456,6 +456,27 @@ remaining Phase 2.4 work is path-walk fallback, worst-case typeahead, wide-folde
 ordered-id metadata, and evaluating a maintained visible-rank structure from
 real native traces.
 
+Twelfth indexed-path result (2026-07-22): `revealPath` no longer falls through
+to a full visible projection or misuses the public URI contract. The native
+store resolves indexed paths in constant expected time and, in lazy mode,
+hydrates only the requested root-to-target ancestor chain. The host returns
+that depth-bounded chain with the resolved ID; the port reducer merges and pins
+it without inventing partial directory listings, and React carries the pending
+ID across the resulting snapshot publication before expanding, focusing, and
+scrolling. Absolute, workspace-relative, root-prefixed, missing, parent-escape,
+legacy-native, direct-native, host/port, and stale-render timing paths have
+regressions. The 500,000-row gate resolves row 400,000 with one indexed path
+query, one exact-position query, and 38 complete viewport rows; the current run
+reported 36.86 ms, while five preceding standalone runs had a 35.61 ms median.
+The native medium-fixture reverse-index lookup measured 91.172-119.77 ns on the
+confirmation run, with no statistically significant change from its baseline.
+All 316 UI tests pass. The focused direct-native and lazy host/port tests pass;
+the latter completed in 26.38 ms. Broad engine validation passed 230 tests,
+with the three external-watcher tests still timing out in the restricted
+FSEvents runner as already documented in the assessment. Remaining Phase 2.4
+work is worst-case typeahead, wide-folder ordered-id metadata, and evaluating a
+maintained visible-rank structure from real native traces.
+
 #### 2.5 Define state under deletion and errors
 
 - Move focus to the nearest logical sibling or parent when the focused row is

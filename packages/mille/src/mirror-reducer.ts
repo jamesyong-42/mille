@@ -461,3 +461,33 @@ export function applyDelta(
   evictToCap(next, mirrorCap, activeSet(next));
   return next;
 }
+
+/**
+ * Merge the bounded target-to-root entry chain returned by resolvePath.
+ *
+ * This deliberately does not synthesize child lists: a single path chain is
+ * not an authoritative directory listing. FileTree expands the ancestors
+ * after resolution, and the normal setExpanded delta supplies those lists.
+ * The incoming chain is temporarily pinned for this eviction pass so even a
+ * tight mirror cap cannot discard the target before the caller can reveal it.
+ */
+export function hydrateLookupEntries(
+  state: MirrorWorking,
+  entries: readonly ClientEntry[],
+  version: number,
+  mirrorCap: number = DEFAULT_MIRROR_CAP,
+): MirrorWorking {
+  if (entries.length === 0) return state;
+  const next = cloneMirror(state);
+  next.treeVersion = Math.max(next.treeVersion, version);
+  next.projectionVersion += 1;
+
+  const active = activeSet(next);
+  for (const entry of entries) {
+    next.byId.set(entry.id, entry);
+    touch(next, entry.id);
+    active.add(entry.id);
+  }
+  evictToCap(next, mirrorCap, active);
+  return next;
+}

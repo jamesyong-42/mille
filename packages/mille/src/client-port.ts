@@ -27,11 +27,12 @@ import {
   applyDelta,
   applySnapshot,
   DEFAULT_MIRROR_CAP,
+  hydrateLookupEntries,
   type InboundDelta,
   type InboundSnapshot,
 } from './mirror-reducer.js';
 import { ClientMirrorSnapshot, clientEntryToEntry } from './mirror-snapshot.js';
-import { cloneMirror, createMirror, type MirrorWorking } from './mirror.js';
+import { cloneMirror, createMirror, type ClientEntry, type MirrorWorking } from './mirror.js';
 import {
   frame,
   PROTOCOL_VERSION,
@@ -155,6 +156,31 @@ export class PortFileExplorer {
 
   getTreeVersion(): number {
     return this.working.treeVersion;
+  }
+
+  /** Resolve a workspace-relative path on the authoritative host index. */
+  async resolvePath(path: string): Promise<number | null> {
+    const result = await this.call('resolvePath', [path]);
+    // Older hosts returned the id directly. Keep accepting that shape while
+    // newer hosts include the bounded ancestor chain needed by lazy mirrors.
+    if (typeof result === 'number') return result;
+    if (result === null || typeof result !== 'object') return null;
+    const payload = result as { id?: unknown; version?: unknown; entries?: unknown };
+    if (
+      typeof payload.id !== 'number' ||
+      typeof payload.version !== 'number' ||
+      !Array.isArray(payload.entries)
+    ) {
+      return null;
+    }
+    this.working = hydrateLookupEntries(
+      this.working,
+      payload.entries as ClientEntry[],
+      payload.version,
+      this.mirrorCap,
+    );
+    this.publishSnapshot();
+    return payload.id;
   }
 
   /**

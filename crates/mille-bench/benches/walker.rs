@@ -7,6 +7,7 @@
 //   - visible_row_count (all expanded): < 0.05ms
 //   - visible_row_index (last row): < 0.2ms on populated snapshot
 //   - visible_row_ids (full order): faster than full row materialization
+//   - indexed path lookup: < 0.01ms on populated snapshot
 
 use std::collections::HashSet;
 
@@ -163,6 +164,24 @@ fn bench_visible_row_index(c: &mut Criterion) {
     });
 }
 
+fn bench_indexed_path_lookup(c: &mut Criterion) {
+    let (td, _) = medium_tree();
+    let walked = walk(td.path(), WalkOptions::default()).unwrap();
+    let target = walked
+        .last()
+        .expect("medium fixture has entries")
+        .path
+        .clone();
+    let store = EntryStore::new();
+    populate_store(&store, td.path(), &walked, None).unwrap();
+
+    c.bench_function("indexed_path_lookup_last_medium", |b| {
+        b.iter(|| {
+            let _ = store.get_by_path(&target);
+        })
+    });
+}
+
 /// v0.2 B3 regression bench. Fixture: `repo_entries` real files under `src/`
 /// plus a `node_modules` symlink into a `store_entries`-file sibling.
 /// `walk_with_ignore` with a `node_modules/` rule should walk in O(repo)
@@ -199,6 +218,7 @@ criterion_group!(
     bench_visible_rows_full,
     bench_visible_row_ids_full,
     bench_visible_row_index,
+    bench_indexed_path_lookup,
     bench_pnpm_style_ignore,
 );
 
@@ -213,6 +233,7 @@ criterion_group!(
     bench_visible_rows_full,
     bench_visible_row_ids_full,
     bench_visible_row_index,
+    bench_indexed_path_lookup,
 );
 
 criterion_main!(walker);

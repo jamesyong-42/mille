@@ -78,6 +78,16 @@ test('FileExplorer constructs with a valid absolute root', () => {
   }
 });
 
+test('resolvePath returns null on a pristine store', async () => {
+  const dir = mkTmp();
+  try {
+    const fx = new FileExplorer({ roots: [dir] });
+    assert.equal(await fx.resolvePath('missing.txt'), null);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('getSnapshot() returns a MirrorSnapshot with treeVersion + roots()', () => {
   const dir = mkTmp();
   try {

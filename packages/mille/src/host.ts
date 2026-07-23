@@ -1046,7 +1046,7 @@ class FileExplorerHostImpl implements FileExplorerHost {
     body: { reqId: number; method: string; args: unknown[] },
   ): Promise<void> {
     try {
-      const result = await this.dispatchCall(body.method, body.args);
+      const result = await this.dispatchCall(session, body.method, body.args);
       this.send(session, frame('callResult', { reqId: body.reqId, result }));
     } catch (e: unknown) {
       const err = toErrorPayload(e);
@@ -1054,12 +1054,39 @@ class FileExplorerHostImpl implements FileExplorerHost {
     }
   }
 
-  private async dispatchCall(method: string, _args: unknown[]): Promise<unknown> {
+  private async dispatchCall(
+    session: Session,
+    method: string,
+    args: unknown[],
+  ): Promise<unknown> {
     switch (method) {
       case 'getTreeVersion':
         return this.explorer.getTreeVersion();
       case 'capabilities':
         return this.explorer.capabilities;
+      case 'resolvePath': {
+        const path = args[0];
+        if (typeof path !== 'string') throw new Error('resolvePath requires a string path');
+        const id = await this.explorer.resolvePath(path);
+        if (id === null) return null;
+
+        // Return only the target-to-root records. This makes lazy path reveal
+        // immediately usable by the renderer without shipping a full tree or
+        // pretending that a partial path is an authoritative child listing.
+        const snapshot = this.explorer.getSnapshot();
+        const entries: ClientEntry[] = [];
+        let cursor: EntryId | null = id;
+        let guard = 0;
+        while (cursor !== null && guard < 10_000) {
+          const entry = snapshot.getById(cursor);
+          if (entry === null) break;
+          entries.push(entryToClient(entry));
+          session.knownIds.add(cursor);
+          cursor = entry.parentId ?? null;
+          guard += 1;
+        }
+        return { id, version: snapshot.treeVersion, entries };
+      }
       default:
         throw new Error(`unknown method: ${method}`);
     }

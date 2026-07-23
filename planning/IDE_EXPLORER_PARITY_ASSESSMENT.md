@@ -333,15 +333,15 @@ end-user behavior:
 ### 4. Explorer settings and state persistence are incomplete
 
 The versioned global/workspace/root settings record now drives native natural,
-type, modified-time, case, folders-on-top, hidden, ignored, and exclude-glob
-behavior at explorer construction. Native and renderer-mirror projections share
-the same visibility policy, and exclude globs apply to initial, lazy, and
-watcher-reconciliation walks. Remaining settings gaps include:
+type, modified-time, case, folders-on-top, hidden, ignored, exclude-glob, and
+compact-folder behavior at explorer construction. Native and renderer-mirror
+projections share visibility and compact leaf identities, and exclude globs
+apply to initial, lazy, and watcher-reconciliation walks. Remaining settings
+gaps include:
 
 - locale-aware collation beyond the live natural/type/modified,
   case-sensitive, folders-on-top native ordering policy;
 - file nesting rules;
-- configurable compact folders;
 - runtime reconfiguration without rebuilding the explorer;
 - UI controls for hidden/ignored visibility and exclusion settings;
 - same-display-name multi-root disambiguation for the new bounded, versioned,

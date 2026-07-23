@@ -91,6 +91,7 @@ export interface MirrorWorking {
   /** Resolved host projection policy. */
   showHiddenFiles: boolean;
   showIgnoredFiles: boolean;
+  compactFolders: boolean;
   /**
    * Phase A1 — merged decoration arrays received from the host, keyed
    * by entry id. Each entry is the wire-shape `DecorationOnWire[]`
@@ -128,6 +129,7 @@ export function createMirror(): MirrorWorking {
     decorationVersion: 0,
     showHiddenFiles: true,
     showIgnoredFiles: true,
+    compactFolders: false,
     decorations: new Map(),
     volatileSubtrees: new Set(),
     lruTouch: new Map(),
@@ -156,6 +158,7 @@ export function cloneMirror(m: MirrorWorking): MirrorWorking {
     decorationVersion: m.decorationVersion,
     showHiddenFiles: m.showHiddenFiles,
     showIgnoredFiles: m.showIgnoredFiles,
+    compactFolders: m.compactFolders,
     decorations: new Map(m.decorations),
     volatileSubtrees: new Set(m.volatileSubtrees),
     lruTouch: new Map(m.lruTouch),

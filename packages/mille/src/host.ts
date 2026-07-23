@@ -56,7 +56,9 @@ function entryToClient(e: Entry): ClientEntry {
 
 /** Native store order is authoritative for viewport and structural metadata. */
 function sortedChildIds(snap: MirrorSnapshot, parentId: number): number[] {
-  return [...snap.childrenOf(parentId)];
+  return snap.compactFolders
+    ? [...snap.projectedChildrenOf(parentId)]
+    : [...snap.childrenOf(parentId)];
 }
 
 /**
@@ -768,6 +770,7 @@ class FileExplorerHostImpl implements FileExplorerHost {
         visibility: {
           showHiddenFiles: snap.showHiddenFiles,
           showIgnoredFiles: snap.showIgnoredFiles,
+          compactFolders: snap.compactFolders,
         },
       }),
     );
@@ -816,10 +819,24 @@ class FileExplorerHostImpl implements FileExplorerHost {
       // walks of empty / leaf folders are cheap.
       this.prefetched.add(id);
       try {
-        void this.explorer.prefetch(id, { depth: 1 }).catch((e) => {
-          // eslint-disable-next-line no-console
-          console.warn(`[mille] setExpanded prefetch failed for id ${id}:`, e);
-        });
+        const prefetch = snap.compactFolders
+          ? this.prefetchCompactChain(id)
+          : this.explorer.prefetch(id, { depth: 1 });
+        void prefetch
+          .then(async () => {
+            // The first depth-1 result may have published the raw chain head.
+            // Drain its structural ChangeSet first, then re-emit this parent's
+            // authoritative projected child list last so a raw walker entry
+            // cannot overwrite the compact row metadata.
+            if (snap.compactFolders && this.sessions.has(session.id) && session.handshook) {
+              await this.flushTickNow();
+              this.handleSetExpanded(session, { add: [id] });
+            }
+          })
+          .catch((e) => {
+            // eslint-disable-next-line no-console
+            console.warn(`[mille] setExpanded prefetch failed for id ${id}:`, e);
+          });
       } catch (e) {
         // Synchronous throw (older native missing populateFromPath).
         // Fall back to the v0.1 behaviour — ship whatever's already in
@@ -868,6 +885,23 @@ class FileExplorerHostImpl implements FileExplorerHost {
         subtreeResynced: [],
       }),
     );
+  }
+
+  /**
+   * Hydrate only the single-directory chain below an expanded folder.
+   * Each step is depth-1, so a branch never causes an eager subtree walk.
+   */
+  private async prefetchCompactChain(parentId: number): Promise<void> {
+    let current = parentId;
+    for (let depth = 0; depth < 256; depth++) {
+      await this.explorer.prefetch(current, { depth: 1 });
+      const snapshot = this.explorer.getSnapshot();
+      const children = snapshot.projectedChildrenOf(current);
+      if (children.length !== 1) return;
+      const child = snapshot.getById(children[0]!);
+      if (child === null || child.kind !== 1) return;
+      current = child.id;
+    }
   }
 
   private handleSetViewport(
@@ -925,14 +959,14 @@ class FileExplorerHostImpl implements FileExplorerHost {
     const directChildCounts: Record<string, number> = {};
     const viewportIds: number[] = [];
     for (const row of rows) {
-      const entry = snap.getById(row.id);
-      if (!entry) continue;
-      viewportIds.push(entry.id);
-      session.knownIds.add(entry.id);
-      if (session.viewportIds.has(entry.id)) continue;
-      entries.push(entryToClient(entry));
-      const childCount = snap.directChildCount(entry.id);
-      if (childCount !== null) directChildCounts[String(entry.id)] = childCount;
+      viewportIds.push(row.id);
+      session.knownIds.add(row.id);
+      if (session.viewportIds.has(row.id) && row.pathSegments === undefined) continue;
+      // Keep projection metadata (notably compact-folder pathSegments)
+      // instead of re-reading the raw entry by id.
+      entries.push(entryToClient(row));
+      const childCount = snap.directChildCount(row.id);
+      if (childCount !== null) directChildCounts[String(row.id)] = childCount;
     }
     session.viewportIds = new Set(viewportIds);
     return { entries, directChildCounts, viewportIds };

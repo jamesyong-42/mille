@@ -194,6 +194,8 @@ export interface ResolvedExplorerSettings {
   readonly foldersOnTop: boolean;
   readonly showHiddenFiles: boolean;
   readonly showIgnoredFiles: boolean;
+  /** Whether single-directory chains are projected as compact rows. */
+  readonly compactFolders: boolean;
   readonly compactFolders: boolean;
   readonly excludeGlobs: readonly string[];
   readonly fileNestingPatterns: Readonly<Record<string, readonly string[]>>;

@@ -62,6 +62,11 @@ impl MirrorSnapshot {
         self.inner.visibility().show_ignored_files
     }
 
+    #[napi(getter, js_name = "compactFolders")]
+    pub fn compact_folders(&self) -> bool {
+        self.inner.compact_folders()
+    }
+
     /// Workspace roots in the order they were registered.
     #[napi]
     pub fn roots(&self) -> Vec<EntryJs> {
@@ -114,6 +119,15 @@ impl MirrorSnapshot {
             .children_of(eid)
             .iter()
             .map(|i| i.raw() as i64)
+            .collect()
+    }
+
+    #[napi(js_name = "projectedChildrenOf")]
+    pub fn projected_children_of(&self, id: i64, include_ignored: Option<bool>) -> Vec<i64> {
+        self.inner
+            .projected_children_of(EntryId(id as u64), include_ignored.unwrap_or(false))
+            .into_iter()
+            .map(|entry_id| entry_id.raw() as i64)
             .collect()
     }
 
@@ -250,7 +264,10 @@ impl MirrorSnapshot {
                     mtime_ms: entry.mtime_ms,
                     ctime_ms: entry.ctime_ms,
                     symlink_target_is_dir: entry.symlink_target_is_dir,
-                    path_segments: entry.path_segments.clone(),
+                    path_segments: r
+                        .path_segments
+                        .clone()
+                        .or_else(|| entry.path_segments.clone()),
                     is_ignored: entry.is_ignored,
                     is_readonly: entry.is_readonly,
                     is_hidden: entry.is_hidden,

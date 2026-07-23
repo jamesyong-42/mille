@@ -136,7 +136,11 @@ impl FileExplorer {
         };
 
         Ok(Self {
-            store: Arc::new(EntryStore::with_policies(sibling_order, visibility)),
+            store: Arc::new(EntryStore::with_projection(
+                sibling_order,
+                visibility,
+                resolved.compact_folders,
+            )),
             watcher: Arc::new(std::sync::Mutex::new(None)),
             intents: Arc::new(parking_lot::Mutex::new(IntentCache::new())),
             disposed: AtomicBool::new(false),

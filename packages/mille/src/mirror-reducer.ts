@@ -126,6 +126,7 @@ export interface InboundSnapshot {
   visibility?: {
     showHiddenFiles: boolean;
     showIgnoredFiles: boolean;
+    compactFolders?: boolean;
   };
 }
 
@@ -236,6 +237,7 @@ export function applySnapshot(
     decorationVersion: 0,
     showHiddenFiles: msg.visibility?.showHiddenFiles ?? true,
     showIgnoredFiles: msg.visibility?.showIgnoredFiles ?? true,
+    compactFolders: msg.visibility?.compactFolders ?? false,
     decorations: new Map(),
     volatileSubtrees: new Set(),
     lruTouch: new Map(),

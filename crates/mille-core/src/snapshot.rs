@@ -61,6 +61,7 @@ pub struct StoreSnapshot {
     /// Sum of file sizes in the subtree (dirs contribute 0; files their `size`).
     pub(crate) descendant_total_sizes: BTreeMap<EntryId, u64>,
     pub(crate) visibility: VisibilityPolicy,
+    pub(crate) compact_folders: bool,
 }
 
 impl Default for StoreSnapshot {
@@ -74,6 +75,7 @@ impl Default for StoreSnapshot {
             descendant_visible_counts: BTreeMap::new(),
             descendant_total_sizes: BTreeMap::new(),
             visibility: VisibilityPolicy::default(),
+            compact_folders: false,
         }
     }
 }
@@ -90,8 +92,20 @@ impl StoreSnapshot {
         }
     }
 
+    pub fn empty_with_projection(visibility: VisibilityPolicy, compact_folders: bool) -> Self {
+        Self {
+            visibility,
+            compact_folders,
+            ..Self::default()
+        }
+    }
+
     pub fn visibility(&self) -> VisibilityPolicy {
         self.visibility
+    }
+
+    pub fn compact_folders(&self) -> bool {
+        self.compact_folders
     }
 
     pub(crate) fn entry_counts_visible(&self, entry: &Entry) -> bool {
@@ -152,6 +166,69 @@ impl StoreSnapshot {
         }
     }
 
+    fn projected_entry(
+        &self,
+        id: EntryId,
+        include_ignored: bool,
+    ) -> (EntryId, Option<Vec<String>>) {
+        if !self.compact_folders {
+            return (id, None);
+        }
+        let Some(start) = self.entries.get(&id) else {
+            return (id, None);
+        };
+        // Workspace roots retain a stable identity and label. Compaction starts
+        // at their children, matching mature IDE project views.
+        if start.parent_id.is_none() || start.kind != EntryKind::Directory {
+            return (id, None);
+        }
+
+        let mut leaf = id;
+        let mut segments = vec![start.name.clone()];
+        for _ in 0..256 {
+            let Some(children) = self.children.get(&leaf) else {
+                break;
+            };
+            let mut visible = children.iter().filter(|child_id| {
+                self.entries
+                    .get(child_id)
+                    .is_some_and(|entry| include_ignored || self.entry_counts_visible(entry))
+            });
+            let Some(&only_child) = visible.next() else {
+                break;
+            };
+            if visible.next().is_some() {
+                break;
+            }
+            let Some(child) = self.entries.get(&only_child) else {
+                break;
+            };
+            if child.kind != EntryKind::Directory {
+                break;
+            }
+            segments.push(child.name.clone());
+            leaf = only_child;
+        }
+        if leaf == id {
+            (id, None)
+        } else {
+            (leaf, Some(segments))
+        }
+    }
+
+    pub fn projected_children_of(&self, id: EntryId, include_ignored: bool) -> Vec<EntryId> {
+        self.children_of(id)
+            .iter()
+            .filter_map(|child_id| {
+                let entry = self.entries.get(child_id)?;
+                if !include_ignored && !self.entry_counts_visible(entry) {
+                    return None;
+                }
+                Some(self.projected_entry(*child_id, include_ignored).0)
+            })
+            .collect()
+    }
+
     /// Iterate over every (id, entry) pair in the snapshot. Primarily for
     /// bench harnesses and crash-resume serialization.
     pub fn entries_iter(&self) -> impl Iterator<Item = (EntryId, &Arc<Entry>)> + '_ {
@@ -206,6 +283,7 @@ pub struct VisibleRowOut {
     pub depth: u16,
     pub has_children: bool,
     pub is_expanded: bool,
+    pub path_segments: Option<Vec<String>>,
 }
 
 impl StoreSnapshot {
@@ -248,11 +326,12 @@ impl StoreSnapshot {
             };
             let visible = include_ignored || self.entry_counts_visible(entry);
             if visible {
+                let (projected_id, _) = self.projected_entry(id, include_ignored);
                 *known = known.saturating_add(1);
                 // Only descend when the parent itself would render — otherwise
                 // children would appear as orphan rows with no parent above.
-                if expanded.contains(&id) {
-                    match self.children.get(&id) {
+                if expanded.contains(&projected_id) {
+                    match self.children.get(&projected_id) {
                         Some(kids) if !kids.is_empty() => {
                             // Push reversed so DFS emits children left-to-right.
                             for &child in kids.iter().rev() {
@@ -265,7 +344,7 @@ impl StoreSnapshot {
                         None => {
                             // Expanded but children-map missing: worker hasn't
                             // delivered them yet. Report to caller.
-                            pending.push(id);
+                            pending.push(projected_id);
                         }
                     }
                 }
@@ -297,12 +376,13 @@ impl StoreSnapshot {
             if !visible {
                 continue;
             }
-            if id == target {
+            let (projected_id, _) = self.projected_entry(id, include_ignored);
+            if projected_id == target {
                 return Some(index);
             }
             index = index.saturating_add(1);
-            if expanded.contains(&id) {
-                if let Some(kids) = self.children.get(&id) {
+            if expanded.contains(&projected_id) {
+                if let Some(kids) = self.children.get(&projected_id) {
                     for &child in kids.iter().rev() {
                         stack.push(child);
                     }
@@ -342,27 +422,33 @@ impl StoreSnapshot {
             if !visible {
                 continue;
             }
-            let matches = entry.name.to_lowercase().starts_with(&needle);
+            let (projected_id, segments) = self.projected_entry(id, include_ignored);
+            let projected_entry = self.entries.get(&projected_id)?;
+            let display_name = segments
+                .as_ref()
+                .map(|parts| parts.join("/"))
+                .unwrap_or_else(|| projected_entry.name.clone());
+            let matches = display_name.to_lowercase().starts_with(&needle);
 
-            if Some(id) == from_id {
+            if Some(projected_id) == from_id {
                 reached_start = true;
                 if matches {
                     if skip_current {
-                        before_start.get_or_insert(id);
+                        before_start.get_or_insert(projected_id);
                     } else {
-                        return Some(id);
+                        return Some(projected_id);
                     }
                 }
             } else if reached_start {
                 if matches {
-                    return Some(id);
+                    return Some(projected_id);
                 }
             } else if matches && before_start.is_none() {
-                before_start = Some(id);
+                before_start = Some(projected_id);
             }
 
-            if expanded.contains(&id) {
-                if let Some(kids) = self.children.get(&id) {
+            if expanded.contains(&projected_id) {
+                if let Some(kids) = self.children.get(&projected_id) {
                     for &child in kids.iter().rev() {
                         stack.push(child);
                     }
@@ -397,16 +483,17 @@ impl StoreSnapshot {
             };
             let visible = query.include_ignored || self.entry_counts_visible(entry);
             if visible {
+                let (projected_id, _) = self.projected_entry(id, query.include_ignored);
                 if skipped < query.offset {
                     skipped += 1;
                 } else {
-                    out.push(id);
+                    out.push(projected_id);
                     if out.len() >= limit {
                         return out;
                     }
                 }
-                if query.expanded.contains(&id) {
-                    if let Some(kids) = self.children.get(&id) {
+                if query.expanded.contains(&projected_id) {
+                    if let Some(kids) = self.children.get(&projected_id) {
                         for &child in kids.iter().rev() {
                             stack.push(child);
                         }
@@ -440,15 +527,18 @@ impl StoreSnapshot {
             };
             let visible = query.include_ignored || self.entry_counts_visible(entry);
             if visible {
+                let (projected_id, path_segments) = self.projected_entry(id, query.include_ignored);
                 if skipped < query.offset {
                     skipped += 1;
                 } else {
-                    let has_children = self.has_visible_children(id, query.include_ignored);
+                    let has_children =
+                        self.has_visible_children(projected_id, query.include_ignored);
                     out.push(VisibleRowOut {
-                        id,
+                        id: projected_id,
                         depth,
                         has_children,
-                        is_expanded: query.expanded.contains(&id),
+                        is_expanded: query.expanded.contains(&projected_id),
+                        path_segments,
                     });
                     if out.len() >= limit {
                         return out;
@@ -456,8 +546,8 @@ impl StoreSnapshot {
                 }
                 // Only descend when the parent itself would render — otherwise
                 // children would appear as orphan rows at the wrong depth.
-                if query.expanded.contains(&id) {
-                    if let Some(kids) = self.children.get(&id) {
+                if query.expanded.contains(&projected_id) {
+                    if let Some(kids) = self.children.get(&projected_id) {
                         let child_depth = depth.saturating_add(1);
                         for &child in kids.iter().rev() {
                             stack.push((child, child_depth));
@@ -1047,6 +1137,91 @@ mod tests {
             .unwrap()
             .has_children
         );
+    }
+
+    #[test]
+    fn compact_projection_preserves_leaf_identity_across_every_query() {
+        let mut snap = StoreSnapshot::empty_with_projection(VisibilityPolicy::project_view(), true);
+        let root = EntryId(1);
+        let a = EntryId(2);
+        let b = EntryId(3);
+        let c = EntryId(4);
+        let file = EntryId(5);
+        seed(
+            &mut snap,
+            root,
+            None,
+            "root",
+            EntryKind::Directory,
+            0,
+            false,
+            false,
+        );
+        seed(
+            &mut snap,
+            a,
+            Some(root),
+            "a",
+            EntryKind::Directory,
+            0,
+            false,
+            false,
+        );
+        seed(
+            &mut snap,
+            b,
+            Some(a),
+            "b",
+            EntryKind::Directory,
+            0,
+            false,
+            false,
+        );
+        seed(
+            &mut snap,
+            c,
+            Some(b),
+            "c",
+            EntryKind::Directory,
+            0,
+            false,
+            false,
+        );
+        seed(
+            &mut snap,
+            file,
+            Some(c),
+            "file.txt",
+            EntryKind::File,
+            0,
+            false,
+            false,
+        );
+        let expanded = HashSet::from([root, c]);
+
+        let rows = snap.visible_rows(VisibleRowsQuery {
+            expanded: &expanded,
+            offset: 0,
+            limit: 10,
+            include_ignored: false,
+        });
+        assert_eq!(
+            rows.iter().map(|row| row.id).collect::<Vec<_>>(),
+            vec![root, c, file]
+        );
+        assert_eq!(rows[1].depth, 1);
+        assert_eq!(
+            rows[1].path_segments.as_deref(),
+            Some(["a".to_string(), "b".to_string(), "c".to_string()].as_slice())
+        );
+        assert_eq!(rows[2].depth, 2);
+        assert_eq!(snap.visible_row_count(&expanded, false).known, 3);
+        assert_eq!(snap.visible_row_index(c, &expanded, false), Some(1));
+        assert_eq!(
+            snap.visible_prefix_match("a/b", None, false, &expanded, false),
+            Some(c)
+        );
+        assert_eq!(snap.projected_children_of(root, false), vec![c]);
     }
 
     #[test]

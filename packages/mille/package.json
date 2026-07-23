@@ -56,6 +56,7 @@
     "bench:natural-sort": "node bench/natural-sort.mjs",
     "bench:settings": "node bench/explorer-settings.mjs",
     "bench:visibility": "node bench/visibility-projection.mjs",
+    "bench:compact": "node bench/compact-folders.mjs",
     "bench:watch:soak": "node bench/watch-soak.mjs",
     "artifacts": "napi artifacts",
     "prepublishOnly": "napi prepublish -t npm"

@@ -904,3 +904,10 @@ de-duplicated and layered onto repository ignore rules. They mark matching
 entries ignored and stop eager descent into matching directories during full,
 lazy, and watcher-reconciliation walks. Set `showIgnoredFiles: false` to hide
 those entries from the projection.
+
+With `compactFolders: true`, single-directory chains below workspace roots are
+projected as one row. The row keeps the leaf directory's stable ID and exposes
+the full label in `pathSegments` (for example `['src', 'main', 'java']`).
+Counts, indexes, typeahead, host viewports, and port mirrors use the same leaf
+identity. In roots-only mode the host follows the chain with bounded depth-1
+reads and stops at the first branch; it does not eagerly walk the subtree.

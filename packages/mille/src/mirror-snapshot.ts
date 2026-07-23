@@ -187,6 +187,10 @@ export class ClientMirrorSnapshot {
     return this.state.showIgnoredFiles;
   }
 
+  get compactFolders(): boolean {
+    return this.state.compactFolders;
+  }
+
   roots(): readonly Entry[] {
     const out: Entry[] = [];
     for (const id of this.state.roots) {
@@ -234,7 +238,7 @@ export class ClientMirrorSnapshot {
       });
     }
     const count = this.state.directChildCounts.get(id);
-    if (count !== undefined && count === 0) return false;
+    if (count !== undefined) return count > 0;
     const entry = this.state.byId.get(id);
     return entry !== undefined && isExpandableEntry(entry);
   }

@@ -45,8 +45,19 @@ impl EntryStore {
     }
 
     pub fn with_policies(sibling_order: SiblingOrder, visibility: VisibilityPolicy) -> Self {
+        Self::with_projection(sibling_order, visibility, false)
+    }
+
+    pub fn with_projection(
+        sibling_order: SiblingOrder,
+        visibility: VisibilityPolicy,
+        compact_folders: bool,
+    ) -> Self {
         Self {
-            inner: ArcSwap::new(Arc::new(StoreSnapshot::empty_with_visibility(visibility))),
+            inner: ArcSwap::new(Arc::new(StoreSnapshot::empty_with_projection(
+                visibility,
+                compact_folders,
+            ))),
             path_to_id: DashMap::new(),
             id_counter: AtomicU64::new(0),
             write_lock: Mutex::new(()),

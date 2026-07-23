@@ -648,8 +648,22 @@ tests cover native and mirror rows/ids/count/index agreement, excluded-directory
 subtree suppression, filtered disclosure chevrons, and the all-content
 override. The 100,001-entry mirror gate measured complete count-plus-ID
 projection at 9.51 ms median and 10.51 ms p95. Locale-aware collation, runtime
-reconfiguration, compact-folder
-application, and nesting remain.
+reconfiguration, compact-folder application, and nesting remained at this
+checkpoint.
+
+Compact-folder result (2026-07-22): `compactFolders` now runs at the native
+snapshot boundary rather than as a React-only label rewrite. Workspace roots
+retain stable identities; a single-directory chain below an expanded parent is
+represented by its leaf ID plus ordered `pathSegments`. Rows, IDs, counts,
+exact indexes, prefix lookup, disclosure state, bulk payloads, host viewport
+patches, and projected child lists agree on that identity. The roots-only host
+hydrates a chain through bounded depth-1 reads and stops at the first branch,
+then drains raw structural changes before publishing the compact row so port
+metadata cannot be overwritten by a late walker delta. Native and lazy
+host/port tests cover `a/b/c`, leaf expansion, depth, and count/index
+invariants. A 200-directory chain gate measured row-plus-count projection at
+0.309 ms median and 0.349 ms p95 against a 5 ms ceiling. Locale-aware
+collation, runtime reconfiguration, and configurable file nesting remain.
 
 #### 3.2 Complete multi-root workspace behavior
 

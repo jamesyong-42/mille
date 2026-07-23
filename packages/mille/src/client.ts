@@ -248,11 +248,13 @@ type NativeSnapshot = {
   readonly decorationVersion: number;
   readonly showHiddenFiles: boolean;
   readonly showIgnoredFiles: boolean;
+  readonly compactFolders: boolean;
   roots(): Entry[];
   getById(id: number): Entry | null;
   directChildCount(id: number): number | null;
   hasChildren(id: number): boolean;
   childrenOf(id: number): number[];
+  projectedChildrenOf(id: number, includeIgnored?: boolean): number[];
   visibleRows(options: {
     expanded: number[];
     offset: number;
@@ -936,6 +938,10 @@ export class MirrorSnapshot {
     return this.inner.showIgnoredFiles;
   }
 
+  get compactFolders(): boolean {
+    return this.inner.compactFolders;
+  }
+
   roots(): readonly Entry[] {
     return this.inner.roots();
   }
@@ -961,6 +967,11 @@ export class MirrorSnapshot {
    */
   childrenOf(id: EntryId): readonly EntryId[] {
     return this.inner.childrenOf(id);
+  }
+
+  /** @internal — authoritative child identities after compact-folder projection. */
+  projectedChildrenOf(id: EntryId, includeIgnored?: boolean): readonly EntryId[] {
+    return this.inner.projectedChildrenOf(id, includeIgnored);
   }
 
   /**

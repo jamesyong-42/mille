@@ -166,6 +166,7 @@ export interface SnapshotMsg {
     visibility?: {
       showHiddenFiles: boolean;
       showIgnoredFiles: boolean;
+      compactFolders?: boolean;
     };
   };
 }

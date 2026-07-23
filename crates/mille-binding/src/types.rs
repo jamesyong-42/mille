@@ -96,7 +96,10 @@ impl VisibleRowJs {
             mtime_ms: entry.mtime_ms,
             ctime_ms: entry.ctime_ms,
             symlink_target_is_dir: entry.symlink_target_is_dir,
-            path_segments: entry.path_segments.clone(),
+            path_segments: row
+                .path_segments
+                .clone()
+                .or_else(|| entry.path_segments.clone()),
             is_ignored: entry.is_ignored,
             is_readonly: entry.is_readonly,
             is_hidden: entry.is_hidden,
@@ -129,7 +132,10 @@ impl VisibleRowJs {
             mtime_ms: entry.mtime_ms,
             ctime_ms: entry.ctime_ms,
             symlink_target_is_dir: entry.symlink_target_is_dir,
-            path_segments: entry.path_segments.clone(),
+            path_segments: row
+                .path_segments
+                .clone()
+                .or_else(|| entry.path_segments.clone()),
             is_ignored: entry.is_ignored,
             is_readonly: entry.is_readonly,
             is_hidden: entry.is_hidden,

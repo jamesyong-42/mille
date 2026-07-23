@@ -30,15 +30,15 @@ layers of work:
 The scores below are directional, not a claim of mathematical precision. A
 mature IDE explorer is the 10/10 reference point.
 
-| Area                                 | Score | Current assessment                                                                                                                                                                            |
-| ------------------------------------ | ----: | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Filesystem and renderer architecture |   8.8 | Strong native walker, roots-only handshake, packed ordered lazy hydration, bounded viewport mirror, windowed React rendering, exact positions, and ID-only projections                        |
-| Core tree interaction                |   7.4 | Windowed navigation, scalable multi-selection, reliable deep reveal, resilient inline rename, create/delete, clipboard, filtering, context menus, and drag/drop                               |
-| Visual behavior                      |   7.4 | Viewport, focus, selection, and rename drafts survive churn; animation is row-scoped, storm-bounded, and reduced-motion aware; broader theme/sticky-root scenarios remain                     |
-| Accessibility                        |   6.0 | Good ARIA tree semantics and keyboard tests; no real assistive-technology matrix                                                                                                              |
-| Reliability and recovery             |   5.5 | Deterministic soak gates converge, but repeated Electron watcher stalls and direct native startup misses remain unresolved; crash/platform stress also remains                                |
-| Performance confidence               |   7.8 | Million-sibling structure, binary-wire, bounded-hydration, windowed 500,000-row UI, Criterion, and Electron gates cover payload, paint, projection, navigation, and retention                 |
-| Explorer workflow breadth            |   4.2 | Versioned settings, native sort/visibility/exclusion/compaction/nesting, durable navigation, active-file following, and typed preview/permanent opens exist; broader workflows remain shallow |
+| Area                                 | Score | Current assessment                                                                                                                                                                                          |
+| ------------------------------------ | ----: | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Filesystem and renderer architecture |   8.8 | Strong native walker, roots-only handshake, packed ordered lazy hydration, bounded viewport mirror, windowed React rendering, exact positions, and ID-only projections                                      |
+| Core tree interaction                |   7.4 | Windowed navigation, scalable multi-selection, reliable deep reveal, resilient inline rename, create/delete, clipboard, filtering, context menus, and drag/drop                                             |
+| Visual behavior                      |   7.4 | Viewport, focus, selection, and rename drafts survive churn; animation is row-scoped, storm-bounded, and reduced-motion aware; broader theme/sticky-root scenarios remain                                   |
+| Accessibility                        |   6.0 | Good ARIA tree semantics and keyboard tests; no real assistive-technology matrix                                                                                                                            |
+| Reliability and recovery             |   5.5 | Deterministic soak gates converge, but repeated Electron watcher stalls and direct native startup misses remain unresolved; crash/platform stress also remains                                              |
+| Performance confidence               |   7.8 | Million-sibling structure, binary-wire, bounded-hydration, windowed 500,000-row UI, Criterion, and Electron gates cover payload, paint, projection, navigation, and retention                               |
+| Explorer workflow breadth            |   4.3 | Versioned settings, native sort/visibility/exclusion/compaction/nesting, durable navigation, policy-driven active-file following, and typed preview/permanent opens exist; broader workflows remain shallow |
 
 As a reusable tree widget, Mille is approximately **6.5-7/10**. As a complete
 IDE explorer experience, it is approximately **5/10**.
@@ -348,8 +348,8 @@ end-user behavior:
   custom aliases, and overwrite/merge/skip prompting;
 - active-editor targets now have distinct row state, lazy optional auto-reveal,
   reference-playground controls, and configurable preview/permanent-open
-  behavior, but excluded, hidden, generated, and external targets still need
-  explicit product policy;
+  behavior; hidden, ignored/excluded, generated, external, and missing targets
+  have explicit observable policy rather than silent fallthrough;
 - a decoration pipeline exists, but Problems, tests, and source-control states
   are not integrated explorer experiences;
 - the command registry is extensible, but the built-in context menu is much

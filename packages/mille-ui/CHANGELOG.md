@@ -4,6 +4,12 @@
 
 ### Added
 
+- **Active-entry disposition policy** — `activeEntry` descriptors can tag
+  generated or external targets; `activeEntryPolicy` controls opt-in reveal of
+  hidden, ignored/excluded, and generated entries; and
+  `onActiveEntryResolution` reports visible/hidden/ignored/generated/external/
+  missing outcomes. Conservative defaults avoid pending reveals and external
+  workspace lookups.
 - **Typed file-open policy** — `openBehavior` optionally previews files on
   single click while retaining selection-only as the default.
   `onOpen(entry, event)` identifies preview/permanent mode and the mouse,

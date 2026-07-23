@@ -34,10 +34,23 @@ if (typeof globalThis.ResizeObserver === 'undefined') {
 
 const { act, createElement } = await import('react');
 const { createRoot } = await import('react-dom/client');
-const { FileTree } = await import('../dist/index.js');
+const {
+  FileTree,
+  classifyActiveEntry,
+  shouldAutoRevealActiveEntry,
+} = await import('../dist/index.js');
 const { createFakeEngine, createFakeSnapshot } = await import('../dist/testing.js');
 
-function row({ id, parentId, name, depth, kind = 0, hasChildren = false }) {
+function row({
+  id,
+  parentId,
+  name,
+  depth,
+  kind = 0,
+  hasChildren = false,
+  isHidden = false,
+  isIgnored = false,
+}) {
   return {
     id,
     parentId,
@@ -46,9 +59,9 @@ function row({ id, parentId, name, depth, kind = 0, hasChildren = false }) {
     size: 0,
     mtimeMs: 0,
     ctimeMs: 0,
-    isIgnored: false,
+    isIgnored,
     isReadonly: false,
-    isHidden: false,
+    isHidden,
     depth,
     hasChildren,
     isExpanded: false,
@@ -218,6 +231,152 @@ test('stale asynchronous path resolution cannot replace a newer active entry', a
   });
   assert.equal(rowById(tree.container, 4)?.getAttribute('data-mille-active'), 'true');
   assert.equal(rowById(tree.container, 3)?.getAttribute('data-mille-active'), null);
+
+  await tree.cleanup();
+});
+
+test('active-entry classification covers visibility and host-owned origins', () => {
+  const file = rows[2];
+  assert.equal(
+    classifyActiveEntry({
+      origin: 'workspace',
+      entry: { ...file, isHidden: true },
+      showHiddenFiles: false,
+    }),
+    'hidden',
+  );
+  assert.equal(
+    classifyActiveEntry({
+      origin: 'workspace',
+      entry: { ...file, isIgnored: true },
+      showIgnoredFiles: false,
+    }),
+    'ignored',
+  );
+  assert.equal(
+    classifyActiveEntry({ origin: 'generated', entry: file }),
+    'generated',
+  );
+  assert.equal(
+    classifyActiveEntry({ origin: 'external', entry: null }),
+    'external',
+  );
+  assert.equal(
+    classifyActiveEntry({ origin: 'workspace', entry: null }),
+    'missing',
+  );
+  assert.equal(shouldAutoRevealActiveEntry('visible'), true);
+  assert.equal(shouldAutoRevealActiveEntry('hidden'), false);
+  assert.equal(shouldAutoRevealActiveEntry('ignored'), false);
+  assert.equal(shouldAutoRevealActiveEntry('generated'), false);
+  assert.equal(
+    shouldAutoRevealActiveEntry('hidden', { revealHidden: true }),
+    true,
+  );
+});
+
+test('hidden active entries report suppression without creating a pending reveal', async () => {
+  const hiddenRows = rows.map((entry) =>
+    entry.id === 3 ? { ...entry, isHidden: true } : entry,
+  );
+  const fx = createFakeEngine();
+  fx.emitDelta(
+    createFakeSnapshot({
+      rows: hiddenRows,
+      treeVersion: 1,
+      showHiddenFiles: false,
+    }),
+  );
+  const resolutions = [];
+  const tree = await mountTree(fx, {
+    activeEntry: 3,
+    autoRevealActiveEntry: true,
+    onActiveEntryResolution: (result) => resolutions.push(result),
+  });
+
+  assert.equal(rowById(tree.container, 3), null);
+  assert.deepEqual(resolutions, [
+    {
+      target: 3,
+      origin: 'workspace',
+      entryId: 3,
+      disposition: 'hidden',
+      autoReveal: 'suppressed',
+    },
+  ]);
+  assert.equal(
+    fx.calls.setExpanded.some((change) => change.add.includes(2)),
+    false,
+  );
+
+  await tree.cleanup();
+});
+
+test('policy can explicitly attempt hidden and generated auto-reveal', async () => {
+  const hiddenRows = rows.map((entry) =>
+    entry.id === 3 ? { ...entry, isHidden: true } : entry,
+  );
+  const fx = createFakeEngine();
+  fx.emitDelta(
+    createFakeSnapshot({
+      rows: hiddenRows,
+      treeVersion: 1,
+      showHiddenFiles: false,
+    }),
+  );
+  const hiddenResults = [];
+  const tree = await mountTree(fx, {
+    activeEntry: 3,
+    autoRevealActiveEntry: true,
+    activeEntryPolicy: { revealHidden: true },
+    onActiveEntryResolution: (result) => hiddenResults.push(result),
+  });
+  assert.equal(hiddenResults[0]?.autoReveal, 'attempted');
+  assert.ok(fx.calls.setExpanded.some((change) => change.add.includes(2)));
+
+  const generatedResults = [];
+  await tree.render({
+    activeEntry: { target: 4, origin: 'generated' },
+    autoRevealActiveEntry: true,
+    activeEntryPolicy: { revealGenerated: true },
+    onActiveEntryResolution: (result) => generatedResults.push(result),
+  });
+  assert.equal(generatedResults[0]?.disposition, 'generated');
+  assert.equal(generatedResults[0]?.autoReveal, 'attempted');
+
+  await tree.cleanup();
+});
+
+test('external targets bypass workspace resolution and missing targets report clearly', async () => {
+  const fx = createFakeEngine();
+  fx.emitDelta(createFakeSnapshot({ rows, treeVersion: 1 }));
+  const pathLookups = [];
+  const indexedFx = {
+    ...fx,
+    resolvePath: async (path) => {
+      pathLookups.push(path);
+      return null;
+    },
+  };
+  const resolutions = [];
+  const tree = await mountTree(indexedFx, {
+    activeEntry: { target: '/outside/workspace.ts', origin: 'external' },
+    autoRevealActiveEntry: true,
+    onActiveEntryResolution: (result) => resolutions.push(result),
+  });
+  assert.deepEqual(pathLookups, []);
+  assert.equal(resolutions[0]?.disposition, 'external');
+  assert.equal(resolutions[0]?.autoReveal, 'suppressed');
+
+  await tree.render({
+    activeEntry: 'missing.ts',
+    autoRevealActiveEntry: true,
+    onActiveEntryResolution: (result) => resolutions.push(result),
+  });
+  assert.deepEqual(pathLookups, ['missing.ts']);
+  assert.equal(resolutions[1]?.disposition, 'missing');
+  assert.equal(resolutions[1]?.entryId, null);
+  assert.equal(resolutions[1]?.autoReveal, 'suppressed');
 
   await tree.cleanup();
 });

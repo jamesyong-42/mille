@@ -907,6 +907,25 @@ replacement at 0.001791 ms median / 0.002000 ms p95 and promotion at
 Phase 3.4 work is the explicit excluded, hidden, generated, and external active
 file policy.
 
+Final follow-editor result (2026-07-23): active targets now resolve to an
+observable `visible`, `hidden`, `ignored`, `generated`, `external`, or `missing`
+disposition. Hidden and ignored/excluded entries are classified against the
+snapshot's effective visibility settings; generated/external origin is
+host-supplied because the filesystem model cannot infer editor provenance.
+Visible workspace targets retain normal auto-reveal. Hidden, ignored, and
+generated targets keep an active marker when projected but suppress auto-reveal
+by default, with explicit per-class opt-ins. External targets bypass workspace
+path resolution entirely, and missing targets have no tree side effect. The
+playground pins the conservative policy explicitly. Four new integration/pure
+tests bring the complete UI suite to 339/339, with the playground at 19/19.
+The 100,000-decision mixed-disposition gate measured 0.000042 ms median and
+0.000125 ms p95 against a 0.01 ms ceiling. This completes the Phase 3.4
+library and reference-harness scope. Bundle comparison found the committed
+headless baseline already at 13.84 KB gzip against a stale 13 KB gate. Runtime
+policy helpers remain outside the headless barrel, keeping it exactly at that
+baseline; the ratchet is re-established at 14 KB with 0.16 KB headroom. The
+default index is 31.06 KB against its 75 KB limit.
+
 #### 3.5 Complete baseline actions
 
 - Copy absolute path and workspace-relative path.

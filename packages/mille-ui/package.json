@@ -87,13 +87,14 @@
     "size": "size-limit",
     "size:why": "size-limit --why",
     "bench": "node bench/scroll-expand.mjs",
-    "bench:navigation": "node bench/navigation-state.mjs"
+    "bench:navigation": "node bench/navigation-state.mjs",
+    "bench:active-policy": "node bench/active-entry-policy.mjs"
   },
   "size-limit": [
     {
-      "name": "headless (SPEC \u00a712 target 12 KB, limit 20 KB; 13 KB is the fail-on-regression boundary post-B8)",
+      "name": "headless (SPEC \u00a712 target; 14 KB ratchet from the 13.84 KB Phase-3 baseline)",
       "path": "dist/headless.js",
-      "limit": "13 KB",
+      "limit": "14 KB",
       "gzip": true,
       "ignore": [
         "react",

@@ -97,12 +97,30 @@ one-shot reveal whenever the editor target changes:
 />;
 ```
 
-`activeEntry` accepts an indexed `EntryId` or a workspace-relative/root-qualified
-path. IDs take the direct fast path; paths use lazy indexed resolution and
-hydrate only the target's ancestor chain. The active row exposes
-`aria-current="page"` and `data-mille-active="true"`. Auto-reveal expands and
-scrolls without changing tree focus or selection, and it runs only when the
-target changes, so later user navigation is not undone by unrelated updates.
+`activeEntry` accepts an indexed `EntryId`, a workspace-relative/root-qualified
+path, or a descriptor that tags a generated/external target. IDs take the
+direct fast path; paths use lazy indexed resolution and hydrate only the
+target's ancestor chain. The active row exposes `aria-current="page"` and
+`data-mille-active="true"`. Auto-reveal expands and scrolls without changing
+tree focus or selection, and it runs only when the target changes, so later
+user navigation is not undone by unrelated updates.
+
+Hidden, ignored/excluded, and host-tagged generated targets do not auto-reveal
+by default. External targets bypass workspace resolution, and missing targets
+have no tree side effect. Hosts can opt into an exception and observe every
+decision:
+
+```tsx
+<FileTree
+  fx={fx}
+  activeEntry={{ target: generatedEntryId, origin: 'generated' }}
+  autoRevealActiveEntry
+  activeEntryPolicy={{ revealGenerated: true }}
+  onActiveEntryResolution={({ disposition, autoReveal }) => {
+    telemetry.record('explorer.activeEntry', { disposition, autoReveal });
+  }}
+/>;
+```
 
 ## Control file opening
 

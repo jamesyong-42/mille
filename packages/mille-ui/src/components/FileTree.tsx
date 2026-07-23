@@ -82,6 +82,12 @@ import {
   type FileTreeNavigationState,
   type FileTreeSearchMode,
 } from '../navigation-state.js';
+import {
+  classifyActiveEntry,
+  normalizeActiveEntryTarget,
+  shouldAutoRevealActiveEntry,
+  type ActiveEntryAutoReveal,
+} from '../active-entry-policy.js';
 import type {
   AriaRowProps,
   FileTreeEngine,
@@ -153,6 +159,8 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
     navigationStateDebounceMs = 150,
     activeEntry,
     autoRevealActiveEntry = false,
+    activeEntryPolicy,
+    onActiveEntryResolution,
     openBehavior,
     multiSelect = true,
     focusedId: controlledFocusedId,
@@ -1331,17 +1339,30 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
     [resolvePath, revealResolvedId],
   );
 
+  const normalizedActiveEntry =
+    activeEntry === null || activeEntry === undefined
+      ? null
+      : normalizeActiveEntryTarget(activeEntry);
+  const activeEntryTarget = normalizedActiveEntry?.target;
+  const activeEntryOrigin = normalizedActiveEntry?.origin ?? 'workspace';
+  const revealHiddenActiveEntry = activeEntryPolicy?.revealHidden === true;
+  const revealIgnoredActiveEntry = activeEntryPolicy?.revealIgnored === true;
+  const revealGeneratedActiveEntry = activeEntryPolicy?.revealGenerated === true;
   const [resolvedActivePathId, setResolvedActivePathId] =
     useState<EntryId | null>(null);
   const resolvedActiveEntryId =
-    typeof activeEntry === 'number' ? activeEntry : resolvedActivePathId;
+    activeEntryOrigin !== 'external' && typeof activeEntryTarget === 'number'
+      ? activeEntryTarget
+      : resolvedActivePathId;
   const activeResolutionRevisionRef = useRef(0);
   const resolveActivePathRef = useRef(resolvePath);
   const revealActiveIdRef = useRef(revealResolvedIdWithFocus);
+  const reportActiveResolutionRef = useRef(onActiveEntryResolution);
   useLayoutEffect(() => {
     resolveActivePathRef.current = resolvePath;
     revealActiveIdRef.current = revealResolvedIdWithFocus;
-  }, [resolvePath, revealResolvedIdWithFocus]);
+    reportActiveResolutionRef.current = onActiveEntryResolution;
+  }, [resolvePath, revealResolvedIdWithFocus, onActiveEntryResolution]);
   useEffect(() => {
     const revision = activeResolutionRevisionRef.current + 1;
     activeResolutionRevisionRef.current = revision;
@@ -1351,35 +1372,78 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
       }
     };
 
-    if (activeEntry === null || activeEntry === undefined) {
+    if (activeEntryTarget === undefined) {
       setResolvedActivePathId(null);
-      return invalidate;
-    }
-    if (typeof activeEntry === 'number') {
-      setResolvedActivePathId(null);
-      if (autoRevealActiveEntry) {
-        revealActiveIdRef.current(activeEntry, false);
-      }
       return invalidate;
     }
 
+    const finish = (id: EntryId | null): void => {
+      if (activeResolutionRevisionRef.current !== revision) return;
+      const latest = fx.getSnapshot() as FileTreeSnapshotLike;
+      const entry = id === null ? null : latest.getById(id);
+      const disposition = classifyActiveEntry({
+        origin: activeEntryOrigin,
+        entry,
+        showHiddenFiles: latest.showHiddenFiles,
+        showIgnoredFiles: latest.showIgnoredFiles,
+      });
+      let autoReveal: ActiveEntryAutoReveal = 'not-requested';
+      if (autoRevealActiveEntry) {
+        const allowed = shouldAutoRevealActiveEntry(disposition, {
+          revealHidden: revealHiddenActiveEntry,
+          revealIgnored: revealIgnoredActiveEntry,
+          revealGenerated: revealGeneratedActiveEntry,
+        });
+        if (!allowed || id === null) {
+          autoReveal = 'suppressed';
+        } else {
+          autoReveal = revealActiveIdRef.current(id, false)
+            ? 'attempted'
+            : 'failed';
+        }
+      }
+      reportActiveResolutionRef.current?.({
+        target: activeEntryTarget,
+        origin: activeEntryOrigin,
+        entryId: id,
+        disposition,
+        autoReveal,
+      });
+    };
+
     setResolvedActivePathId(null);
-    void resolveActivePathRef.current(activeEntry).then(
+    if (activeEntryOrigin === 'external') {
+      finish(null);
+      return invalidate;
+    }
+    if (typeof activeEntryTarget === 'number') {
+      finish(activeEntryTarget);
+      return invalidate;
+    }
+
+    void resolveActivePathRef.current(activeEntryTarget).then(
       (id) => {
         if (activeResolutionRevisionRef.current !== revision) return;
         setResolvedActivePathId(id);
-        if (id !== null && autoRevealActiveEntry) {
-          revealActiveIdRef.current(id, false);
-        }
+        finish(id);
       },
       () => {
         if (activeResolutionRevisionRef.current === revision) {
           setResolvedActivePathId(null);
+          finish(null);
         }
       },
     );
     return invalidate;
-  }, [activeEntry, autoRevealActiveEntry]);
+  }, [
+    activeEntryTarget,
+    activeEntryOrigin,
+    autoRevealActiveEntry,
+    revealHiddenActiveEntry,
+    revealIgnoredActiveEntry,
+    revealGeneratedActiveEntry,
+    fx,
+  ]);
 
   const pendingNavigationScrollRef = useRef<{
     readonly id: EntryId;

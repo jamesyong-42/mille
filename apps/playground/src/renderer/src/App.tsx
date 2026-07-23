@@ -17,6 +17,7 @@ import {
   FileTree,
   serializeFileTreeNavigationState,
   useFileTreeRef,
+  type ActiveEntryPolicy,
   type FileOpenEvent,
   type FileTreeNavigationState,
 } from '@vibecook/mille-ui';
@@ -48,6 +49,12 @@ const WELCOME = `// Project tool window
 // F2 — rename · Delete — delete
 // Right-click — context menu
 `;
+
+const PLAYGROUND_ACTIVE_ENTRY_POLICY: ActiveEntryPolicy = Object.freeze({
+  revealHidden: false,
+  revealIgnored: false,
+  revealGenerated: false,
+});
 
 function basename(path: string): string {
   const parts = path.replace(/\\/g, '/').split('/').filter(Boolean);
@@ -507,6 +514,7 @@ function Explorer({ fx, root }: { fx: PortFileExplorer; root: string }): ReactEl
                   onNavigationStateChange={persistNavigationState}
                   activeEntry={activeTab.entryId ?? null}
                   autoRevealActiveEntry={followActiveEditor}
+                  activeEntryPolicy={PLAYGROUND_ACTIVE_ENTRY_POLICY}
                   openBehavior={{
                     singleClick: singleClickPreview ? 'preview' : 'select',
                   }}

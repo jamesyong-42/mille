@@ -86,6 +86,21 @@ export type {
 } from './hooks/index.js';
 export type { CommandRegistryHandle } from './types.js';
 export {
+  classifyActiveEntry,
+  normalizeActiveEntryTarget,
+  shouldAutoRevealActiveEntry,
+} from './active-entry-policy.js';
+export type {
+  ActiveEntryAutoReveal,
+  ActiveEntryClassificationInput,
+  ActiveEntryDisposition,
+  ActiveEntryInput,
+  ActiveEntryOrigin,
+  ActiveEntryPolicy,
+  ActiveEntryResolution,
+  ActiveEntryTarget,
+} from './active-entry-policy.js';
+export {
   PERMANENT_KEYBOARD_OPEN,
   PERMANENT_SEARCH_OPEN,
   commandOpenEvent,

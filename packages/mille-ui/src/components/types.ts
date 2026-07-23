@@ -33,6 +33,11 @@ import type {
   FileTreeSearchMode,
 } from '../navigation-state.js';
 import type { FileOpenBehavior, FileOpenEvent } from '../open-policy.js';
+import type {
+  ActiveEntryInput,
+  ActiveEntryPolicy,
+  ActiveEntryResolution,
+} from '../active-entry-policy.js';
 
 // Observer signatures mirror virtual-core's. Declared here rather
 // than in the hook to avoid a component → hook → component cycle.
@@ -89,6 +94,9 @@ export interface FileTreeSnapshotLike {
   /** Optional cache-hydration dimension; falls back to treeVersion. */
   readonly projectionVersion?: number;
   readonly decorationVersion: number;
+  /** Effective visibility settings exposed by production snapshots. */
+  readonly showHiddenFiles?: boolean;
+  readonly showIgnoredFiles?: boolean;
   roots(): readonly Entry[];
   visibleRows(options: VisibleRowsOptions): readonly VisibleRow[];
   /** Optional ID-only projection for selection and identity consumers. */
@@ -455,13 +463,20 @@ export interface FileTreeProps {
    * direct updates or a workspace-relative/root-qualified path when the
    * target may need lazy path-chain hydration.
    */
-  readonly activeEntry?: EntryId | string | null;
+  readonly activeEntry?: ActiveEntryInput | null;
   /**
    * Expand and scroll to `activeEntry` whenever that target changes.
    * Defaults to `false`. The reveal does not change tree focus or selection,
    * and unrelated renders do not repeat it after the user navigates away.
    */
   readonly autoRevealActiveEntry?: boolean;
+  /**
+   * Auto-reveal exceptions. Hidden, ignored/excluded, and generated targets
+   * are suppressed by default; external and missing targets never reveal.
+   */
+  readonly activeEntryPolicy?: ActiveEntryPolicy;
+  /** Reports the disposition and auto-reveal decision for each new target. */
+  readonly onActiveEntryResolution?: (result: ActiveEntryResolution) => void;
 
   /**
    * Mouse open policy. Defaults to selection-only single click and permanent

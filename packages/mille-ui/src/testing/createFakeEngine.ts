@@ -25,6 +25,8 @@ import type {
 export interface FakeMirrorSnapshot {
   readonly treeVersion: number;
   readonly decorationVersion: number;
+  readonly showHiddenFiles?: boolean;
+  readonly showIgnoredFiles?: boolean;
   roots(): readonly Entry[];
   visibleRows(options: VisibleRowsOptions): readonly VisibleRow[];
   visibleRowIds(options: VisibleRowsOptions): readonly EntryId[];
@@ -52,6 +54,8 @@ export interface FakeMirrorSnapshot {
 export interface FakeSnapshotInit {
   readonly treeVersion?: number;
   readonly decorationVersion?: number;
+  readonly showHiddenFiles?: boolean;
+  readonly showIgnoredFiles?: boolean;
   readonly roots?: readonly Entry[];
   /** Ordered, flat list of rows — the source of truth for `visibleRows`. */
   readonly rows?: readonly VisibleRow[];
@@ -186,6 +190,8 @@ export interface FakeEngine {
 const EMPTY_SNAPSHOT: FakeMirrorSnapshot = freeze({
   treeVersion: 0,
   decorationVersion: 0,
+  showHiddenFiles: true,
+  showIgnoredFiles: true,
   roots: () => [],
   visibleRows: () => [],
   visibleRowIds: () => [],
@@ -226,9 +232,28 @@ export function createFakeSnapshot(init: FakeSnapshotInit = {}): FakeMirrorSnaps
   const roots = init.roots ?? rows.filter((r) => r.parentId === null);
   const decorations = init.decorations ?? new Map<EntryId, readonly Decoration[]>();
   const pending = init.pendingExpansions ?? new Set<EntryId>();
+  const showHiddenFiles = init.showHiddenFiles ?? true;
+  const showIgnoredFiles = init.showIgnoredFiles ?? true;
+  const projectedRows: VisibleRow[] = [];
+  let excludedDepth: number | null = null;
+  for (const row of rows) {
+    if (excludedDepth !== null) {
+      if (row.depth > excludedDepth) continue;
+      excludedDepth = null;
+    }
+    if (
+      (!showHiddenFiles && row.isHidden) ||
+      (!showIgnoredFiles && row.isIgnored)
+    ) {
+      excludedDepth = row.depth;
+      continue;
+    }
+    projectedRows.push(row);
+  }
 
   const byId = new Map<EntryId, VisibleRow>();
   const rowIndexes = new Map<EntryId, number>();
+  const projectedRowIndexes = new Map<EntryId, number>();
   const childCounts = new Map<EntryId, number>();
   for (let index = 0; index < rows.length; index += 1) {
     const r = rows[index]!;
@@ -238,27 +263,35 @@ export function createFakeSnapshot(init: FakeSnapshotInit = {}): FakeMirrorSnaps
       childCounts.set(r.parentId, (childCounts.get(r.parentId) ?? 0) + 1);
     }
   }
+  for (let index = 0; index < projectedRows.length; index += 1) {
+    projectedRowIndexes.set(projectedRows[index]!.id, index);
+  }
 
   // Empty-array singleton so absent-id lookups never allocate.
   const snap: FakeMirrorSnapshot = {
     treeVersion: init.treeVersion ?? 0,
     decorationVersion: init.decorationVersion ?? 0,
+    showHiddenFiles,
+    showIgnoredFiles,
     roots: () => roots,
     visibleRows: (options: VisibleRowsOptions) => {
       const start = options.offset;
       const end = start + options.limit;
-      return rows.slice(start, end);
+      return (options.includeIgnored ? rows : projectedRows).slice(start, end);
     },
     visibleRowIds: (options: VisibleRowsOptions) => {
       const start = options.offset;
       const end = start + options.limit;
-      return rows.slice(start, end).map((row) => row.id);
+      return (options.includeIgnored ? rows : projectedRows)
+        .slice(start, end)
+        .map((row) => row.id);
     },
-    visibleRowCount: (_expanded, _includeIgnored) => ({
-      known: rows.length,
+    visibleRowCount: (_expanded, includeIgnored) => ({
+      known: includeIgnored ? rows.length : projectedRows.length,
       pendingExpansions: pending,
     }),
-    visibleRowIndex: (id, _expanded, _includeIgnored) => rowIndexes.get(id) ?? null,
+    visibleRowIndex: (id, _expanded, includeIgnored) =>
+      (includeIgnored ? rowIndexes : projectedRowIndexes).get(id) ?? null,
     getById: (id) => byId.get(id) ?? null,
     directChildCount: (id) => childCounts.get(id) ?? null,
     hasChildren: (id) => (childCounts.get(id) ?? 0) > 0,
@@ -573,6 +606,8 @@ export function createFakeEngine(): FakeEngine {
       current = freeze({
         treeVersion: structural.treeVersion,
         decorationVersion: structural.decorationVersion + 1,
+        showHiddenFiles: structural.showHiddenFiles ?? true,
+        showIgnoredFiles: structural.showIgnoredFiles ?? true,
         roots: () => structural.roots(),
         visibleRows: (options) => structural.visibleRows(options),
         visibleRowIds: (options) => structural.visibleRowIds(options),

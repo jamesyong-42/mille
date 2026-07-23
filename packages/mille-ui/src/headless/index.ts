@@ -190,6 +190,16 @@ export type {
   HostHooks,
 } from '../commands/types.js';
 export type { CommandRegistryHandle } from '../types.js';
+export type {
+  ActiveEntryAutoReveal,
+  ActiveEntryClassificationInput,
+  ActiveEntryDisposition,
+  ActiveEntryInput,
+  ActiveEntryOrigin,
+  ActiveEntryPolicy,
+  ActiveEntryResolution,
+  ActiveEntryTarget,
+} from '../active-entry-policy.js';
 export {
   PERMANENT_KEYBOARD_OPEN,
   PERMANENT_SEARCH_OPEN,

@@ -32,12 +32,12 @@ mature IDE explorer is the 10/10 reference point.
 
 | Area                                 | Score | Current assessment                                                                                                                                                           |
 | ------------------------------------ | ----: | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Filesystem and renderer architecture |   8.5 | Strong native walker, roots-only handshake, binary ordered lazy hydration, bounded viewport mirror, windowed React rendering, anchoring, and local keyboard access           |
+| Filesystem and renderer architecture |   8.6 | Strong native walker, roots-only handshake, binary ordered lazy hydration, bounded viewport mirror, windowed React rendering, anchoring, and exact-position queries         |
 | Core tree interaction                |   7.3 | Keyboard navigation, multi-selection, reliable deep reveal, resilient inline rename, create/delete, clipboard, filtering, context menus, and drag/drop                       |
 | Visual behavior                      |   7.4 | Viewport, focus, selection, and rename drafts survive churn; animation is row-scoped, storm-bounded, and reduced-motion aware; broader theme/sticky-root scenarios remain    |
 | Accessibility                        |   6.0 | Good ARIA tree semantics and keyboard tests; no real assistive-technology matrix                                                                                             |
 | Reliability and recovery             |   5.5 | Deterministic soak gates converge, but repeated Electron watcher stalls and direct native startup misses remain unresolved; crash/platform stress also remains               |
-| Performance confidence               |   7.4 | Binary-wire, bounded-hydration, windowed 500,000-row UI, and Electron gates cover payload, paint, React duration, projection, anchoring, navigation, retention, and eviction |
+| Performance confidence               |   7.5 | Binary-wire, bounded-hydration, windowed 500,000-row UI, Criterion, and Electron gates cover payload, paint, projection, navigation, retention, and eviction                 |
 | Explorer workflow breadth            |   3.5 | Important workspace, settings, editor, source-control, history, and remote-filesystem behavior is absent or host-only                                                        |
 
 As a reusable tree widget, Mille is approximately **6.5-7/10**. As a complete
@@ -166,18 +166,23 @@ ms for the full-wrap miss. This removes the full-order allocation, not the
 worst-case O(n) scan. Current validation is 310/310 UI tests and 12/12
 playground harness tests.
 
-Deep imperative reveal now uses the windowed projection too. It holds a pending
-stable id across ancestor expansion/hydration, then focuses and scrolls to the
-exact fixed-height offset. The new gate caught the prior focus-without-scroll
-behavior. Revealing row 400,000 reads 400,204 rows total with a 256-row request
-cap; five runs had a 42.29 ms median and a 103.19 ms maximum. This removes the
-full-array allocation and fixes correctness, but it does not remove the O(n)
-lookup cost. Current validation is 311/311 UI tests and 12/12 playground
-harness tests.
+Deep imperative reveal now uses a snapshot exact-position contract across the
+native and port implementations. It holds a pending stable id across ancestor
+expansion/hydration, then focuses and scrolls to the exact fixed-height offset.
+The gate caught the prior focus-without-scroll behavior and now requires one
+position query plus at most 100 rematerialized viewport rows. Revealing row
+400,000 consistently used one query and 38 rows; five standalone runs ranged
+from 43.17 to 47.12 ms with a 45.79 ms median. The native last-row query on the
+approximately 1,500-entry fixture measured 87.273-88.166 microseconds. This
+removes repeated offset scans and N-API row payloads, but the production query
+is still one O(n) traversal in the worst case. Current validation is 312/312 UI
+tests and 12/12 playground harness tests.
 
 Remaining scaling gaps are O(n) ordered-id metadata for an extremely wide
 expanded folder; full-order reads for Select All, long ranges, and path-walk
-fallback; and O(n) worst-case scans for typeahead and exact visible-id lookup.
+fallback; O(n) worst-case typeahead; and replacing the exact visible-id query's
+single traversal with a maintained rank structure if large native traces show
+that cost is material.
 
 ## What is already strong
 

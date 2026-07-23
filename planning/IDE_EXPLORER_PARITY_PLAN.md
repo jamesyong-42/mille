@@ -415,6 +415,25 @@ and all 12 playground harness tests passed. Indexed visible positions are now
 the clear next architecture step; Select All, long-range selection, path-walk
 fallback, and wide-folder ordered-id metadata also remain.
 
+Tenth exact-position result (2026-07-22): snapshots now expose
+`visibleRowIndex(id, expanded)` across the Rust core, N-API wrapper, bounded
+client mirror, public TypeScript API, fake engine, and React projection. Deep
+reveal uses this contract instead of restarting an offset-based DFS for every
+256-row probe. The native implementation performs one payload-free traversal
+and stops at the target; the port mirrors the same visibility, expansion,
+ordering, and placeholder semantics. The 500,000-row reveal gate now requires
+exactly one position query and at most 100 viewport rows. It consistently used
+one query and 38 rows; five standalone timings ranged from 43.17 to 47.12 ms
+with a 45.79 ms median. Criterion measured last-row lookup on the approximately
+1,500-entry medium fixture at 87.273-88.166 microseconds, inside the 0.2 ms
+target. Property tests cross-check every generated entry against flattened row
+order, while native, port, projection, reveal, and benchmark contracts cover
+the integration path. All 312 UI tests and all 12 playground harness tests
+passed. The query is still O(n) in the worst case; a cached rank structure is a
+future architecture refinement. Select All, long-range selection, path-walk
+fallback, worst-case typeahead, and wide-folder ordered-id metadata remain
+Phase 2.4 work.
+
 #### 2.5 Define state under deletion and errors
 
 - Move focus to the nearest logical sibling or parent when the focused row is

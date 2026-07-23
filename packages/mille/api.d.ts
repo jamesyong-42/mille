@@ -247,6 +247,12 @@ export interface MirrorSnapshot {
   /** O(log n) in the sum-tree; O(1) from the mirror in typical cases. */
   visibleRows(options: VisibleRowsOptions): readonly VisibleRow[];
   visibleRowCount(expanded: ReadonlySet<EntryId>, includeIgnored?: boolean): VisibleRowCount;
+  /** Exact index in the flattened visible order via one DFS, or `null` when not visible. */
+  visibleRowIndex(
+    id: EntryId,
+    expanded: ReadonlySet<EntryId>,
+    includeIgnored?: boolean,
+  ): number | null;
 
   getById(id: EntryId): Entry | null;
 

@@ -115,6 +115,7 @@ test('visibleRows/visibleRowCount work on an empty snapshot', () => {
     const count = snap.visibleRowCount([]);
     assert.equal(typeof count.known, 'number');
     assert.ok(Array.isArray(count.pendingExpansions));
+    assert.equal(snap.visibleRowIndex(99999, []), null);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

@@ -131,6 +131,24 @@ impl MirrorSnapshot {
             .collect()
     }
 
+    /// Exact logical index in the flattened visible order. Performs one
+    /// native DFS and returns no row payloads.
+    #[napi(js_name = "visibleRowIndex")]
+    pub fn visible_row_index(
+        &self,
+        id: i64,
+        expanded: Vec<i64>,
+        include_ignored: Option<bool>,
+    ) -> Option<u32> {
+        let expanded_set: HashSet<EntryId> =
+            expanded.iter().map(|raw| EntryId(*raw as u64)).collect();
+        self.inner.visible_row_index(
+            EntryId(id as u64),
+            &expanded_set,
+            include_ignored.unwrap_or(false),
+        )
+    }
+
     /// Bulk-path sibling of `visibleRows` — returns the enriched rows
     /// (entry fields + viewport flags inlined) as a bincode-encoded
     /// `Buffer` instead of marshaling each row through NAPI. For

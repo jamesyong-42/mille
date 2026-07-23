@@ -708,6 +708,7 @@ async function runReveal(rows) {
   const fx = createFakeEngine();
   let maxProjectionReadRows = 0;
   let projectionRowsRead = 0;
+  let indexLookups = 0;
   const snapshot = createFakeSnapshot({ rows, treeVersion: 1 });
   fx.emitDelta({
     ...snapshot,
@@ -717,6 +718,10 @@ async function runReveal(rows) {
         projectionRowsRead += options.limit;
       }
       return snapshot.visibleRows(options);
+    },
+    visibleRowIndex: (id, expanded, includeIgnored) => {
+      indexLookups += 1;
+      return snapshot.visibleRowIndex(id, expanded, includeIgnored);
     },
   });
   const { container, root } = mountContainer();
@@ -780,6 +785,7 @@ async function runReveal(rows) {
     scrollRequested,
     maxMaterializedRows: maxProjectionReadRows,
     projectionRowsRead,
+    indexLookups,
     targetIndex,
   };
 }
@@ -975,7 +981,7 @@ async function main() {
     `      Typeahead projection reads: near=${typeaheadNearResult.projectionRowsRead.toLocaleString()}, miss=${typeaheadMissResult.projectionRowsRead.toLocaleString()} rows; ${Math.max(typeaheadNearResult.maxMaterializedRows, typeaheadMissResult.maxMaterializedRows)} max per read.`,
   );
   console.log(
-    `      Reveal projection reads: ${revealResult.projectionRowsRead.toLocaleString()} rows total, ${revealResult.maxMaterializedRows} max per read.`,
+    `      Reveal lookup: ${revealResult.indexLookups} exact index query; ${revealResult.projectionRowsRead.toLocaleString()} viewport rows read, ${revealResult.maxMaterializedRows} max per read.`,
   );
   if (anchorResult.driftPx > 0.5) {
     throw new Error(`viewport anchor drift ${anchorResult.driftPx.toFixed(2)} px exceeds 0.5 px`);
@@ -1043,8 +1049,9 @@ async function main() {
     throw new Error('deep reveal did not focus and scroll to its target');
   }
   if (
-    revealResult.maxMaterializedRows > 256 ||
-    revealResult.projectionRowsRead > revealResult.targetIndex + 1_024
+    revealResult.indexLookups !== 1 ||
+    revealResult.maxMaterializedRows > 100 ||
+    revealResult.projectionRowsRead > 100
   ) {
     throw new Error(
       `deep reveal read max=${revealResult.maxMaterializedRows}, total=${revealResult.projectionRowsRead} rows`,

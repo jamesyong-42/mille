@@ -101,6 +101,7 @@ test('visibleRows + visibleRowCount return empty on a pristine tree', () => {
     assert.equal(count.known, 0);
     assert.ok(count.pendingExpansions instanceof Set);
     assert.equal(count.pendingExpansions.size, 0);
+    assert.equal(snap.visibleRowIndex(99999, new Set()), null);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -201,6 +202,12 @@ test('populateFromRoots seeds the store with entries', async () => {
     const walkRoot = snap.roots()[0];
     // Three children: a.txt, b.txt, sub.
     assert.equal(snap.directChildCount(walkRoot.id), 3);
+    assert.equal(snap.visibleRowIndex(walkRoot.id, new Set()), 0);
+    const expanded = new Set([walkRoot.id]);
+    const visible = snap.visibleRows({ expanded, offset: 0, limit: 100 });
+    for (let index = 0; index < visible.length; index += 1) {
+      assert.equal(snap.visibleRowIndex(visible[index].id, expanded), index);
+    }
     await fx.dispose();
   } finally {
     rmSync(dir, { recursive: true, force: true });

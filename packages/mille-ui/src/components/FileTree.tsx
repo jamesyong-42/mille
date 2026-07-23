@@ -544,7 +544,7 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
 
   const findExactVisibleRowIndex = useCallback(
     (id: EntryId, hintIndex = mountedViewportOffset): number =>
-      projection.findRowIndex(id, hintIndex, projection.visibleCount.known),
+      projection.findExactRowIndex(id, hintIndex),
     [mountedViewportOffset, projection],
   );
 

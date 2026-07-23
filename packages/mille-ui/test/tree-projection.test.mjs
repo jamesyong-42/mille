@@ -98,4 +98,27 @@ test('visible index lookup probes bounded chunks around a prior index', () => {
   assert.ok(requests.length > 1, 'lookup should expand beyond its first probe');
   assert.ok(Math.max(...requests.map((request) => request.limit)) <= 256);
   assert.ok(requests.reduce((total, request) => total + request.limit, 0) <= 4_096);
+
+  requests.length = 0;
+  assert.equal(projection.findExactRowIndex(15_001, 10_000), 15_000);
+  assert.ok(requests.length > 1, 'legacy exact lookup should retain the windowed fallback');
+  assert.ok(Math.max(...requests.map((request) => request.limit)) <= 256);
+  assert.ok(requests.reduce((total, request) => total + request.limit, 0) <= rows.length);
+});
+
+test('exact visible index lookup uses the snapshot position contract without rows', () => {
+  const counters = { count: 0, rows: 0, maxLimit: 0, indexes: 0 };
+  const snapshot = {
+    ...makeSnapshot(9, counters),
+    visibleRowCount: () => ({ known: 500_000, pendingExpansions: new Set() }),
+    visibleRowIndex: (id) => {
+      counters.indexes += 1;
+      return id === 400_001 ? 400_000 : null;
+    },
+  };
+  const projection = readTreeProjection(snapshot, new Set(), null);
+
+  assert.equal(projection.findExactRowIndex(400_001, 0), 400_000);
+  assert.equal(counters.indexes, 1);
+  assert.equal(counters.rows, 0);
 });

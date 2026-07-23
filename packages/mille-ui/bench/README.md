@@ -40,7 +40,7 @@ pre-expanded folders, mounts `<FileTree>` against a fake engine
 | **ArrowDown in 500k-row tree** | Moves focus by one logical row without materializing the complete order; fails above 256 rows per read or 512 rows total. |
 | **typeahead near match** | Finds and focuses the next nearby prefix match through bounded windows; fails above 256 rows per read or 1,024 rows total. |
 | **typeahead full-wrap miss** | Scans the complete order without one giant allocation, preserves focus, and requires every read to remain at or below 256 rows. |
-| **reveal row 400k** | Expands the target's ancestors, focuses it, and requests a deep scroll while finding its exact index through reads capped at 256 rows. |
+| **reveal row 400k** | Expands the target's ancestors, focuses it, and requests a deep scroll through one exact-position query plus a bounded viewport read. |
 | **insert 1000 above viewport** | Preserves the top row's pixel offset, focus, and selection; fails above 0.5 px drift, on interaction-state loss, or if anchor lookup reads more than 256 rows at once / 4,096 rows total. |
 
 Output is a small markdown table. Timing numbers are reporters; virtualization,
@@ -55,8 +55,11 @@ windowed instead of materializing the complete 500,000-row order. The keyboard
 scenario applies the same hard allocation signal to ordinary local navigation.
 The paired typeahead scenarios expose both the responsive nearby-match path and
 the intentionally expensive worst-case full-wrap miss instead of hiding it.
-The deep reveal scenario applies the same allocation bound to imperative
-navigation and verifies that focus and scrolling complete after expansion.
+The deep reveal scenario requires exactly one snapshot position query, at most
+100 rematerialized viewport rows, and verifies that focus and scrolling complete
+after expansion. The native Criterion suite separately measures the query's
+worst-position DFS cost, because happy-dom cannot represent native traversal
+work.
 
 ## Why happy-dom
 

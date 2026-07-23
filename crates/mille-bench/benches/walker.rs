@@ -5,6 +5,7 @@
 //   - populate_store: < 30ms for medium
 //   - visible_rows (100-row slice): < 0.2ms on populated snapshot
 //   - visible_row_count (all expanded): < 0.05ms
+//   - visible_row_index (last row): < 0.2ms on populated snapshot
 
 use std::collections::HashSet;
 
@@ -116,6 +117,31 @@ fn bench_visible_rows_full(c: &mut Criterion) {
     });
 }
 
+fn bench_visible_row_index(c: &mut Criterion) {
+    let (td, _) = medium_tree();
+    let walked = walk(td.path(), WalkOptions::default()).unwrap();
+    let store = EntryStore::new();
+    populate_store(&store, td.path(), &walked, None).unwrap();
+    let snap = store.snapshot();
+    let expanded = expanded_set_all(&store);
+    let target = snap
+        .visible_rows(VisibleRowsQuery {
+            expanded: &expanded,
+            offset: 0,
+            limit: u32::MAX,
+            include_ignored: false,
+        })
+        .last()
+        .expect("medium fixture has visible rows")
+        .id;
+
+    c.bench_function("visible_row_index_last_medium", |b| {
+        b.iter(|| {
+            let _ = snap.visible_row_index(target, &expanded, false);
+        })
+    });
+}
+
 /// v0.2 B3 regression bench. Fixture: `repo_entries` real files under `src/`
 /// plus a `node_modules` symlink into a `store_entries`-file sibling.
 /// `walk_with_ignore` with a `node_modules/` rule should walk in O(repo)
@@ -150,6 +176,7 @@ criterion_group!(
     bench_visible_row_count,
     bench_visible_rows_100,
     bench_visible_rows_full,
+    bench_visible_row_index,
     bench_pnpm_style_ignore,
 );
 
@@ -162,6 +189,7 @@ criterion_group!(
     bench_visible_row_count,
     bench_visible_rows_100,
     bench_visible_rows_full,
+    bench_visible_row_index,
 );
 
 criterion_main!(walker);

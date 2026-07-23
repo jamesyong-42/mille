@@ -318,6 +318,43 @@ export class ClientMirrorSnapshot {
     return out;
   }
 
+  /** Exact logical index with one payload-free DFS over the mirror. */
+  visibleRowIndex(
+    target: EntryId,
+    expanded: ReadonlySet<EntryId>,
+    includeIgnored: boolean = false,
+  ): number | null {
+    let index = 0;
+    const stack: number[] = [];
+    for (let i = this.state.roots.length - 1; i >= 0; i--) {
+      stack.push(this.state.roots[i]!);
+    }
+
+    while (stack.length > 0) {
+      const id = stack.pop()!;
+      const entry = this.state.byId.get(id);
+      if (entry === undefined) {
+        if (id === target) return index;
+        index += 1;
+        continue;
+      }
+      if (!isVisibleEntry(entry, includeIgnored)) continue;
+      if (id === target) return index;
+      index += 1;
+
+      if (expanded.has(id)) {
+        const kids = this.state.children.get(id);
+        if (kids !== undefined) {
+          const sorted = this.sortedChildrenFor(id, kids);
+          for (let i = sorted.length - 1; i >= 0; i--) {
+            stack.push(sorted[i]!);
+          }
+        }
+      }
+    }
+    return null;
+  }
+
   /**
    * Count visible rows under the current expansion state, mirroring
    * fx-core's `snapshot::visible_row_count`. Returns:

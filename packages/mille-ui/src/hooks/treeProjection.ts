@@ -13,6 +13,8 @@ export interface TreeProjection {
   readAllRows(): readonly VisibleRow[];
   /** Find an id near a prior logical index using bounded row-window probes. */
   findRowIndex(id: EntryId, hintIndex: number, maxProbeRows?: number): number;
+  /** Find an exact visible index through the snapshot fast path when available. */
+  findExactRowIndex(id: EntryId, hintIndex: number): number;
 }
 
 /**
@@ -103,6 +105,13 @@ export function readTreeProjection(
     }
     return -1;
   };
+  const findExactRowIndex = (id: EntryId, hintIndex: number): number => {
+    if (cachedAllRows !== null) return cachedAllRows.findIndex((row) => row.id === id);
+    if (snapshot.visibleRowIndex) {
+      return snapshot.visibleRowIndex(id, expanded) ?? -1;
+    }
+    return findRowIndex(id, hintIndex, visibleCount.known);
+  };
   return {
     treeVersion: snapshot.treeVersion,
     projectionVersion,
@@ -111,5 +120,6 @@ export function readTreeProjection(
     readRows,
     readAllRows,
     findRowIndex,
+    findExactRowIndex,
   };
 }

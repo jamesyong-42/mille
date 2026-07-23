@@ -95,6 +95,10 @@ test('visibleRows: expanded root emits children in sorted order', () => {
   assert.equal(rows[2].depth, 1);
   assert.equal(rows[3].name, 'c.txt');
   assert.equal(rows[3].depth, 1);
+  assert.equal(snap.visibleRowIndex(1, new Set([1])), 0);
+  assert.equal(snap.visibleRowIndex(12, new Set([1])), 2);
+  assert.equal(snap.visibleRowIndex(12, new Set()), null);
+  assert.equal(snap.visibleRowIndex(999, new Set([1])), null);
 });
 
 test('visibleRows: Project view shows ignored dirs (library roots)', () => {

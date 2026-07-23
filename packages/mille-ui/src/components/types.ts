@@ -81,6 +81,12 @@ export interface FileTreeSnapshotLike {
     expanded: ReadonlySet<EntryId>,
     includeIgnored?: boolean,
   ): VisibleRowCount;
+  /** Optional exact-position fast path supplied by production snapshots. */
+  visibleRowIndex?(
+    id: EntryId,
+    expanded: ReadonlySet<EntryId>,
+    includeIgnored?: boolean,
+  ): number | null;
   getById(id: EntryId): Entry | null;
   directChildCount(id: EntryId): number | null;
   hasChildren(id: EntryId): boolean;

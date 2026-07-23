@@ -590,16 +590,21 @@ test('local keyboard navigation reads a bounded row neighborhood', async () => {
   container.remove();
 });
 
-test('imperative reveal scans a deep projection in bounded windows', async () => {
+test('imperative reveal uses one exact-position lookup for a deep projection', async () => {
   const fx = createFakeEngine();
   const rows = buildRows(10_000);
   const baseSnapshot = createFakeSnapshot({ rows, treeVersion: 1 });
   const requestedLimits = [];
+  let indexLookups = 0;
   fx.emitDelta({
     ...baseSnapshot,
     visibleRows: (options) => {
       requestedLimits.push(options.limit);
       return baseSnapshot.visibleRows(options);
+    },
+    visibleRowIndex: (id, expanded, includeIgnored) => {
+      indexLookups += 1;
+      return baseSnapshot.visibleRowIndex(id, expanded, includeIgnored);
     },
   });
   requestedLimits.length = 0;
@@ -640,14 +645,14 @@ test('imperative reveal scans a deep projection in bounded windows', async () =>
 
   assert.equal(observedFocusedId, targetId);
   assert.equal(requestedScrollTop, targetIndex * 20);
-  assert.ok(requestedLimits.length > 1, 'deep reveal should scan multiple windows');
+  assert.equal(indexLookups, 1, 'deep reveal should issue one exact-position lookup');
   assert.ok(
     Math.max(...requestedLimits) <= 256,
     `reveal requested ${Math.max(...requestedLimits)} rows at once`,
   );
   assert.ok(
-    requestedLimits.reduce((total, limit) => total + limit, 0) <= rows.length + 512,
-    `reveal requested ${requestedLimits.reduce((total, limit) => total + limit, 0)} rows total`,
+    requestedLimits.reduce((total, limit) => total + limit, 0) <= 100,
+    `reveal rematerialized ${requestedLimits.reduce((total, limit) => total + limit, 0)} viewport rows`,
   );
 
   await act(async () => { root.unmount(); });

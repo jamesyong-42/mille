@@ -253,6 +253,11 @@ type NativeSnapshot = {
     limit: number;
     includeIgnored?: boolean;
   }): VisibleRow[];
+  visibleRowIndex(
+    id: number,
+    expanded: number[],
+    includeIgnored?: boolean,
+  ): number | null;
   visibleRowsBin(options: {
     expanded: number[];
     offset: number;
@@ -913,6 +918,14 @@ export class MirrorSnapshot {
       nativeOpts.includeIgnored = options.includeIgnored;
     }
     return this.inner.visibleRows(nativeOpts);
+  }
+
+  visibleRowIndex(
+    id: EntryId,
+    expanded: ReadonlySet<EntryId>,
+    includeIgnored?: boolean,
+  ): number | null {
+    return this.inner.visibleRowIndex(id, [...expanded], includeIgnored) ?? null;
   }
 
   /**

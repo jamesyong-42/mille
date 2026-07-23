@@ -31,6 +31,11 @@ export interface FakeMirrorSnapshot {
     expanded: ReadonlySet<EntryId>,
     includeIgnored?: boolean,
   ): VisibleRowCount;
+  visibleRowIndex(
+    id: EntryId,
+    expanded: ReadonlySet<EntryId>,
+    includeIgnored?: boolean,
+  ): number | null;
   getById(id: EntryId): Entry | null;
   directChildCount(id: EntryId): number | null;
   hasChildren(id: EntryId): boolean;
@@ -159,6 +164,7 @@ const EMPTY_SNAPSHOT: FakeMirrorSnapshot = freeze({
   roots: () => [],
   visibleRows: () => [],
   visibleRowCount: () => ({ known: 0, pendingExpansions: new Set<EntryId>() }),
+  visibleRowIndex: () => null,
   getById: () => null,
   directChildCount: () => null,
   hasChildren: () => false,
@@ -196,9 +202,12 @@ export function createFakeSnapshot(init: FakeSnapshotInit = {}): FakeMirrorSnaps
   const pending = init.pendingExpansions ?? new Set<EntryId>();
 
   const byId = new Map<EntryId, VisibleRow>();
+  const rowIndexes = new Map<EntryId, number>();
   const childCounts = new Map<EntryId, number>();
-  for (const r of rows) {
+  for (let index = 0; index < rows.length; index += 1) {
+    const r = rows[index]!;
     byId.set(r.id, r);
+    rowIndexes.set(r.id, index);
     if (r.parentId !== null) {
       childCounts.set(r.parentId, (childCounts.get(r.parentId) ?? 0) + 1);
     }
@@ -218,6 +227,7 @@ export function createFakeSnapshot(init: FakeSnapshotInit = {}): FakeMirrorSnaps
       known: rows.length,
       pendingExpansions: pending,
     }),
+    visibleRowIndex: (id, _expanded, _includeIgnored) => rowIndexes.get(id) ?? null,
     getById: (id) => byId.get(id) ?? null,
     directChildCount: (id) => childCounts.get(id) ?? null,
     hasChildren: (id) => (childCounts.get(id) ?? 0) > 0,
@@ -536,6 +546,8 @@ export function createFakeEngine(): FakeEngine {
         visibleRows: (options) => structural.visibleRows(options),
         visibleRowCount: (expanded, includeIgnored) =>
           structural.visibleRowCount(expanded, includeIgnored),
+        visibleRowIndex: (id, expanded, includeIgnored) =>
+          structural.visibleRowIndex(id, expanded, includeIgnored),
         getById: (id) => structural.getById(id),
         directChildCount: (id) => structural.directChildCount(id),
         hasChildren: (id) => structural.hasChildren(id),

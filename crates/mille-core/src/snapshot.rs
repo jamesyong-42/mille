@@ -204,6 +204,45 @@ impl StoreSnapshot {
         }
     }
 
+    /// Exact logical index of `target` in the flattened visible order.
+    ///
+    /// Unlike repeated offset-based `visible_rows` probes, this performs one
+    /// payload-free DFS and stops as soon as the target is reached.
+    pub fn visible_row_index(
+        &self,
+        target: EntryId,
+        expanded: &HashSet<EntryId>,
+        include_ignored: bool,
+    ) -> Option<u32> {
+        let mut index: u32 = 0;
+        let mut stack: Vec<EntryId> = Vec::new();
+        for &root in self.roots.iter().rev() {
+            stack.push(root);
+        }
+
+        while let Some(id) = stack.pop() {
+            let Some(entry) = self.entries.get(&id) else {
+                continue;
+            };
+            let visible = include_ignored || entry_counts_visible(entry);
+            if !visible {
+                continue;
+            }
+            if id == target {
+                return Some(index);
+            }
+            index = index.saturating_add(1);
+            if expanded.contains(&id) {
+                if let Some(kids) = self.children.get(&id) {
+                    for &child in kids.iter().rev() {
+                        stack.push(child);
+                    }
+                }
+            }
+        }
+        None
+    }
+
     /// Flattened visible rows in display order, sliced by `offset`/`limit`.
     /// Early-terminates the DFS once `limit` rows are collected, so large
     /// subtrees beyond the viewport don't get materialized.
@@ -542,6 +581,9 @@ mod tests {
         let depths: Vec<u16> = rows.iter().map(|r| r.depth).collect();
         assert_eq!(ids, vec![r, a, b, c]);
         assert_eq!(depths, vec![0, 1, 1, 1]);
+        assert_eq!(snap.visible_row_index(r, &expanded, false), Some(0));
+        assert_eq!(snap.visible_row_index(b, &expanded, false), Some(2));
+        assert_eq!(snap.visible_row_index(EntryId(99), &expanded, false), None);
     }
 
     #[test]
@@ -573,6 +615,8 @@ mod tests {
         assert_eq!(rows[0].id, r);
         assert!(rows[0].has_children);
         assert!(!rows[0].is_expanded);
+        assert_eq!(snap.visible_row_index(r, &expanded, false), Some(0));
+        assert_eq!(snap.visible_row_index(a, &expanded, false), None);
     }
 
     #[test]
@@ -846,6 +890,23 @@ mod tests {
             let vc = snap.visible_row_count(&expanded, include_ignored).known;
             let naive = snap.visible_row_count_naive(&expanded, include_ignored);
             proptest::prop_assert_eq!(vc, naive);
+
+            let rows = snap.visible_rows(VisibleRowsQuery {
+                expanded: &expanded,
+                offset: 0,
+                limit: u32::MAX,
+                include_ignored,
+            });
+            for id in ids {
+                let expected = rows
+                    .iter()
+                    .position(|row| row.id == id)
+                    .map(|index| index as u32);
+                proptest::prop_assert_eq!(
+                    snap.visible_row_index(id, &expanded, include_ignored),
+                    expected
+                );
+            }
         }
     }
 }

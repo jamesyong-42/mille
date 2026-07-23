@@ -159,15 +159,18 @@ interface DragDropEngine {
     readonly remove?: readonly EntryId[];
   }): void;
   /**
-   * Optional — some engine builds accept external source paths for
-   * drag-in. We duck-type-check at runtime before calling.
+   * Import an absolute filesystem path into a workspace folder. Required
+   * for external drag-in; empty-file create placeholders are not used.
    */
   copyFromPath?(
     sourcePath: string,
     targetParentId: EntryId,
     newName?: string,
+    options?: {
+      readonly crossRoot?: boolean;
+      readonly collision?: 'error' | 'rename';
+    },
   ): Promise<unknown>;
-  /** Fallback used if `copyFromPath` is unavailable. */
   create?(
     parentId: EntryId,
     name: string,
@@ -804,66 +807,40 @@ export function useFileTreeDragDrop(
     paths: readonly string[],
     targetParentId: EntryId,
   ): Promise<void> {
-    // Preferred path: engine exposes `copyFromPath(sourcePath, parentId)`.
-    if (typeof fx.copyFromPath === 'function') {
-      for (const p of paths) {
-        try {
-          await fx.copyFromPath(p, targetParentId);
-        } catch {
-          /* swallow */
-        }
-      }
-      return;
+    // Real content import requires `copyFromPath`. Empty-file create
+    // placeholders are intentionally not used — they hide data loss.
+    if (typeof fx.copyFromPath !== 'function') {
+      throw new Error(
+        'external drag-in requires fx.copyFromPath(sourcePath, parentId)',
+      );
     }
-    // Fallback: `fx.copy` in some engine builds accepts `(sourcePath,
-    // parentId)` via overloaded signature. We duck-type-check by
-    // calling with the string and catching synchronous TypeErrors.
-    const maybeCopy = fx as unknown as {
-      copy?: (a: unknown, b: EntryId) => Promise<unknown>;
-    };
-    if (typeof maybeCopy.copy === 'function') {
-      let strokeUsed = false;
-      for (const p of paths) {
-        try {
-          const result = maybeCopy.copy(p as unknown as EntryId, targetParentId);
-          if (result && typeof (result as Promise<unknown>).then === 'function') {
-            await result;
-            strokeUsed = true;
-            continue;
-          }
-        } catch {
-          /* fall through to create */
-        }
-        // Fallback to `fx.create` — the renderer is expected to copy
-        // the file content out-of-band (via fs.cp or similar). Here we
-        // synthesize only the entry with the source basename so the UI
-        // registers a placeholder.
-        if (typeof fx.create === 'function') {
-          const basename = p.split('/').filter(Boolean).pop() ?? 'dropped';
-          try {
-            await fx.create(targetParentId, basename, KIND_FILE);
-          } catch {
-            /* swallow */
-          }
-        }
-      }
-      if (strokeUsed) return;
-      return;
-    }
-    // Last-ditch: create-only fallback.
-    if (typeof fx.create === 'function') {
-      for (const p of paths) {
-        const basename = p.split('/').filter(Boolean).pop() ?? 'dropped';
-        try {
-          await fx.create(targetParentId, basename, KIND_FILE);
-        } catch {
-          /* swallow */
-        }
+    const failures: Array<{ path: string; error: unknown }> = [];
+    for (const p of paths) {
+      try {
+        await fx.copyFromPath(p, targetParentId, undefined, {
+          collision,
+        });
+      } catch (error) {
+        failures.push({ path: p, error });
       }
     }
-    // If neither path is available there's nothing we can do — the
-    // tree emits no action. Consumers that care should install the
-    // engine feature-flag before wiring DnD.
+    if (failures.length === 0) return;
+    const detail = failures
+      .map(({ path, error }) => {
+        const message =
+          error instanceof Error
+            ? error.message
+            : typeof error === 'string'
+              ? error
+              : 'unknown error';
+        return `${path}: ${message}`;
+      })
+      .join('; ');
+    const err = new Error(
+      `external import failed for ${failures.length} of ${paths.length} path(s): ${detail}`,
+    );
+    (err as { failures?: typeof failures }).failures = failures;
+    throw err;
   }
 
   const onDragEnd = useCallback(

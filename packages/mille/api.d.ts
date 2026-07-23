@@ -610,6 +610,17 @@ export declare class FileExplorer implements Disposable {
     newName?: string,
     options?: TransferOptions,
   ): Promise<Entry>;
+  /**
+   * Import an absolute filesystem path into a workspace folder. Files and
+   * directories copy recursively with content preserved. Failures surface as
+   * `FileSystemError` and never create empty placeholder entries.
+   */
+  copyFromPath(
+    sourcePath: string,
+    newParentId: EntryId,
+    newName?: string,
+    options?: TransferOptions,
+  ): Promise<Entry>;
 
   // I/O
   readFile(id: EntryId, signal?: AbortSignal): Promise<Uint8Array>;

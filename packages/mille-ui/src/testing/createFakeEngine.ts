@@ -85,6 +85,14 @@ export interface FakeEngineCalls {
       | { readonly crossRoot?: boolean; readonly collision?: 'error' | 'rename' }
       | undefined;
   }>;
+  copyFromPath: Array<{
+    sourcePath: string;
+    newParentId: EntryId;
+    newName: string | undefined;
+    options:
+      | { readonly crossRoot?: boolean; readonly collision?: 'error' | 'rename' }
+      | undefined;
+  }>;
   setExpanded: Array<{ add: readonly EntryId[]; remove: readonly EntryId[] }>;
   setViewport: Array<{ offset: number; limit: number; overscan: number | undefined }>;
   resync: Array<{ id: EntryId; recursive: boolean }>;
@@ -120,6 +128,12 @@ export interface FakeEngine {
   ): Promise<Entry>;
   copy(
     id: EntryId,
+    newParentId: EntryId,
+    newName?: string,
+    options?: { readonly crossRoot?: boolean; readonly collision?: 'error' | 'rename' },
+  ): Promise<Entry>;
+  copyFromPath(
+    sourcePath: string,
     newParentId: EntryId,
     newName?: string,
     options?: { readonly crossRoot?: boolean; readonly collision?: 'error' | 'rename' },
@@ -320,6 +334,7 @@ export function createFakeEngine(): FakeEngine {
     delete: [],
     move: [],
     copy: [],
+    copyFromPath: [],
     setExpanded: [],
     setViewport: [],
     resync: [],
@@ -482,6 +497,20 @@ export function createFakeEngine(): FakeEngine {
       const entry: Entry = prev
         ? { ...prev, id: newId, parentId: newParentId, name: newName ?? prev.name }
         : synthesizeEntry(newId, newParentId, newName ?? String(newId), 0);
+      engine.emitDelta({
+        treeVersion: current.treeVersion + 1,
+        decorationVersion: current.decorationVersion,
+      });
+      return entry;
+    },
+    copyFromPath: async (sourcePath, newParentId, newName, options) => {
+      calls.copyFromPath.push({ sourcePath, newParentId, newName, options });
+      const newId = allocId();
+      const basename =
+        newName ??
+        sourcePath.split(/[/\\]/).filter(Boolean).pop() ??
+        'imported';
+      const entry: Entry = synthesizeEntry(newId, newParentId, basename, 0);
       engine.emitDelta({
         treeVersion: current.treeVersion + 1,
         decorationVersion: current.decorationVersion,

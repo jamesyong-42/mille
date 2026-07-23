@@ -1054,12 +1054,29 @@ await fx.move(entryId, destinationFolderId, undefined, {
 
 `collision: 'error'` is the default and returns `EEXIST` before changing disk.
 `'rename'` chooses the first free deterministic suffix (`file copy.txt`,
-`file copy 2.txt`, …). The same options apply to `copy`. Same-volume directory
-moves preserve the complete known subtree identity; cross-device moves return
-`EUNSUPPORTED` without partial store mutation until the Phase 4 copy/delete
-fallback lands. Recursive directory copy and overwrite/merge prompting also
-remain Phase 4 work. `FileTree` drag/drop defaults to `crossRoot: false` and
-forwards both options when enabled.
+`file copy 2.txt`, …). The same options apply to `copy` and `copyFromPath`.
+Same-volume directory moves preserve the complete known subtree identity;
+cross-device moves return `EUNSUPPORTED` without partial store mutation until
+the Phase 4 copy/delete fallback lands. Overwrite/merge prompting, progress,
+cancellation, and undo remain later Phase 4 work.
+
+### External import (`copyFromPath`)
+
+OS drag-in and any host-driven import use:
+
+```ts
+await fx.copyFromPath('/absolute/source/path', destinationFolderId, undefined, {
+  collision: 'rename',
+});
+```
+
+Files and directories copy recursively with content preserved. Failures surface
+as structured `FileSystemError`s and never create empty placeholder files.
+Partial directory copies best-effort remove the incomplete destination.
+`FileTree` external drops require `copyFromPath` and report per-item failures
+instead of silently inventing empty entries. `FileTree` drag/drop defaults to
+`crossRoot: false` and forwards collision policy for both internal and external
+transfers.
 
 Counts, indexes, typeahead, host viewports, and port mirrors use the same leaf
 identity. In roots-only mode the host follows the chain with bounded depth-1

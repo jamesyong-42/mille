@@ -77,15 +77,24 @@ test('mutations record call args and synthesize a delta', async () => {
   await fx.delete(10_001, { trash: true });
   await fx.move(10_001, 42);
   await fx.copy(10_001, 42, 'c.ts');
+  await fx.copyFromPath('/tmp/outside.txt', 42, 'imported.txt');
 
   assert.deepEqual(fx.calls.create, [{ parentId: 0, name: 'a.ts', kind: 0 }]);
   assert.equal(fx.calls.rename.length, 1);
   assert.equal(fx.calls.delete.length, 1);
   assert.equal(fx.calls.move.length, 1);
   assert.equal(fx.calls.copy.length, 1);
+  assert.deepEqual(fx.calls.copyFromPath, [
+    {
+      sourcePath: '/tmp/outside.txt',
+      newParentId: 42,
+      newName: 'imported.txt',
+      options: undefined,
+    },
+  ]);
 
   const after = fx.getSnapshot();
-  assert.ok(after.treeVersion >= before.treeVersion + 5);
+  assert.ok(after.treeVersion >= before.treeVersion + 6);
 });
 
 test('setExpanded + setViewport record their calls without notifying', () => {

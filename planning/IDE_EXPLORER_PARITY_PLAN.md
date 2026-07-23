@@ -1,6 +1,6 @@
 # IDE Explorer Parity Implementation Plan
 
-**Status:** active — Phase 0 complete, Phases 1–3 in progress
+**Status:** active — Phases 0–3 complete for planned scope; Phase 4.1 external import landed, 4.2–4.4 open
 **Created:** 2026-07-21  
 **Baseline assessment:**
 [IDE_EXPLORER_PARITY_ASSESSMENT.md](./IDE_EXPLORER_PARITY_ASSESSMENT.md)
@@ -826,9 +826,10 @@ filesystem tests cover deny/allow, collision rollback/suffixing, same-root
 reparent, directory descendant identity, retained snapshots, and two-client
 completion; DnD tests cover policy forwarding. The 8,195-entry, 30-sample
 alternating-root gate measured 13.192 ms median and 14.434 ms p95 against a
-16 ms budget. This completes the Phase 3.2 engine/UI primitive scope. Phase 4
-still owns recursive directory copy, cross-device copy/delete fallback,
-overwrite/merge/skip prompting, progress, cancellation, and undo/recovery.
+16 ms budget. This completes the Phase 3.2 engine/UI primitive scope. Phase 4.1
+adds recursive directory copy and external `copyFromPath`; remaining Phase 4
+work is cross-device copy/delete fallback, overwrite/merge/skip prompting,
+progress, cancellation, and undo/recovery.
 
 #### 3.3 Persist navigation state
 
@@ -1029,6 +1030,23 @@ recoverable, and safe.
 - Support multiple paths, recursive directories, and cross-device copies.
 - Remove the placeholder-file fallback.
 - Surface per-item failure instead of swallowing errors.
+
+First external-import result (2026-07-23): `copyFromPath(sourcePath, parentId,
+newName?, options?)` is wired through native, local `FileExplorer`, host
+mutation dispatch, and port clients. Files and directories copy recursively with
+content preserved; collision policy reuses `error`/`rename` from transfer
+options; missing sources and collisions surface as structured
+`FileSystemError`s. Partial directory failures best-effort remove the
+destination. Internal `copy` also gained recursive directory support via the
+same disk helper. `FileTree` external drops no longer call `create()` for empty
+placeholders — they require `copyFromPath` and throw a multi-path error when
+any item fails. Four integration tests cover file content, recursive trees,
+missing sources, and port fan-out; the UI DnD and fake-engine suites assert the
+new path. `pnpm bench:copy-from-path` gates single-file and 256-file directory
+import latency. On release macOS arm64 the gate measured file import at 0.544
+ms median / 0.704 ms p95 and a 256-file directory at 70.312 / 85.483 ms against
+50/200 ms ceilings. Remaining Phase 4 work is collision prompting (4.2),
+progress/cancellation (4.3), and trash/undo recovery (4.4).
 
 #### 4.2 Add collision policy
 

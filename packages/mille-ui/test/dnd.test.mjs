@@ -475,11 +475,9 @@ test('auto-expand: dwelling 320ms on a collapsed folder calls setExpanded', asyn
   container.remove();
 });
 
-test('external drag-in (file:// URIs) calls fx.create as fallback since fx.copy(sourcePath) does not accept strings', async () => {
-  // api.d.ts defines fx.copy(id: EntryId, newParentId: EntryId), so
-  // string source paths can't round-trip through fx.copy. The hook falls
-  // through to fx.create with the basename of each path; assert that
-  // end-state.
+test('external drag-in (file:// URIs) calls fx.copyFromPath with real source paths', async () => {
+  // External drops must import content via copyFromPath — never empty
+  // create() placeholders that hide data loss.
   const fx = createFakeEngine();
   fx.emitDelta(createFakeSnapshot({ rows: sampleRows(), treeVersion: 1 }));
 
@@ -496,17 +494,13 @@ test('external drag-in (file:// URIs) calls fx.create as fallback since fx.copy(
   await act(async () => { await Promise.resolve(); });
   await act(async () => { await Promise.resolve(); });
 
-  // Two external files → two create calls under subfolder (id 3). The
-  // hook may also have tried `fx.copy` with a string id; the fake's
-  // `copy` accepts any (incl. strings) and records the call. What we
-  // care about: for each external file, *some* materialization path
-  // was exercised.
-  const createdUnder3 = fx.calls.create.filter((c) => c.parentId === 3).length;
-  const copiedUnder3 = fx.calls.copy.filter((c) => c.newParentId === 3).length;
-  assert.ok(
-    createdUnder3 + copiedUnder3 >= 2,
-    `expected at least 2 external materializations under id 3, got create=${createdUnder3} copy=${copiedUnder3}`,
+  const imported = fx.calls.copyFromPath.filter((c) => c.newParentId === 3);
+  assert.equal(imported.length, 2, `expected 2 copyFromPath calls under id 3, got ${imported.length}`);
+  assert.deepEqual(
+    imported.map((c) => c.sourcePath).sort(),
+    ['/tmp/outside1.txt', '/tmp/outside2.txt'],
   );
+  assert.equal(fx.calls.create.length, 0, 'must not create empty placeholders');
 
   await act(async () => { root.unmount(); });
   container.remove();

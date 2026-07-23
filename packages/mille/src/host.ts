@@ -1094,6 +1094,18 @@ class FileExplorerHostImpl implements FileExplorerHost {
           args.newName as string | undefined,
           args.options as TransferOptions | undefined,
         );
+      case 'copyFromPath': {
+        const sourcePath = args.sourcePath;
+        if (typeof sourcePath !== 'string' || sourcePath.length === 0) {
+          throw new Error('copyFromPath requires a non-empty sourcePath string');
+        }
+        return this.explorer.copyFromPath(
+          sourcePath,
+          args.newParentId as EntryId,
+          args.newName as string | undefined,
+          args.options as TransferOptions | undefined,
+        );
+      }
       case 'readFile': {
         const buf = await this.explorer.readFile(args.id as EntryId);
         // Convert Uint8Array to a plain array so structured clone ships

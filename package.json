@@ -30,6 +30,7 @@
     "bench:root-churn": "node packages/mille/bench/workspace-root-churn.mjs",
     "bench:root-availability": "node packages/mille/bench/root-availability.mjs",
     "bench:resync": "node packages/mille/bench/resync.mjs",
+    "bench:copy-from-path": "node packages/mille/bench/copy-from-path.mjs",
     "bench:cross-root": "node packages/mille/bench/cross-root-transfer.mjs",
     "bench:open-policy": "node apps/playground/scripts/editor-tab-churn-bench.mjs",
     "bench:active-policy": "node packages/mille-ui/bench/active-entry-policy.mjs",

@@ -134,6 +134,18 @@ complete reverse-path rewrite, and public path verification. It enforces a
 16 ms p95 gate; fixture size, warmups, samples, and budget use
 `MILLE_CROSS_ROOT_*`.
 
+## External path import
+
+```sh
+pnpm bench:copy-from-path
+```
+
+The harness imports one absolute file and a 256-file external directory into a
+fresh inbox per sample (20 samples, 3 warmups). Every sample verifies payload
+content on disk. Default p95 gates are 50 ms for a single file and 200 ms for
+the directory tree; fixture size, warmups, samples, and budgets use the
+`MILLE_COPY_FROM_PATH_*` environment variables.
+
 ## Authoritative subtree resync
 
 ```sh

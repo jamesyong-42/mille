@@ -65,6 +65,7 @@
     "bench:root-churn": "node bench/workspace-root-churn.mjs",
     "bench:root-availability": "node bench/root-availability.mjs",
     "bench:resync": "node bench/resync.mjs",
+    "bench:copy-from-path": "node bench/copy-from-path.mjs",
     "bench:cross-root": "node bench/cross-root-transfer.mjs",
     "bench:watch:soak": "node bench/watch-soak.mjs",
     "artifacts": "napi artifacts",

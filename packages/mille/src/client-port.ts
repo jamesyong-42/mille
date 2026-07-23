@@ -397,6 +397,18 @@ export class PortFileExplorer {
     return this.mutate('copy', args);
   }
 
+  copyFromPath(
+    sourcePath: string,
+    newParentId: number,
+    newName?: string,
+    options?: TransferOptions,
+  ): Promise<unknown> {
+    const args: Record<string, unknown> = { sourcePath, newParentId };
+    if (newName !== undefined) args.newName = newName;
+    if (options !== undefined) args.options = options;
+    return this.mutate('copyFromPath', args);
+  }
+
   async readFile(id: number): Promise<Uint8Array> {
     const data = (await this.mutate('readFile', { id })) as number[];
     return Uint8Array.from(data);

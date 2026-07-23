@@ -382,8 +382,9 @@ end-user behavior:
   are not integrated explorer experiences;
 - the command registry is extensible, but the built-in context menu is much
   smaller than a mature IDE's;
-- drag-in accepts external file paths, but without `copyFromPath` it can create
-  only empty placeholder entries and currently suppresses copy errors.
+- drag-in imports absolute paths through `copyFromPath` with real content and
+  per-item error reporting; collision prompting, progress, cancellation, and
+  undo remain Phase 4 follow-ups.
 
 ### 4. Explorer settings and state persistence are incomplete
 
@@ -444,7 +445,7 @@ Reference behavior:
 | Missed or delayed file events           | The visible tree can disagree with disk                         | Native watcher, coalescing, subtree reconciliation            | Current watcher tests fail; overflow and soak proof are incomplete |
 | UI churn under event storms             | Flicker, focus loss, scroll jumps, unusable interactions        | Stable row identity, memoization, virtualization, transitions | No real-browser churn gate                                         |
 | Native/TypeScript artifact mismatch     | Tests and shipped behavior can use different implementations    | Platform packages and build scripts                           | Runtime build identity and clean-build verification are weak       |
-| Partial external import                 | Data loss or empty placeholder files                            | Fallback makes the drop visible                               | Content copy and error reporting are not implemented               |
+| Partial external import                 | Data loss or empty placeholder files                            | `copyFromPath` + partial cleanup + per-item errors            | Collision prompts, progress, cancel, and undo still open           |
 | Feature breadth hiding integration cost | A checklist can look complete while host behavior is missing    | Extensible commands, hooks, and decorations                   | No integrated reference host acceptance suite                      |
 | Accessibility regressions               | A semantically valid tree can still be difficult with actual AT | ARIA and keyboard unit tests                                  | No VoiceOver/NVDA/browser matrix                                   |
 

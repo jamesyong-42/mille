@@ -4,6 +4,10 @@
 
 ### Added
 
+- **Real external import via `copyFromPath`** — OS drag-in requires the engine
+  `copyFromPath` API and imports file/directory contents instead of creating
+  empty placeholder entries. Per-item failures are collected and reported;
+  partial directory copies do not leave silent empty files.
 - **Root-aware scoped-search handoff** — folder menus add Find in Folder,
   Include in Search, and Exclude from Search. `onSearchScope` receives a
   provider-neutral, bounded, atomic request containing exact root-aware

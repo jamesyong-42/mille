@@ -1428,8 +1428,8 @@ impl FileExplorer {
         Ok(())
     }
 
-    /// Copy a file under a new parent. Recursive directory copy remains a
-    /// later transfer-pipeline feature.
+    /// Copy a file or directory under a new parent. Directories copy
+    /// recursively with content preserved.
     #[napi]
     pub async fn copy(
         &self,
@@ -1463,11 +1463,6 @@ impl FileExplorer {
                 id
             )))
         })?;
-        if src_entry.kind == EntryKind::Directory {
-            return Err(fx_error_to_napi(FxError::Unsupported(
-                "recursive directory copy is not supported yet".into(),
-            )));
-        }
         let destination_parent = snap.get(new_parent_eid).ok_or_else(|| {
             fx_error_to_napi(FxError::InvalidInput(format!(
                 "new_parent id {} vanished mid-copy",
@@ -1496,9 +1491,71 @@ impl FileExplorer {
                 .await
                 .map_err(fx_error_to_napi)?;
 
-        tokio::fs::copy(&src_path, &dst_path)
-            .await
-            .map_err(|e| fx_error_to_napi(io_to_fx(e, dst_path.clone())))?;
+        if src_entry.kind == EntryKind::Directory {
+            if dst_path == src_path || dst_path.starts_with(&src_path) {
+                return Err(fx_error_to_napi(FxError::InvalidInput(
+                    "cannot copy a directory into itself or a descendant".into(),
+                )));
+            }
+            if let Err(error) = copy_tree_on_disk(&src_path, &dst_path).await {
+                let _ = remove_path_best_effort(&dst_path).await;
+                return Err(fx_error_to_napi(error));
+            }
+            self.record_intent(dst_path.clone(), IntentKind::Create);
+            use mille_core::{populate_store_with_provenance, walk, WalkOptions};
+            let workspace_root = destination_root.ok_or_else(|| {
+                fx_error_to_napi(FxError::InvalidInput(
+                    "copy destination is not under a configured root".into(),
+                ))
+            })?;
+            let mut root_entry = stat_to_entry(&dst_path, Some(new_parent_eid), effective_name)
+                .await
+                .map_err(fx_error_to_napi)?;
+            let _policy_guard = self.policy_gate.lock();
+            let exclude_matchers = self.current_exclude_matchers().map_err(fx_error_to_napi)?;
+            root_entry.is_excluded =
+                Self::path_is_excluded(&dst_path, &root_entry, &exclude_matchers);
+            let new_id = self
+                .store
+                .insert(dst_path.clone(), root_entry)
+                .map_err(fx_error_to_napi)?;
+            let walked = walk(
+                &dst_path,
+                WalkOptions {
+                    max_depth: None,
+                    follow_symlinks: self.options.follow_symlinks,
+                    include_hidden: true,
+                    include_root: false,
+                    parallelism: self.options.walker_concurrency,
+                },
+            )
+            .map_err(fx_error_to_napi)?;
+            let filtered: Vec<_> = walked
+                .into_iter()
+                .filter(|w| self.store.get_by_path(&w.path).is_none())
+                .collect();
+            if !filtered.is_empty() {
+                populate_store_with_provenance(
+                    &self.store,
+                    &workspace_root,
+                    &filtered,
+                    None,
+                    None,
+                )
+                .map_err(fx_error_to_napi)?;
+                self.reclassify_current_excludes()
+                    .map_err(fx_error_to_napi)?;
+            }
+            let arc = self.store.get_by_id(new_id).ok_or_else(|| {
+                Error::from_reason("directory copy succeeded but id vanished")
+            })?;
+            return Ok(EntryJs::from_core(arc.as_ref()));
+        }
+
+        if let Err(error) = copy_tree_on_disk(&src_path, &dst_path).await {
+            let _ = remove_path_best_effort(&dst_path).await;
+            return Err(fx_error_to_napi(error));
+        }
         self.record_intent(dst_path.clone(), IntentKind::Create);
 
         let mut entry = stat_to_entry(&dst_path, Some(new_parent_eid), effective_name)
@@ -1516,6 +1573,181 @@ impl FileExplorer {
             .store
             .get_by_id(new_id)
             .ok_or_else(|| Error::from_reason("copy succeeded but id vanished"))?;
+        Ok(EntryJs::from_core(arc.as_ref()))
+    }
+
+    /// Copy a filesystem path that may live outside the workspace into a
+    /// destination folder under a configured root. Files keep content and
+    /// metadata-friendly mode bits via the OS copy; directories copy
+    /// recursively. Existing destinations follow `TransferOptions.collision`
+    /// (`error` default, or `rename` for a free suffix). Per-item failures
+    /// surface as structured `FileSystemError`s without creating empty
+    /// placeholder files.
+    #[napi(js_name = "copyFromPath")]
+    pub async fn copy_from_path(
+        &self,
+        source_path: String,
+        new_parent_id: i64,
+        new_name: Option<String>,
+        options: Option<TransferOptionsJs>,
+    ) -> Result<EntryJs> {
+        let src_path = PathBuf::from(&source_path);
+        if !src_path.is_absolute() {
+            return Err(fx_error_to_napi(FxError::InvalidInput(format!(
+                "copyFromPath source must be absolute: {source_path}"
+            ))));
+        }
+        let new_parent_eid = EntryId(new_parent_id as u64);
+        let (_, collision) = transfer_policy(options.as_ref()).map_err(fx_error_to_napi)?;
+
+        let new_parent_path = resolve_entry_path(&self.store, new_parent_eid).ok_or_else(|| {
+            fx_error_to_napi(FxError::InvalidInput(format!(
+                "new_parent id {new_parent_id} not found in snapshot"
+            )))
+        })?;
+        let snap = self.store.snapshot();
+        let destination_parent = snap.get(new_parent_eid).ok_or_else(|| {
+            fx_error_to_napi(FxError::InvalidInput(format!(
+                "new_parent id {new_parent_id} vanished mid-copyFromPath"
+            )))
+        })?;
+        if destination_parent.kind != EntryKind::Directory
+            && destination_parent.symlink_target_is_dir != Some(true)
+        {
+            return Err(fx_error_to_napi(FxError::InvalidInput(
+                "copyFromPath destination is not a directory".into(),
+            )));
+        }
+
+        let roots = self.roots.read().clone();
+        let destination_root = configured_root_for_path(&roots, &new_parent_path).ok_or_else(|| {
+            fx_error_to_napi(FxError::InvalidInput(
+                "copyFromPath destination is not under a configured root".into(),
+            ))
+        })?;
+
+        let src_meta = tokio::fs::symlink_metadata(&src_path)
+            .await
+            .map_err(|e| fx_error_to_napi(io_to_fx(e, src_path.clone())))?;
+        let desired_name = new_name.unwrap_or_else(|| {
+            src_path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "imported".to_string())
+        });
+        if desired_name.is_empty()
+            || desired_name == "."
+            || desired_name == ".."
+            || desired_name.contains('/')
+            || desired_name.contains('\\')
+        {
+            return Err(fx_error_to_napi(FxError::InvalidInput(format!(
+                "invalid destination name: {desired_name}"
+            ))));
+        }
+
+        let (effective_name, dst_path) =
+            resolve_transfer_destination(&new_parent_path, &desired_name, collision)
+                .await
+                .map_err(fx_error_to_napi)?;
+
+        // Reject self/descendant cycles for directory sources.
+        if src_meta.is_dir() || src_meta.file_type().is_symlink() {
+            if let Ok(true) = tokio::fs::metadata(&src_path).await.map(|m| m.is_dir()) {
+                if dst_path == src_path || dst_path.starts_with(&src_path) {
+                    return Err(fx_error_to_napi(FxError::InvalidInput(
+                        "cannot copy a directory into itself or a descendant".into(),
+                    )));
+                }
+            }
+        }
+
+        // On mid-copy failure, remove any partial destination so we never
+        // leave empty placeholder files behind.
+        if let Err(error) = copy_tree_on_disk(&src_path, &dst_path).await {
+            let _ = remove_path_best_effort(&dst_path).await;
+            return Err(fx_error_to_napi(error));
+        }
+        self.record_intent(dst_path.clone(), IntentKind::Create);
+
+        // Index the new material. Files insert directly; directories walk
+        // and populate so nested content is immediately visible.
+        let dst_meta = tokio::fs::symlink_metadata(&dst_path)
+            .await
+            .map_err(|e| fx_error_to_napi(io_to_fx(e, dst_path.clone())))?;
+        let is_dir = dst_meta.is_dir()
+            || (dst_meta.file_type().is_symlink()
+                && tokio::fs::metadata(&dst_path)
+                    .await
+                    .map(|m| m.is_dir())
+                    .unwrap_or(false));
+
+        if !is_dir {
+            let mut entry = stat_to_entry(&dst_path, Some(new_parent_eid), effective_name)
+                .await
+                .map_err(fx_error_to_napi)?;
+            let _policy_guard = self.policy_gate.lock();
+            let exclude_matchers = self.current_exclude_matchers().map_err(fx_error_to_napi)?;
+            entry.is_excluded = Self::path_is_excluded(&dst_path, &entry, &exclude_matchers);
+            let new_id = self
+                .store
+                .insert(dst_path.clone(), entry)
+                .map_err(fx_error_to_napi)?;
+            let arc = self
+                .store
+                .get_by_id(new_id)
+                .ok_or_else(|| Error::from_reason("copyFromPath succeeded but id vanished"))?;
+            return Ok(EntryJs::from_core(arc.as_ref()));
+        }
+
+        // Directory: insert the destination root under the real parent, then
+        // walk only descendants. Walk roots report parent_path=None, so using
+        // include_root would attach the imported folder as a spurious root.
+        use mille_core::{populate_store_with_provenance, walk, WalkOptions};
+        let mut root_entry = stat_to_entry(&dst_path, Some(new_parent_eid), effective_name)
+            .await
+            .map_err(fx_error_to_napi)?;
+        let _policy_guard = self.policy_gate.lock();
+        let exclude_matchers = self.current_exclude_matchers().map_err(fx_error_to_napi)?;
+        root_entry.is_excluded =
+            Self::path_is_excluded(&dst_path, &root_entry, &exclude_matchers);
+        let new_id = self
+            .store
+            .insert(dst_path.clone(), root_entry)
+            .map_err(fx_error_to_napi)?;
+        let walked = walk(
+            &dst_path,
+            WalkOptions {
+                max_depth: None,
+                follow_symlinks: self.options.follow_symlinks,
+                include_hidden: true,
+                include_root: false,
+                parallelism: self.options.walker_concurrency,
+            },
+        )
+        .map_err(fx_error_to_napi)?;
+        let filtered: Vec<_> = walked
+            .into_iter()
+            .filter(|w| self.store.get_by_path(&w.path).is_none())
+            .collect();
+        if !filtered.is_empty() {
+            populate_store_with_provenance(
+                &self.store,
+                &destination_root,
+                &filtered,
+                None,
+                None,
+            )
+            .map_err(fx_error_to_napi)?;
+            self.reclassify_current_excludes()
+                .map_err(fx_error_to_napi)?;
+        }
+
+        let arc = self
+            .store
+            .get_by_id(new_id)
+            .ok_or_else(|| Error::from_reason("copyFromPath directory copy succeeded but id vanished"))?;
         Ok(EntryJs::from_core(arc.as_ref()))
     }
 
@@ -2020,6 +2252,71 @@ fn configured_root_for_path(roots: &[PathBuf], path: &Path) -> Option<PathBuf> {
         .filter(|root| path == root.as_path() || path.starts_with(root))
         .max_by_key(|root| root.components().count())
         .cloned()
+}
+
+/// Recursively copy a file or directory tree on disk. Symlinks are followed so
+/// imported material is self-contained under the destination root.
+async fn copy_tree_on_disk(
+    src: &Path,
+    dst: &Path,
+) -> std::result::Result<(), FxError> {
+    let meta = tokio::fs::symlink_metadata(src)
+        .await
+        .map_err(|e| io_to_fx(e, src.to_path_buf()))?;
+
+    if meta.file_type().is_symlink() {
+        let target_meta = tokio::fs::metadata(src)
+            .await
+            .map_err(|e| io_to_fx(e, src.to_path_buf()))?;
+        if !target_meta.is_dir() {
+            tokio::fs::copy(src, dst)
+                .await
+                .map_err(|e| io_to_fx(e, dst.to_path_buf()))?;
+            return Ok(());
+        }
+        // Symlink-to-directory: materialize as a real directory tree below.
+    } else if meta.is_file() {
+        tokio::fs::copy(src, dst)
+            .await
+            .map_err(|e| io_to_fx(e, dst.to_path_buf()))?;
+        return Ok(());
+    } else if !meta.is_dir() {
+        return Err(FxError::Unsupported(format!(
+            "cannot copy special file {:?}",
+            src
+        )));
+    }
+
+    tokio::fs::create_dir(dst)
+        .await
+        .map_err(|e| io_to_fx(e, dst.to_path_buf()))?;
+    let mut rd = tokio::fs::read_dir(src)
+        .await
+        .map_err(|e| io_to_fx(e, src.to_path_buf()))?;
+    while let Some(entry) = rd
+        .next_entry()
+        .await
+        .map_err(|e| io_to_fx(e, src.to_path_buf()))?
+    {
+        let name = entry.file_name();
+        let child_src = entry.path();
+        let child_dst = dst.join(&name);
+        // Box the recursive future so the async fn is Sized.
+        Box::pin(copy_tree_on_disk(&child_src, &child_dst)).await?;
+    }
+    Ok(())
+}
+
+async fn remove_path_best_effort(path: &Path) {
+    let meta = match tokio::fs::symlink_metadata(path).await {
+        Ok(meta) => meta,
+        Err(_) => return,
+    };
+    if meta.is_dir() && !meta.file_type().is_symlink() {
+        let _ = tokio::fs::remove_dir_all(path).await;
+    } else {
+        let _ = tokio::fs::remove_file(path).await;
+    }
 }
 
 async fn resolve_transfer_destination(

@@ -228,6 +228,12 @@ type NativeFx = {
     newName?: string,
     options?: TransferOptions,
   ): Promise<Entry>;
+  copyFromPath(
+    sourcePath: string,
+    newParentId: number,
+    newName?: string,
+    options?: TransferOptions,
+  ): Promise<Entry>;
   readFile(id: number): Promise<Buffer>;
   readText(id: number, encoding?: string): Promise<string>;
   writeFile(id: number, data: Buffer, options?: { atomic?: boolean }): Promise<void>;
@@ -889,6 +895,19 @@ export class FileExplorer {
     options?: TransferOptions,
   ): Promise<Entry> {
     return wrap(this.nativeFx.copy(id, newParentId, newName, options));
+  }
+
+  /**
+   * Import an absolute path from outside the tree into a workspace folder.
+   * Directories copy recursively; failures never create empty placeholders.
+   */
+  copyFromPath(
+    sourcePath: string,
+    newParentId: EntryId,
+    newName?: string,
+    options?: TransferOptions,
+  ): Promise<Entry> {
+    return wrap(this.nativeFx.copyFromPath(sourcePath, newParentId, newName, options));
   }
 
   // ─── I/O ────────────────────────────────────────────────────────────

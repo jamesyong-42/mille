@@ -226,7 +226,10 @@ and lazy host/port regression paths pass, with the port round trip measured at
 The renderer still retains one compact identity per child of an expanded folder;
 eliminating that O(n) cardinality requires a paged/ranked projection protocol,
 not another representation tweak. Maintained rank and name indexes should land
-only if large native traces show their O(n) traversals are material.
+only if large native traces show their O(n) traversals are material. Current
+Criterion evidence is 0.555 ms for last-row rank and 0.746 ms for a full prefix
+miss at 8,590 visible entries. The explicit re-open trigger is a production
+trace above 100,000 visible rows or a query p95 above 16 ms.
 
 ## What is already strong
 

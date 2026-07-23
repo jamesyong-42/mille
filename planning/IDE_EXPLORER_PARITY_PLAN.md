@@ -501,8 +501,8 @@ order now crosses the host boundary in one packed buffer and stays in the
 renderer as zero-copy typed-array views. IDs in the normal u32 allocator range
 use exactly four bytes each, with a safe-f64 fallback for larger IDs; the legacy
 JS-array field remains a negotiated protocol-v1 compatibility fallback.
-Expansion no longer
-duplicates every structural child ID in the session's hydrated-record set, so
+Expansion no longer duplicates every structural child ID in the session's
+hydrated-record set, so
 an offscreen rename refreshes order without promoting that row to a full Entry
 payload. The new million-sibling gate retains 1,000,000 identities in 4,000,024
 bytes (**4.000 bytes/id**), hydrates zero full records, and measured packed
@@ -513,6 +513,21 @@ harness still holds the 4,096-record cap; its confirmation run reported
 decode+apply p50/p95/max 0.64/0.95/2.59 ms. The remaining Phase 2.4 decision is
 whether real traces justify replacing the renderer's necessarily O(n) identity
 index and native O(n) rank/name traversals with a paged maintained index.
+
+Fifteenth native-rank decision result (2026-07-22): the Criterion suite now
+measures the exact-position and full-prefix-miss paths on both the existing
+medium fixture and a deterministic 8,590-entry large query fixture. Last-row
+position measured 88.85 microseconds at medium scale and 554.94 microseconds at
+8,590 entries; full prefix miss measured 142.66 and 745.71 microseconds. The
+large-fixture slopes imply approximately 6.5/8.7 ms at 100,000 visible entries
+and 32/43 ms at 500,000, respectively; those larger figures are linear
+inferences, not measurements. The maintained-index proposal is deferred:
+position and prefix are discrete interaction fallbacks, current real-size
+queries remain below one frame, and an expansion-sensitive rank/name index
+would add permanent memory plus mutation cost to every project. Re-open the
+design when captured production traces exceed 100,000 visible rows or either
+query's p95 exceeds 16 ms. This closes the evidence question in Phase 2.4
+without committing to speculative index complexity.
 
 #### 2.5 Define state under deletion and errors
 

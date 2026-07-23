@@ -55,6 +55,13 @@ pub fn medium_tree() -> (TempDir, usize) {
     build_tree(3, 5, 10)
 }
 
+/// Large query fixture: ~8,600 entries. Big enough to establish the linear
+/// slope of rank/name traversals without turning benchmark setup into a
+/// filesystem stress test.
+pub fn large_query_tree() -> (TempDir, usize) {
+    build_tree(4, 5, 10)
+}
+
 /// v0.2 B3 — pnpm-class fixture.
 ///
 /// Builds two trees:
@@ -95,6 +102,12 @@ pub fn pnpm_style_fixture(repo_entries: usize, store_entries: usize) -> (TempDir
 mod tests {
     use super::*;
     use std::time::Instant;
+
+    #[test]
+    fn large_query_fixture_has_expected_scale() {
+        let (_tree, entries) = large_query_tree();
+        assert_eq!(entries, 8_590);
+    }
 
     #[cfg(unix)]
     #[test]

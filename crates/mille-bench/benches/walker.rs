@@ -13,7 +13,7 @@
 use std::collections::HashSet;
 
 use criterion::{criterion_group, criterion_main, Criterion};
-use mille_bench::medium_tree;
+use mille_bench::{large_query_tree, medium_tree};
 use mille_core::{
     populate_store, walk, walk_with_ignore, EntryStore, IgnoreMatcher, VisibleRowsQuery,
     WalkOptions,
@@ -165,6 +165,32 @@ fn bench_visible_row_index(c: &mut Criterion) {
     });
 }
 
+fn bench_visible_row_index_large(c: &mut Criterion) {
+    let (td, entry_count) = large_query_tree();
+    let walked = walk(td.path(), WalkOptions::default()).unwrap();
+    assert_eq!(walked.len(), entry_count);
+    let store = EntryStore::new();
+    populate_store(&store, td.path(), &walked, None).unwrap();
+    let snap = store.snapshot();
+    let expanded = expanded_set_all(&store);
+    let target = snap
+        .visible_rows(VisibleRowsQuery {
+            expanded: &expanded,
+            offset: 0,
+            limit: u32::MAX,
+            include_ignored: false,
+        })
+        .last()
+        .expect("large fixture has visible rows")
+        .id;
+
+    c.bench_function("visible_row_index_last_large_8590", |b| {
+        b.iter(|| {
+            let _ = snap.visible_row_index(target, &expanded, false);
+        })
+    });
+}
+
 fn bench_indexed_path_lookup(c: &mut Criterion) {
     let (td, _) = medium_tree();
     let walked = walk(td.path(), WalkOptions::default()).unwrap();
@@ -192,6 +218,22 @@ fn bench_visible_prefix_miss(c: &mut Criterion) {
     let expanded = expanded_set_all(&store);
 
     c.bench_function("visible_prefix_full_miss_medium", |b| {
+        b.iter(|| {
+            let _ = snap.visible_prefix_match("§-absent", None, false, &expanded, false);
+        })
+    });
+}
+
+fn bench_visible_prefix_miss_large(c: &mut Criterion) {
+    let (td, entry_count) = large_query_tree();
+    let walked = walk(td.path(), WalkOptions::default()).unwrap();
+    assert_eq!(walked.len(), entry_count);
+    let store = EntryStore::new();
+    populate_store(&store, td.path(), &walked, None).unwrap();
+    let snap = store.snapshot();
+    let expanded = expanded_set_all(&store);
+
+    c.bench_function("visible_prefix_full_miss_large_8590", |b| {
         b.iter(|| {
             let _ = snap.visible_prefix_match("§-absent", None, false, &expanded, false);
         })
@@ -234,8 +276,10 @@ criterion_group!(
     bench_visible_rows_full,
     bench_visible_row_ids_full,
     bench_visible_row_index,
+    bench_visible_row_index_large,
     bench_indexed_path_lookup,
     bench_visible_prefix_miss,
+    bench_visible_prefix_miss_large,
     bench_pnpm_style_ignore,
 );
 
@@ -250,8 +294,10 @@ criterion_group!(
     bench_visible_rows_full,
     bench_visible_row_ids_full,
     bench_visible_row_index,
+    bench_visible_row_index_large,
     bench_indexed_path_lookup,
     bench_visible_prefix_miss,
+    bench_visible_prefix_miss_large,
 );
 
 criterion_main!(walker);

@@ -7,6 +7,10 @@ import type {
   WatchBenchEvent,
   WatchBenchObservation,
 } from '../shared/watch-bench';
+import type {
+  PlaygroundFileActionRequest,
+  PlaygroundFileActionResult,
+} from '../../scripts/file-actions.mjs';
 
 export interface MillePlaygroundApi {
   pickAndOpenWorkspace(): Promise<string | null>;
@@ -17,6 +21,7 @@ export interface MillePlaygroundApi {
   /** Phase 3 — bounded navigation state keyed by absolute workspace root. */
   getFileTreeNavigationState(root: string): Promise<string | null>;
   saveFileTreeNavigationState(root: string, state: string): Promise<boolean>;
+  performFileAction(request: PlaygroundFileActionRequest): Promise<PlaygroundFileActionResult>;
   /** v0.2 — toggle git decorations (runs in fx utility process). */
   setGitDecorations(enabled: boolean): Promise<void>;
   getWatchBenchConfig(): Promise<WatchBenchConfig | null>;

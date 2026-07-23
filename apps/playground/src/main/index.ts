@@ -1,9 +1,11 @@
 import {
   app,
   BrowserWindow,
+  clipboard,
   dialog,
   ipcMain,
   MessageChannelMain,
+  shell,
   utilityProcess,
   type UtilityProcess,
 } from 'electron';
@@ -11,6 +13,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { cwd } from 'node:process';
 import { readFileSync, statSync, writeFileSync } from 'node:fs';
+import { spawn } from 'node:child_process';
 
 import { WatchBenchController, watchBenchConfigFromEnvironment } from './watch-bench-controller';
 import type { WatchBenchObservation } from '../shared/watch-bench';
@@ -18,6 +21,7 @@ import {
   createNavigationStateStore,
   type NavigationStateStore,
 } from '../../scripts/navigation-state-store.mjs';
+import { performPlaygroundFileAction, terminalLaunchSpec } from '../../scripts/file-actions.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -78,6 +82,7 @@ function recordRecentFolder(path: string): void {
 // looks identical to a stuck handshake; pick-and-open a specific
 // folder via the toolbar to explore anywhere else.
 const DEFAULT_WORKSPACE_ROOT = process.env.WORKSPACE_ROOT ?? cwd();
+let activeWorkspaceRoot = DEFAULT_WORKSPACE_ROOT;
 
 // The currently-running utility process. Replaced on every workspace
 // swap so the old root's watchers/walkers tear down cleanly.
@@ -117,6 +122,7 @@ function forkFxProcess(root: string): UtilityProcess {
  * is the fix.
  */
 function openWorkspace(win: BrowserWindow, root: string): void {
+  activeWorkspaceRoot = root;
   if (fxProcess !== null) {
     try {
       fxProcess.kill();
@@ -148,6 +154,23 @@ function openWorkspace(win: BrowserWindow, root: string): void {
     console.log(`[playground-main] attach+port transferred for ${root}`);
   };
   proc.on('message', onMessage);
+}
+
+async function openTerminal(directory: string): Promise<void> {
+  const spec = terminalLaunchSpec(process.platform, directory, process.env);
+  await new Promise<void>((resolveLaunch, rejectLaunch) => {
+    const child = spawn(spec.command, [...spec.args], {
+      cwd: spec.cwd,
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: false,
+    });
+    child.once('error', rejectLaunch);
+    child.once('spawn', () => {
+      child.unref();
+      resolveLaunch();
+    });
+  });
 }
 
 async function createWindow(): Promise<void> {
@@ -243,6 +266,20 @@ async function createWindow(): Promise<void> {
   ipcMain.handle('save-file-tree-navigation-state', (_evt, root: unknown, state: unknown) => {
     if (typeof root !== 'string' || typeof state !== 'string') return false;
     return navigationStateStore?.set(root, state) ?? false;
+  });
+
+  ipcMain.handle('perform-file-action', async (_evt, request: unknown) => {
+    return performPlaygroundFileAction(request, {
+      activeWorkspaceRoot,
+      writeClipboard: (value) => clipboard.writeText(value),
+      revealInFileManager: (path) => shell.showItemInFolder(path),
+      isDirectory: (path) => statSync(path).isDirectory(),
+      openPath: async (path) => {
+        const error = await shell.openPath(path);
+        if (error.length > 0) throw new Error(error);
+      },
+      openTerminal,
+    });
   });
 
   // Git decorations run in the fx utility process (they shell out to

@@ -13,6 +13,7 @@ import type {
   MirrorSnapshot,
 } from '@vibecook/mille';
 import type { FileOpenEvent } from '../open-policy.js';
+import type { FileActionTarget } from '../file-actions.js';
 
 /**
  * A single invocable command. Commands are the only mutation path in the
@@ -67,7 +68,21 @@ export interface HostHooks {
   onOpen?(entry: Entry, event: FileOpenEvent): void;
   /** Reveal the entry in the host's editor (focus, but don't open). */
   onRevealInEditor?(entry: Entry): void;
-  /** Open a terminal rooted at the given absolute path. */
+  /** Copy an absolute or workspace-relative path through the host clipboard. */
+  copyPath?(
+    target: FileActionTarget,
+    kind: 'absolute' | 'relative',
+  ): void | Promise<void>;
+  /** Reveal the target in Finder, Explorer, or the desktop file manager. */
+  revealInFileManager?(target: FileActionTarget): void | Promise<void>;
+  /** Open the directory itself, or a file's containing directory. */
+  openContainingFolder?(target: FileActionTarget): void | Promise<void>;
+  /** Open a terminal at a directory, or at a file's parent directory. */
+  openTerminalForEntry?(target: FileActionTarget): void | Promise<void>;
+  /**
+   * Open a terminal rooted at the given absolute path.
+   * @deprecated Prefer `openTerminalForEntry`; retained for host compatibility.
+   */
   openTerminal?(path: string): void;
   /** Ask the user to confirm an action. Returning `false` aborts. */
   confirm?(message: string): boolean | Promise<boolean>;

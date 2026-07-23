@@ -4,6 +4,12 @@
 
 ### Added
 
+- **Root-aware file-system host actions** — the default command registry and
+  context menu now provide Copy Absolute Path, Copy Workspace-Relative Path,
+  Reveal in File Manager, Open Containing Folder, and Open in Terminal.
+  `FileTree` exposes narrow async callbacks with a canonical `FileActionTarget`;
+  the Electron playground validates workspace containment in its main process
+  before invoking clipboard, shell, or terminal capabilities.
 - **Active-entry disposition policy** — `activeEntry` descriptors can tag
   generated or external targets; `activeEntryPolicy` controls opt-in reveal of
   hidden, ignored/excluded, and generated entries; and

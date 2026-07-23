@@ -30,15 +30,15 @@ layers of work:
 The scores below are directional, not a claim of mathematical precision. A
 mature IDE explorer is the 10/10 reference point.
 
-| Area                                 | Score | Current assessment                                                                                                                                                                                          |
-| ------------------------------------ | ----: | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Filesystem and renderer architecture |   8.8 | Strong native walker, roots-only handshake, packed ordered lazy hydration, bounded viewport mirror, windowed React rendering, exact positions, and ID-only projections                                      |
-| Core tree interaction                |   7.4 | Windowed navigation, scalable multi-selection, reliable deep reveal, resilient inline rename, create/delete, clipboard, filtering, context menus, and drag/drop                                             |
-| Visual behavior                      |   7.4 | Viewport, focus, selection, and rename drafts survive churn; animation is row-scoped, storm-bounded, and reduced-motion aware; broader theme/sticky-root scenarios remain                                   |
-| Accessibility                        |   6.0 | Good ARIA tree semantics and keyboard tests; no real assistive-technology matrix                                                                                                                            |
-| Reliability and recovery             |   5.5 | Deterministic soak gates converge, but repeated Electron watcher stalls and direct native startup misses remain unresolved; crash/platform stress also remains                                              |
-| Performance confidence               |   7.8 | Million-sibling structure, binary-wire, bounded-hydration, windowed 500,000-row UI, Criterion, and Electron gates cover payload, paint, projection, navigation, and retention                               |
-| Explorer workflow breadth            |   4.3 | Versioned settings, native sort/visibility/exclusion/compaction/nesting, durable navigation, policy-driven active-file following, and typed preview/permanent opens exist; broader workflows remain shallow |
+| Area                                 | Score | Current assessment                                                                                                                                                                                                        |
+| ------------------------------------ | ----: | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Filesystem and renderer architecture |   8.8 | Strong native walker, roots-only handshake, packed ordered lazy hydration, bounded viewport mirror, windowed React rendering, exact positions, and ID-only projections                                                    |
+| Core tree interaction                |   7.4 | Windowed navigation, scalable multi-selection, reliable deep reveal, resilient inline rename, create/delete, clipboard, filtering, context menus, and drag/drop                                                           |
+| Visual behavior                      |   7.4 | Viewport, focus, selection, and rename drafts survive churn; animation is row-scoped, storm-bounded, and reduced-motion aware; broader theme/sticky-root scenarios remain                                                 |
+| Accessibility                        |   6.0 | Good ARIA tree semantics and keyboard tests; no real assistive-technology matrix                                                                                                                                          |
+| Reliability and recovery             |   5.5 | Deterministic soak gates converge, but repeated Electron watcher stalls and direct native startup misses remain unresolved; crash/platform stress also remains                                                            |
+| Performance confidence               |   7.8 | Million-sibling structure, binary-wire, bounded-hydration, windowed 500,000-row UI, Criterion, and Electron gates cover payload, paint, projection, navigation, and retention                                             |
+| Explorer workflow breadth            |   4.6 | Versioned settings, native sort/visibility/exclusion/compaction/nesting, durable navigation, policy-driven active-file following, typed opens, and reference-host path/OS actions exist; broader workflows remain shallow |
 
 As a reusable tree widget, Mille is approximately **6.5-7/10**. As a complete
 IDE explorer experience, it is approximately **5/10**.
@@ -258,6 +258,15 @@ measured 11.83 ms median / 12.16 ms p95 for the native policy update and
 37.97/40.07 ms for the first ready 200-row projection, versus 30,878.05 ms for
 the initial filesystem population; idempotent updates measured 0.001 ms p95.
 
+The baseline local path/OS workflow is now integrated end to end rather than
+left as a generic command primitive. Copy absolute/relative path, reveal in the
+platform file manager, open the containing folder, and open a terminal all use
+a canonical root-aware UI target and narrow context-isolated Electron IPC. The
+main process owns absolute-path derivation and rejects stale roots, traversal,
+and containment escapes. The full UI/playground suites pass at 343/343 and
+23/23; target materialization measured 0.000583 ms p95 for normal depth and
+0.288375 ms p95 at the bounded 4,096-level limit.
+
 ## What is already strong
 
 ### Engine and host architecture
@@ -397,7 +406,7 @@ model, Mille lacks or delegates most of the following:
 
 - Open Files, Changed Files, Problems, tests, and custom scope views;
 - source-control actions and a file timeline/history surface;
-- reveal in Finder/Explorer, open terminal, copy path/relative path, and refresh;
+- refresh/resync, collapse-descendants, and scoped find/search actions;
 - refactoring and content-search integrations;
 - root management, per-root exclusions, and workspace persistence;
 - virtual and remote filesystem providers.

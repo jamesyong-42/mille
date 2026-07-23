@@ -122,6 +122,14 @@ function fireKey(el, key, { metaKey = false, ctrlKey = false, altKey = false, sh
   el.dispatchEvent(evt);
 }
 
+async function waitFor(predicate, message, timeoutMs = 250) {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error(message);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
+
 /**
  * 3-level sample tree:
  *   root (1)                    depth 0, expanded
@@ -417,9 +425,11 @@ test('initialNavigationState restores once and persistence observer publishes la
   assert.equal(published.length, 0, 'structural snapshot alone does not rewrite storage');
   await act(async () => {
     subChevron.dispatchEvent(new hdWindow.MouseEvent('click', { bubbles: true }));
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    await waitFor(
+      () => published.length > 0,
+      'navigation persistence observer did not publish the expanded-state change',
+    );
   });
-  assert.ok(published.length > 0);
   assert.deepEqual(published.at(-1).expandedPaths, ['root']);
 
   await h.cleanup();

@@ -935,6 +935,29 @@ default index is 31.06 KB against its 75 KB limit.
 - Collapse all and collapse descendants.
 - Find in folder and search-with-include/exclude host hooks.
 
+First baseline-action result (2026-07-23): the five path/OS actions are now
+complete in the default registry, live context menu, public `FileTree` props,
+and Electron reference host. One canonical `FileActionTarget` carries entry and
+owning-root identity plus root-qualified and root-relative POSIX paths; it does
+not manufacture a native absolute path in renderer code. The context-isolated
+playground sends only the action, active workspace identity, and relative path
+over IPC. Its main process rejects stale workspaces, absolute/traversal paths,
+and containment escapes before using Electron clipboard/shell capabilities or
+a detached platform terminal launcher. File targets use their parent for
+containing-folder/terminal actions; directories use themselves, and failures
+surface as an explicit unavailable status.
+
+Pure target, command-delegation, live-menu, IPC-containment, capability-routing,
+file/directory, and macOS/Windows/Linux launch-spec tests bring the full suites
+to 343/343 UI and 23/23 playground tests. Production UI and Electron builds,
+both TypeScript configs, and bundle gates pass; headless remains 13.84 KB gzip
+under its 14 KB ratchet and the styled index is 31.46 KB under 75 KB. The
+100,000-sample eight-level target gate measured 0.000458 ms median / 0.000583
+ms p95 against 0.02 ms. A 1,000-sample hostile 4,096-level chain measured
+0.231709/0.288375 ms against a 5 ms p95 ceiling. Remaining Phase 3.5 work is
+refresh/resync, collapse descendants (collapse all already exists), and scoped
+find/search host hooks.
+
 ### Exit criteria
 
 - Settings persist and migrate across restarts.

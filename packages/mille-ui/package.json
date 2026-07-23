@@ -88,7 +88,8 @@
     "size:why": "size-limit --why",
     "bench": "node bench/scroll-expand.mjs",
     "bench:navigation": "node bench/navigation-state.mjs",
-    "bench:active-policy": "node bench/active-entry-policy.mjs"
+    "bench:active-policy": "node bench/active-entry-policy.mjs",
+    "bench:file-actions": "node bench/file-action-path.mjs"
   },
   "size-limit": [
     {

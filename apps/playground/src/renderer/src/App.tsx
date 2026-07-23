@@ -18,6 +18,7 @@ import {
   serializeFileTreeNavigationState,
   useFileTreeRef,
   type ActiveEntryPolicy,
+  type FileActionTarget,
   type FileOpenEvent,
   type FileTreeNavigationState,
 } from '@vibecook/mille-ui';
@@ -36,6 +37,7 @@ import {
   settleEditorTabLoad,
   type EditorTab,
 } from '../../../scripts/editor-tabs.mjs';
+import type { PlaygroundFileAction } from '../../../scripts/file-actions.mjs';
 
 interface ConnectionState {
   fx: PortFileExplorer;
@@ -149,6 +151,34 @@ export function App(): ReactElement {
 function Explorer({ fx, root }: { fx: PortFileExplorer; root: string }): ReactElement {
   const commands = useMemo(() => createCommandRegistry(defaultCommands), []);
   const treeRef = useFileTreeRef();
+  const [fileActionStatus, setFileActionStatus] = useState<string | null>(null);
+  const performFileAction = useCallback(
+    async (target: FileActionTarget, action: PlaygroundFileAction): Promise<void> => {
+      try {
+        const result = await window.millePlayground.performFileAction({
+          action,
+          workspaceRoot: root,
+          rootRelativePath: target.rootRelativePath,
+        });
+        const verb = action.startsWith('copy')
+          ? 'Copied'
+          : action === 'revealInFileManager'
+            ? 'Revealed'
+            : 'Opened';
+        setFileActionStatus(`${verb}: ${result.value}`);
+      } catch (error) {
+        setFileActionStatus(
+          `Action unavailable: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    },
+    [root],
+  );
+  useEffect(() => {
+    if (fileActionStatus === null) return;
+    const timer = window.setTimeout(() => setFileActionStatus(null), 4_000);
+    return () => window.clearTimeout(timer);
+  }, [fileActionStatus]);
   const settingsRef = useRef<HTMLDivElement | null>(null);
   const [initialNavigationState, setInitialNavigationState] = useState<string | null | undefined>(
     undefined,
@@ -491,6 +521,12 @@ function Explorer({ fx, root }: { fx: PortFileExplorer; root: string }): ReactEl
             </div>
           </div>
 
+          {fileActionStatus ? (
+            <div className="file-action-status" role="status" aria-live="polite">
+              {fileActionStatus}
+            </div>
+          ) : null}
+
           <div
             className="tree-container"
             data-mille-theme={iconThemeId === 'minimal' ? 'minimal' : undefined}
@@ -521,6 +557,19 @@ function Explorer({ fx, root }: { fx: PortFileExplorer; root: string }): ReactEl
                   onOpen={(row, event) => {
                     void openEntry(row, event);
                   }}
+                  onCopyPath={(target, kind) =>
+                    performFileAction(
+                      target,
+                      kind === 'absolute' ? 'copyAbsolutePath' : 'copyRelativePath',
+                    )
+                  }
+                  onRevealInFileManager={(target) =>
+                    performFileAction(target, 'revealInFileManager')
+                  }
+                  onOpenContainingFolder={(target) =>
+                    performFileAction(target, 'openContainingFolder')
+                  }
+                  onOpenTerminal={(target) => performFileAction(target, 'openTerminal')}
                 />
               )}
             </Profiler>

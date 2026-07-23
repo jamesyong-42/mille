@@ -56,6 +56,8 @@ export function Sidebar() {
 - Drag-and-drop: tree↔tree, OS→tree, and tree→chat via
   `application/vnd.claude.attachment`.
 - Bounded, versioned navigation persistence with lazy path-based restore.
+- Root-aware host actions for absolute/relative path copy, file-manager reveal,
+  containing-folder open, and terminal open.
 
 ## Persist navigation
 
@@ -148,6 +150,43 @@ function openEditor(entry: Entry, event: FileOpenEvent) {
 (`singleClick`, `doubleClick`, `keyboard`, `search`, or `command`). Keyboard,
 search, context-menu, and default double-click opens are permanent. A modified
 click used for range or multi-selection never opens a preview.
+
+## Wire file-system host actions
+
+The built-in context menu includes copy-path, reveal, containing-folder, and
+terminal commands. The tree resolves the selected entry to a typed,
+root-aware target and leaves privileged work to the host:
+
+```tsx
+import { FileTree, type FileActionTarget } from '@vibecook/mille-ui';
+
+function hostAction(action: string, target: FileActionTarget) {
+  return window.host.performFileAction({
+    action,
+    rootId: target.rootId,
+    rootRelativePath: target.rootRelativePath,
+  });
+}
+
+<FileTree
+  fx={fx}
+  ariaLabel="Files"
+  onCopyPath={(target, kind) =>
+    hostAction(kind === 'absolute' ? 'copyAbsolutePath' : 'copyRelativePath', target)
+  }
+  onRevealInFileManager={(target) => hostAction('revealInFileManager', target)}
+  onOpenContainingFolder={(target) => hostAction('openContainingFolder', target)}
+  onOpenTerminal={(target) => hostAction('openTerminal', target)}
+/>;
+```
+
+`FileActionTarget` contains the real entry, owning `rootId`/`rootName`, a
+root-qualified POSIX path, and the path below that root. It intentionally does
+not expose or invent an absolute native path in the renderer. Map `rootId` to
+the active workspace root and validate containment in a context-isolated host
+before using clipboard, shell, or process-launch APIs. The Electron playground
+is a complete reference implementation and reports unsupported host actions in
+the UI.
 
 ## Entry points
 

@@ -190,6 +190,7 @@ export type {
   HostHooks,
 } from '../commands/types.js';
 export type { CommandRegistryHandle } from '../types.js';
+export type { FileActionSnapshot, FileActionTarget } from '../file-actions.js';
 export type {
   ActiveEntryAutoReveal,
   ActiveEntryClassificationInput,

@@ -85,6 +85,8 @@ export type {
   UseAutoExpandDwellOptions,
 } from './hooks/index.js';
 export type { CommandRegistryHandle } from './types.js';
+export { fileActionTargetForId } from './file-actions.js';
+export type { FileActionSnapshot, FileActionTarget } from './file-actions.js';
 export {
   classifyActiveEntry,
   normalizeActiveEntryTarget,

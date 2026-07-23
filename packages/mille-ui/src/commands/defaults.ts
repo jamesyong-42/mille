@@ -15,6 +15,7 @@
 
 import type { Entry, EntryId } from '@vibecook/mille';
 import { commandOpenEvent } from '../open-policy.js';
+import { fileActionTargetForId } from '../file-actions.js';
 import type { Command } from './types.js';
 
 // Local mirror of api.d.ts `EntryKind`. The engine ships `entry.kind` as a
@@ -327,6 +328,66 @@ const revealInEditorCommand: Command = {
   },
 };
 
+const copyAbsolutePathCommand: Command = {
+  id: 'file.copyAbsolutePath',
+  label: 'Copy Absolute Path',
+  group: '4_path_actions',
+  when: 'focusedIs.file || focusedIs.folder',
+  async run(ctx, args) {
+    const target = resolveFileActionTarget(args, ctx);
+    if (target === null) return;
+    await ctx.host.copyPath?.(target, 'absolute');
+  },
+};
+
+const copyRelativePathCommand: Command = {
+  id: 'file.copyRelativePath',
+  label: 'Copy Workspace-Relative Path',
+  group: '4_path_actions',
+  when: 'focusedIs.file || focusedIs.folder',
+  async run(ctx, args) {
+    const target = resolveFileActionTarget(args, ctx);
+    if (target === null) return;
+    await ctx.host.copyPath?.(target, 'relative');
+  },
+};
+
+const revealInFileManagerCommand: Command = {
+  id: 'file.revealInFileManager',
+  label: 'Reveal in File Manager',
+  group: '4_path_actions',
+  when: 'focusedIs.file || focusedIs.folder',
+  async run(ctx, args) {
+    const target = resolveFileActionTarget(args, ctx);
+    if (target === null) return;
+    await ctx.host.revealInFileManager?.(target);
+  },
+};
+
+const openContainingFolderCommand: Command = {
+  id: 'file.openContainingFolder',
+  label: 'Open Containing Folder',
+  group: '4_path_actions',
+  when: 'focusedIs.file || focusedIs.folder',
+  async run(ctx, args) {
+    const target = resolveFileActionTarget(args, ctx);
+    if (target === null) return;
+    await ctx.host.openContainingFolder?.(target);
+  },
+};
+
+const openTerminalCommand: Command = {
+  id: 'file.openTerminal',
+  label: 'Open in Terminal',
+  group: '4_path_actions',
+  when: 'focusedIs.file || focusedIs.folder',
+  async run(ctx, args) {
+    const target = resolveFileActionTarget(args, ctx);
+    if (target === null) return;
+    await ctx.host.openTerminalForEntry?.(target);
+  },
+};
+
 export const mutationDefaults: readonly Command[] = [
   createCommand,
   renameCommand,
@@ -336,6 +397,11 @@ export const mutationDefaults: readonly Command[] = [
   pasteCommand,
   openCommand,
   revealInEditorCommand,
+  copyAbsolutePathCommand,
+  copyRelativePathCommand,
+  revealInFileManagerCommand,
+  openContainingFolderCommand,
+  openTerminalCommand,
 ];
 
 export const defaultCommands: readonly Command[] = [
@@ -363,6 +429,11 @@ function resolveSingleId(args: unknown, focusedId: EntryId | null): EntryId | nu
     return args['id'] as EntryId;
   }
   return focusedId;
+}
+
+function resolveFileActionTarget(args: unknown, ctx: CommandContextLike) {
+  const entry = resolveEntry(args, ctx);
+  return entry === null ? null : fileActionTargetForId(ctx.snapshot, entry.id);
 }
 
 interface ParsedCreateArgs {

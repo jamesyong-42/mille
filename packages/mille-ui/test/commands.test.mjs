@@ -348,6 +348,60 @@ describe('defaultCommands — mutations', () => {
     assert.equal(revealed.length, 1);
     assert.equal(revealed[0], entry);
   });
+
+  it('path actions delegate a root-aware canonical target to host hooks', async () => {
+    const reg = createCommandRegistry(mutationDefaults);
+    const fx = makeFakeFx();
+    const root = folderEntry(1);
+    const folder = folderEntry(2, 1);
+    const entry = fileEntry(3, 2);
+    const snapshot = makeSnapshot(
+      new Map([
+        [root.id, root],
+        [folder.id, folder],
+        [entry.id, entry],
+      ]),
+    );
+    const calls = [];
+    reg.setContextProvider(() =>
+      makeCtx({
+        fx,
+        snapshot,
+        focusedEntry: entry,
+        host: {
+          copyPath: (target, kind) => calls.push({ action: 'copyPath', kind, target }),
+          revealInFileManager: (target) => calls.push({ action: 'reveal', target }),
+          openContainingFolder: (target) => calls.push({ action: 'containing', target }),
+          openTerminalForEntry: (target) => calls.push({ action: 'terminal', target }),
+        },
+      }),
+    );
+
+    await reg.dispatch('file.copyAbsolutePath');
+    await reg.dispatch('file.copyRelativePath');
+    await reg.dispatch('file.revealInFileManager');
+    await reg.dispatch('file.openContainingFolder');
+    await reg.dispatch('file.openTerminal');
+
+    assert.deepEqual(
+      calls.map(({ action, kind, target }) => [
+        action,
+        kind ?? null,
+        target.rootId,
+        target.rootQualifiedPath,
+        target.rootRelativePath,
+      ]),
+      [
+        ['copyPath', 'absolute', 1, 'dir-1/dir-2/file-3', 'dir-2/file-3'],
+        ['copyPath', 'relative', 1, 'dir-1/dir-2/file-3', 'dir-2/file-3'],
+        ['reveal', null, 1, 'dir-1/dir-2/file-3', 'dir-2/file-3'],
+        ['containing', null, 1, 'dir-1/dir-2/file-3', 'dir-2/file-3'],
+        ['terminal', null, 1, 'dir-1/dir-2/file-3', 'dir-2/file-3'],
+      ],
+    );
+    assert.ok(calls.every(({ target }) => target.entry === entry));
+    assert.deepEqual(fx.calls, []);
+  });
 });
 
 // ─── Keybinding lookup via registry ────────────────────────────────────────

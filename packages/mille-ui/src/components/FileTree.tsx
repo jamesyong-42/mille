@@ -170,6 +170,10 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
     renameTargetId: controlledRenameTargetId,
     onRenameTargetIdChange,
     onOpen,
+    onCopyPath,
+    onRevealInFileManager,
+    onOpenContainingFolder,
+    onOpenTerminal,
     onClipboardChange,
     contextMenuSlot,
     contextMenuExtraItems,
@@ -926,6 +930,16 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
       isRenaming: renameState.renameTargetId !== null,
       host: {
         ...(onOpen ? { onOpen } : null),
+        ...(onCopyPath ? { copyPath: onCopyPath } : null),
+        ...(onRevealInFileManager
+          ? { revealInFileManager: onRevealInFileManager }
+          : null),
+        ...(onOpenContainingFolder
+          ? { openContainingFolder: onOpenContainingFolder }
+          : null),
+        ...(onOpenTerminal
+          ? { openTerminalForEntry: onOpenTerminal }
+          : null),
       },
       cutIds: clipboard.cutIds,
       copyIds: clipboard.copyIds,
@@ -961,6 +975,10 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
     clipboard.cutIds,
     clipboard.copyIds,
     onOpen,
+    onCopyPath,
+    onRevealInFileManager,
+    onOpenContainingFolder,
+    onOpenTerminal,
   ]);
 
   const contextMenuContent = useMemo<ReactNode>(() => {

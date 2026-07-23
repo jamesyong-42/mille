@@ -357,6 +357,7 @@ test('menu commands execute with the tree live context and open intent', async (
   fx.emitDelta(createFakeSnapshot({ rows: sampleRows(), treeVersion: 1 }));
   const registry = createCommandRegistry(defaultCommands);
   const opened = [];
+  const copied = [];
 
   // Deliberately do not install a registry context provider. A menu item must
   // execute with the same live tree context that controlled its visibility.
@@ -374,6 +375,9 @@ test('menu commands execute with the tree live context and open intent', async (
           overscan: 50,
           onOpen: (entry, event) => {
             opened.push({ id: entry.id, event });
+          },
+          onCopyPath: (target, kind) => {
+            copied.push({ kind, path: target.rootQualifiedPath });
           },
           __testObserveElementRect: obs.observeElementRect,
           __testObserveElementOffset: obs.observeElementOffset,
@@ -401,6 +405,19 @@ test('menu commands execute with the tree live context and open intent', async (
     id: 2,
     event: { mode: 'permanent', source: 'command' },
   }]);
+
+  await act(async () => { fireContextMenu(rowEls[1]); });
+  const copyRelativeItem = hdDocument.body.querySelector(
+    '[data-mille-command-id="file.copyRelativePath"]',
+  );
+  assert.ok(copyRelativeItem, 'Copy Relative Path should be visible for a file');
+  await act(async () => {
+    copyRelativeItem.dispatchEvent(new hdWindow.MouseEvent('click', {
+      bubbles: true,
+      cancelable: true,
+    }));
+  });
+  assert.deepEqual(copied, [{ kind: 'relative', path: 'alpha/banana.ts' }]);
 
   await act(async () => { root.unmount(); });
   container.remove();

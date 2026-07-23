@@ -5,6 +5,10 @@ import type {
   WatchBenchEvent,
   WatchBenchObservation,
 } from '../shared/watch-bench';
+import type {
+  PlaygroundFileActionRequest,
+  PlaygroundFileActionResult,
+} from '../../scripts/file-actions.mjs';
 
 // MessagePort can't pass through contextBridge (prototype is stripped).
 // Forward via window.postMessage with the port in the transfer list; the
@@ -70,6 +74,12 @@ contextBridge.exposeInMainWorld('millePlayground', {
 
   async saveFileTreeNavigationState(root: string, state: string): Promise<boolean> {
     return (await ipcRenderer.invoke('save-file-tree-navigation-state', root, state)) === true;
+  },
+
+  async performFileAction(
+    request: PlaygroundFileActionRequest,
+  ): Promise<PlaygroundFileActionResult> {
+    return (await ipcRenderer.invoke('perform-file-action', request)) as PlaygroundFileActionResult;
   },
 
   /**

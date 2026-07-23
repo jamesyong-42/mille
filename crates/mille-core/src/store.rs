@@ -155,6 +155,146 @@ impl EntryStore {
         Ok(new_tree_version)
     }
 
+    /// Atomically replace the configured workspace-root set.
+    ///
+    /// Every supplied entry must describe a disjoint root path with no parent.
+    /// Existing root paths retain their identity and known descendants; new
+    /// paths receive fresh identities; removed roots lose their complete known
+    /// subtrees and both path-index directions in the same publication.
+    ///
+    /// Returns `(tree_version, added_root_ids, removed_entry_ids)`.
+    pub fn replace_roots(
+        &self,
+        roots: Vec<(PathBuf, Entry)>,
+    ) -> Result<(u64, Vec<EntryId>, Vec<EntryId>), FxError> {
+        let _guard = self.write_lock.lock();
+        let visibility = *self.visibility.read();
+        let current = self.inner.load_full();
+
+        let mut unique_paths = HashSet::with_capacity(roots.len());
+        for (path, entry) in &roots {
+            if !path.is_absolute() {
+                return Err(FxError::InvalidInput(format!(
+                    "workspace root must be absolute: {path:?}"
+                )));
+            }
+            if !unique_paths.insert(path.clone()) {
+                return Err(FxError::InvalidInput(format!(
+                    "duplicate workspace root: {path:?}"
+                )));
+            }
+            if entry.parent_id.is_some() {
+                return Err(FxError::InvalidInput(
+                    "workspace root entries cannot have a parent".into(),
+                ));
+            }
+        }
+        for (index, (path, _)) in roots.iter().enumerate() {
+            if roots.iter().skip(index + 1).any(|(other, _)| {
+                path.starts_with(other.as_path()) || other.starts_with(path.as_path())
+            }) {
+                return Err(FxError::InvalidInput(
+                    "workspace roots cannot overlap".into(),
+                ));
+            }
+        }
+
+        let mut ordered_ids = Vec::with_capacity(roots.len());
+        let mut additions: Vec<(PathBuf, EntryId, Arc<Entry>)> = Vec::new();
+        for (path, mut entry) in roots {
+            if let Some(existing) = self.path_to_id.get(path.as_path()) {
+                let id = *existing.value();
+                drop(existing);
+                let indexed = current.entries.get(&id).ok_or_else(|| {
+                    FxError::InternalBug(format!("path index references missing entry {id:?}"))
+                })?;
+                if indexed.parent_id.is_some() || !current.roots.contains(&id) {
+                    return Err(FxError::InvalidInput(format!(
+                        "workspace root overlaps an indexed descendant: {path:?}"
+                    )));
+                }
+                ordered_ids.push(id);
+                continue;
+            }
+
+            let id = EntryId::alloc_from(&self.id_counter)?;
+            entry.id = id;
+            entry.parent_id = None;
+            ordered_ids.push(id);
+            additions.push((path, id, Arc::new(entry)));
+        }
+
+        let retained: HashSet<EntryId> = ordered_ids.iter().copied().collect();
+        let removed_roots: Vec<EntryId> = current
+            .roots
+            .iter()
+            .filter(|id| !retained.contains(id))
+            .copied()
+            .collect();
+        if additions.is_empty()
+            && removed_roots.is_empty()
+            && ordered_ids.as_slice() == current.roots.as_slice()
+        {
+            return Ok((current.tree_version, Vec::new(), Vec::new()));
+        }
+
+        let mut removed_ids = Vec::new();
+        for root_id in removed_roots {
+            let mut stack = vec![root_id];
+            while let Some(id) = stack.pop() {
+                removed_ids.push(id);
+                if let Some(children) = current.children.get(&id) {
+                    stack.extend(children.iter().copied());
+                }
+            }
+        }
+        let removed_set: HashSet<EntryId> = removed_ids.iter().copied().collect();
+
+        let mut next = (*current).clone();
+        for id in &removed_ids {
+            next.entries.remove(id);
+            next.children.remove(id);
+            next.direct_child_counts.remove(id);
+            next.descendant_visible_counts.remove(id);
+            next.descendant_total_sizes.remove(id);
+        }
+        for (_, id, entry) in &additions {
+            next.entries.insert(*id, Arc::clone(entry));
+            next.descendant_visible_counts
+                .insert(*id, visibility.includes(entry.as_ref()) as u32);
+            next.descendant_total_sizes.insert(*id, entry.size);
+        }
+        next.roots.clear();
+        next.roots.extend_from_slice(&ordered_ids);
+
+        let prev_tree_version = next.tree_version;
+        next.tree_version += 1;
+        let new_tree_version = next.tree_version;
+        self.inner.store(Arc::new(next));
+
+        for id in &removed_ids {
+            if let Some((_, path)) = self.id_to_path.remove(id) {
+                self.path_to_id.remove(path.as_ref());
+            }
+        }
+        for (path, id, _) in &additions {
+            let indexed_path: Arc<Path> = Arc::from(path.clone().into_boxed_path());
+            self.path_to_id.insert(Arc::clone(&indexed_path), *id);
+            self.id_to_path.insert(*id, indexed_path);
+        }
+
+        let added_ids: Vec<EntryId> = additions.iter().map(|(_, id, _)| *id).collect();
+        self.record_mutation(prev_tree_version, new_tree_version, |changes| {
+            changes.changed_ids.extend(removed_set);
+            // Root order/membership is structural even when every entry record
+            // is retained. Marking all current roots keeps the coalescer awake;
+            // the host sends the authoritative ordered root vector separately.
+            changes.changed_ids.extend(ordered_ids.iter().copied());
+        });
+
+        Ok((new_tree_version, added_ids, removed_ids))
+    }
+
     /// Snapshot the path index below `root`. The returned paths include
     /// `root` itself when it is known. Watch reconciliation uses this to
     /// compare a bounded disk walk with the authoritative in-memory view.
@@ -1073,6 +1213,72 @@ mod tests {
             assert_eq!(s.tree_version(), version);
             assert_eq!(s.snapshot().roots(), &[a, b]);
             assert!(s.take_pending_changes().is_empty());
+        }
+    }
+
+    #[test]
+    fn replace_roots_preserves_retained_ids_and_removes_subtrees_atomically() {
+        let s = EntryStore::new();
+        let a = s.insert("/a".into(), dir("a", None)).unwrap();
+        let child = s.insert("/a/child".into(), leaf("child", Some(a))).unwrap();
+        let b = s.insert("/b".into(), dir("b", None)).unwrap();
+        let retained = s.snapshot();
+        s.take_pending_changes();
+
+        let (version, added, removed) = s
+            .replace_roots(vec![
+                ("/b".into(), dir("b", None)),
+                ("/c".into(), dir("c", None)),
+            ])
+            .unwrap();
+        let current = s.snapshot();
+        let c = current.roots()[1];
+        assert_eq!(current.tree_version(), version);
+        assert_eq!(current.roots(), &[b, c]);
+        assert_eq!(added, vec![c]);
+        assert_eq!(removed, vec![a, child]);
+        assert_eq!(s.path_for_id(a), None);
+        assert_eq!(s.path_for_id(child), None);
+        assert_eq!(s.path_for_id(b), Some(PathBuf::from("/b")));
+        assert_eq!(s.path_for_id(c), Some(PathBuf::from("/c")));
+        assert_eq!(retained.roots(), &[a, b]);
+        assert!(retained.get(child).is_some());
+
+        let changes = s.take_pending_changes();
+        assert!(changes.changed_ids.contains(&a));
+        assert!(changes.changed_ids.contains(&child));
+        assert!(changes.changed_ids.contains(&b));
+        assert!(changes.changed_ids.contains(&c));
+    }
+
+    #[test]
+    fn replace_roots_is_idempotent_and_rejects_ambiguous_paths() {
+        let s = EntryStore::new();
+        let a = s.insert("/a".into(), dir("a", None)).unwrap();
+        let version = s.tree_version();
+        s.take_pending_changes();
+
+        assert_eq!(
+            s.replace_roots(vec![("/a".into(), dir("a", None))])
+                .unwrap(),
+            (version, Vec::new(), Vec::new())
+        );
+        assert!(s.take_pending_changes().is_empty());
+
+        for invalid in [
+            vec![
+                (PathBuf::from("/a"), dir("a", None)),
+                (PathBuf::from("/a"), dir("a", None)),
+            ],
+            vec![
+                (PathBuf::from("/a"), dir("a", None)),
+                (PathBuf::from("/a/nested"), dir("nested", None)),
+            ],
+        ] {
+            let err = s.replace_roots(invalid).unwrap_err();
+            assert_eq!(err.code(), crate::error::ErrorCode::EINVAL);
+            assert_eq!(s.tree_version(), version);
+            assert_eq!(s.snapshot().roots(), &[a]);
         }
     }
 

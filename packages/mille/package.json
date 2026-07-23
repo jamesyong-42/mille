@@ -62,6 +62,7 @@
     "bench:locale": "node bench/locale-collation.mjs",
     "bench:multi-root": "node bench/multi-root-resolution.mjs",
     "bench:root-reorder": "node bench/root-reorder.mjs",
+    "bench:root-churn": "node bench/workspace-root-churn.mjs",
     "bench:watch:soak": "node bench/watch-soak.mjs",
     "artifacts": "napi artifacts",
     "prepublishOnly": "napi prepublish -t npm"

@@ -522,6 +522,14 @@ export declare class FileExplorer implements Disposable {
    */
   reorderRoots(ids: readonly EntryId[]): TreeVersion | Promise<TreeVersion>;
 
+  /**
+   * Atomically replace workspace roots in display order. New roots are seeded
+   * as lazy directory entries; removed roots lose their known subtrees.
+   * Duplicate, overlapping, missing, and non-directory roots reject without
+   * publishing. The asynchronous result is a mirror synchronization point.
+   */
+  updateWorkspaceRoots(roots: readonly (Uri | string)[]): Promise<TreeVersion>;
+
   /** Async URI → entry. May return null if the URI isn't under a known root. */
   getByUri(uri: Uri): Promise<Entry | null>;
   /**

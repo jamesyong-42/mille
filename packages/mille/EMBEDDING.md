@@ -995,6 +995,22 @@ atomically. A local explorer returns synchronously; a port explorer resolves
 after all attached mirrors have received the new ordered root list. Retained
 snapshots keep their original order.
 
+Replace root membership without rebuilding the explorer:
+
+```ts
+await fx.updateWorkspaceRoots(['/workspace/app', { scheme: 'file', path: '/workspace/shared' }]);
+```
+
+Retained paths keep their entry IDs. Added directories appear immediately as
+lazy root entries and hydrate when expanded; removed roots, known descendants,
+path indexes, expansion state, and remote-mirror records disappear in the same
+tree publication. Passing `[]` produces an empty workspace, and re-adding a
+removed path assigns a fresh identity. Duplicate, overlapping, missing, and
+non-directory roots reject without changing configuration or tree version.
+Port calls resolve only after every attached mirror receives the membership
+change. Watch registrations, exclude matching, and later path resolution all
+use the replacement list.
+
 Counts, indexes, typeahead, host viewports, and port mirrors use the same leaf
 identity. In roots-only mode the host follows the chain with bounded depth-1
 reads and stops at the first branch; it does not eagerly walk the subtree.

@@ -41,6 +41,7 @@ import {
 } from './protocol.js';
 import type { Disposable, MessagePortLike } from './types.js';
 import type { ExplorerProjectionSettings } from './explorer-settings.js';
+import type { Uri } from './client.js';
 
 interface PendingRequest {
   resolve: (value: unknown) => void;
@@ -312,6 +313,19 @@ export class PortFileExplorer {
     const result = await this.call('reorderRoots', [[...ids]]);
     if (typeof result !== 'number') {
       throw new FileSystemError('EUNKNOWN', 'invalid reorderRoots response');
+    }
+    return result;
+  }
+
+  /**
+   * Replace the host's configured roots. Resolves after every attached mirror
+   * has received the new root list and removals.
+   */
+  async updateWorkspaceRoots(roots: readonly (Uri | string)[]): Promise<number> {
+    const paths = roots.map((root) => (typeof root === 'string' ? root : root.path));
+    const result = await this.call('updateWorkspaceRoots', [paths]);
+    if (typeof result !== 'number') {
+      throw new FileSystemError('EUNKNOWN', 'invalid updateWorkspaceRoots response');
     }
     return result;
   }

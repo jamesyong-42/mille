@@ -215,8 +215,8 @@ export interface DeltaMsg {
      * Phase B1 — root fan-out piggybacks on the delta frame.
      *
      * When present, this is the **full** current root-id list on the
-     * host as of this tick. Shipped only when the set changed since
-     * the previous delta to this session (by id content, not reference);
+     * host as of this tick. Shipped only when membership or order changed
+     * since the previous delta to this session (by id/position, not reference);
      * omitted when unchanged. Clients that ignore the field continue to
      * render against the roots delivered at handshake time — no
      * regression. Before v0.2, `snapshot.roots` at handshake was the

@@ -93,7 +93,7 @@ pub struct FileExplorer {
     pub(crate) watcher: Arc<std::sync::Mutex<Option<Watcher>>>,
     pub(crate) intents: Arc<parking_lot::Mutex<IntentCache>>,
     disposed: AtomicBool,
-    pub(crate) roots: Vec<PathBuf>,
+    pub(crate) roots: Arc<parking_lot::RwLock<Vec<PathBuf>>>,
     pub(crate) options: ResolvedOptions,
     /// Runtime-configurable exclude rules shared by initial/lazy walks and
     /// watcher reconciliation.
@@ -183,7 +183,7 @@ impl FileExplorer {
             watcher: Arc::new(std::sync::Mutex::new(None)),
             intents: Arc::new(parking_lot::Mutex::new(IntentCache::new())),
             disposed: AtomicBool::new(false),
-            roots,
+            roots: Arc::new(parking_lot::RwLock::new(roots)),
             options: resolved,
             exclude_globs: Arc::new(parking_lot::RwLock::new(exclude_globs)),
             policy_gate: Arc::new(parking_lot::Mutex::new(())),
@@ -231,8 +231,9 @@ impl FileExplorer {
             return Ok(None);
         }
 
+        let roots = self.roots.read().clone();
         let mut candidates: Vec<(PathBuf, PathBuf)> = Vec::new();
-        for root in &self.roots {
+        for root in &roots {
             let candidate = if input.is_absolute() {
                 if !input.starts_with(root) {
                     continue;
@@ -374,8 +375,9 @@ impl FileExplorer {
         self.ensure_watcher()?;
         let _policy_guard = self.policy_gate.lock();
         let exclude_globs = self.exclude_globs.read().clone();
+        let roots = self.roots.read().clone();
         let mut total: u32 = 0;
-        for root in &self.roots {
+        for root in &roots {
             let options = WalkOptions {
                 max_depth: None,
                 follow_symlinks: self.options.follow_symlinks,
@@ -484,8 +486,8 @@ impl FileExplorer {
         // Only walk inside one of the configured roots. This both protects
         // the store from accidentally picking up out-of-workspace entries
         // and gives `populate_store` a predictable root context.
-        let root = self
-            .roots
+        let roots = self.roots.read().clone();
+        let root = roots
             .iter()
             .find(|r| p == **r || p.starts_with(r))
             .cloned()
@@ -600,7 +602,8 @@ impl FileExplorer {
         let _policy_guard = self.policy_gate.lock();
         let excludes_changed = self.exclude_globs.read().as_slice() != exclude_globs.as_slice();
         let exclude_matchers = if excludes_changed {
-            Some(compile_exclude_matchers(&self.roots, &exclude_globs).map_err(fx_error_to_napi)?)
+            let roots = self.roots.read().clone();
+            Some(compile_exclude_matchers(&roots, &exclude_globs).map_err(fx_error_to_napi)?)
         } else {
             None
         };
@@ -685,7 +688,195 @@ impl FileExplorer {
         if version == previous_version {
             return Ok(version);
         }
+        let ordered_paths: Vec<PathBuf> = roots
+            .iter()
+            .filter_map(|id| self.store.path_for_id(*id))
+            .collect();
+        if ordered_paths.len() == roots.len() {
+            *self.roots.write() = ordered_paths;
+        }
         let changed_ids: Vec<i64> = roots.iter().map(|id| id.0 as i64).collect();
+        let notice = || ChangeNoticeJs {
+            tree_version: version,
+            decoration_version: 0,
+            tree_changed: true,
+            decorations_changed: false,
+            changed_ids: changed_ids.clone(),
+            child_set_changed: Vec::new(),
+            decoration_changed_ids: Vec::new(),
+            coarse_subtrees: Vec::new(),
+        };
+        self.events.emit_change(Channel::Change, notice());
+        self.events.emit_change(Channel::ChangeTree, notice());
+        Ok(version)
+    }
+
+    /// Atomically replace the configured workspace roots in display order.
+    ///
+    /// New roots are seeded as entries only; descendants hydrate lazily on
+    /// expansion. Removed roots lose their complete known subtrees. Inputs are
+    /// validated and statted before watcher/store/config state changes.
+    #[napi(js_name = "updateWorkspaceRoots")]
+    pub async fn update_workspace_roots(&self, roots: Vec<String>) -> Result<u32> {
+        if self.disposed.load(Ordering::Acquire) {
+            return Err(Error::from_reason("FileExplorer is disposed"));
+        }
+        let paths: Vec<PathBuf> = roots.into_iter().map(PathBuf::from).collect();
+        for path in &paths {
+            if !path.is_absolute() {
+                return Err(fx_error_to_napi(FxError::InvalidInput(format!(
+                    "workspace root must be absolute: {path:?}"
+                ))));
+            }
+        }
+        for (index, path) in paths.iter().enumerate() {
+            if paths.iter().skip(index + 1).any(|other| {
+                path == other
+                    || path.starts_with(other.as_path())
+                    || other.starts_with(path.as_path())
+            }) {
+                return Err(fx_error_to_napi(FxError::InvalidInput(
+                    "workspace roots must be unique and non-overlapping".into(),
+                )));
+            }
+        }
+
+        let configured_before = self.roots.read().clone();
+        let snapshot_before = self.store.snapshot();
+        let displayed_before: Vec<PathBuf> = snapshot_before
+            .roots()
+            .iter()
+            .filter_map(|id| self.store.path_for_id(*id))
+            .collect();
+        if paths == configured_before && paths == displayed_before {
+            return Ok(snapshot_before.tree_version() as u32);
+        }
+
+        // Filesystem I/O finishes before the policy gate blocks watcher
+        // reconciliation. This is also the failure-atomic validation pass.
+        let mut prepared = Vec::with_capacity(paths.len());
+        for path in &paths {
+            let name = path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| path.to_string_lossy().into_owned());
+            let mut entry = stat_to_entry(path, None, name)
+                .await
+                .map_err(fx_error_to_napi)?;
+            if entry.kind != EntryKind::Directory && entry.symlink_target_is_dir != Some(true) {
+                let error = std::io::Error::new(
+                    std::io::ErrorKind::NotADirectory,
+                    "workspace root is not a directory",
+                );
+                return Err(fx_error_to_napi(io_to_fx(error, path.clone())));
+            }
+            entry.parent_id = None;
+            prepared.push((path.clone(), entry));
+        }
+
+        // An already-indexed child cannot also become a root without
+        // reparenting the outer workspace. Overlapping roots are intentionally
+        // rejected in this slice so identity and navigation paths stay exact.
+        for path in &paths {
+            if let Some(existing) = self.store.get_by_path(path) {
+                if existing.parent_id.is_some() || !snapshot_before.roots().contains(&existing.id) {
+                    return Err(fx_error_to_napi(FxError::InvalidInput(format!(
+                        "workspace root overlaps an indexed descendant: {path:?}"
+                    ))));
+                }
+            }
+        }
+
+        let exclude_globs = self.exclude_globs.read().clone();
+        let exclude_matchers =
+            compile_exclude_matchers(&paths, &exclude_globs).map_err(fx_error_to_napi)?;
+        for (path, entry) in &mut prepared {
+            entry.is_excluded = Self::path_is_excluded(path, entry, &exclude_matchers);
+        }
+
+        let added_paths: Vec<PathBuf> = paths
+            .iter()
+            .filter(|path| !configured_before.contains(path))
+            .cloned()
+            .collect();
+        let removed_paths: Vec<PathBuf> = configured_before
+            .iter()
+            .filter(|path| !paths.contains(path))
+            .cloned()
+            .collect();
+        let watch_options = mille_core::WatcherOptions {
+            recursive: true,
+            debounce_ms: Some(self.options.watch_debounce_ms),
+        };
+
+        let _policy_guard = self.policy_gate.lock();
+        let watcher_guard = match self.watcher.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let mut watched_added: Vec<PathBuf> = Vec::new();
+        let mut watched_removed: Vec<PathBuf> = Vec::new();
+        if let Some(watcher) = watcher_guard.as_ref() {
+            for path in &added_paths {
+                if let Err(error) = watcher.watch(path, watch_options.clone()) {
+                    for added in &watched_added {
+                        let _ = watcher.unwatch(added);
+                    }
+                    return Err(fx_error_to_napi(error));
+                }
+                watched_added.push(path.clone());
+            }
+            for path in &removed_paths {
+                if let Err(error) = watcher.unwatch(path) {
+                    for removed in &watched_removed {
+                        let _ = watcher.watch(removed, watch_options.clone());
+                    }
+                    for added in &watched_added {
+                        let _ = watcher.unwatch(added);
+                    }
+                    return Err(fx_error_to_napi(error));
+                }
+                watched_removed.push(path.clone());
+            }
+        }
+
+        let previous_version = self.store.tree_version() as u32;
+        let (version, added_ids, removed_ids) = match self.store.replace_roots(prepared) {
+            Ok(result) => result,
+            Err(error) => {
+                if let Some(watcher) = watcher_guard.as_ref() {
+                    for removed in &watched_removed {
+                        let _ = watcher.watch(removed, watch_options.clone());
+                    }
+                    for added in &watched_added {
+                        let _ = watcher.unwatch(added);
+                    }
+                }
+                return Err(fx_error_to_napi(error));
+            }
+        };
+        *self.roots.write() = paths;
+        drop(watcher_guard);
+
+        let version = version as u32;
+        if version == previous_version {
+            return Ok(version);
+        }
+        let current_root_ids: Vec<i64> = self
+            .store
+            .snapshot()
+            .roots()
+            .iter()
+            .map(|id| id.raw() as i64)
+            .collect();
+        let mut changed_ids: Vec<i64> = removed_ids
+            .iter()
+            .chain(added_ids.iter())
+            .map(|id| id.raw() as i64)
+            .collect();
+        changed_ids.extend(current_root_ids);
+        changed_ids.sort_unstable();
+        changed_ids.dedup();
         let notice = || ChangeNoticeJs {
             tree_version: version,
             decoration_version: 0,
@@ -1262,7 +1453,7 @@ impl FileExplorer {
     fn current_exclude_matchers(
         &self,
     ) -> std::result::Result<Vec<(PathBuf, mille_core::IgnoreMatcher)>, FxError> {
-        compile_exclude_matchers(&self.roots, &self.exclude_globs.read())
+        compile_exclude_matchers(&self.roots.read(), &self.exclude_globs.read())
     }
 
     fn path_is_excluded(
@@ -1305,7 +1496,7 @@ impl FileExplorer {
             Arc::clone(&self.events),
             Arc::clone(&self.intents),
             crate::watch_runtime::WatchConfig {
-                roots: self.roots.clone(),
+                roots: Arc::clone(&self.roots),
                 respect_ignore: self.options.respect_ignore,
                 exclude_globs: Arc::clone(&self.exclude_globs),
                 policy_gate: Arc::clone(&self.policy_gate),

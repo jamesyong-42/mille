@@ -1157,6 +1157,15 @@ class FileExplorerHostImpl implements FileExplorerHost {
         await this.flushTickNow();
         return version;
       }
+      case 'updateWorkspaceRoots': {
+        const roots = args[0];
+        if (!Array.isArray(roots) || !roots.every((root) => typeof root === 'string')) {
+          throw new Error('updateWorkspaceRoots requires an array of absolute path strings');
+        }
+        const version = await this.explorer.updateWorkspaceRoots(roots);
+        await this.flushTickNow();
+        return version;
+      }
       case 'resolvePath': {
         const path = args[0];
         if (typeof path !== 'string') throw new Error('resolvePath requires a string path');

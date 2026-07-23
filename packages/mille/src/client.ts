@@ -188,6 +188,7 @@ type NativeFx = {
   takePendingChanges(): NativeChangeSet;
   updateProjectionSettings(settings: NativeProjectionSettings): number;
   reorderRoots(ids: number[]): number;
+  updateWorkspaceRoots(roots: string[]): Promise<number>;
   populateFromRoots(): Promise<number>;
   // Phase B2 — bounded-depth walk of a single path. Older native builds
   // (pre-v0.2) may not ship this method; the TS wrapper guards with
@@ -461,7 +462,24 @@ export class FileExplorer {
    * The input must contain every current root exactly once.
    */
   reorderRoots(ids: readonly EntryId[]): number {
-    return wrapSync(() => this.nativeFx.reorderRoots([...ids]));
+    const orderedPaths = ids.map((id) => this.pathOf(id));
+    const version = wrapSync(() => this.nativeFx.reorderRoots([...ids]));
+    if (orderedPaths.every((path): path is string => path !== null)) {
+      this.rootPaths.splice(0, this.rootPaths.length, ...orderedPaths);
+    }
+    return version;
+  }
+
+  /**
+   * Atomically replace the configured workspace roots in display order.
+   * New roots are seeded without walking descendants; removed roots and their
+   * known subtrees disappear in the same immutable snapshot.
+   */
+  async updateWorkspaceRoots(roots: readonly (Uri | string)[]): Promise<number> {
+    const rootPaths = roots.map(resolveRoot);
+    const version = await wrap(this.nativeFx.updateWorkspaceRoots(rootPaths));
+    this.rootPaths.splice(0, this.rootPaths.length, ...rootPaths);
+    return version;
   }
 
   get capabilities(): number {

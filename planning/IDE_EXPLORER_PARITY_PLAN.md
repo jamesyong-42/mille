@@ -770,7 +770,26 @@ snapshot, invalid/no-op, and UI alias/reorder tests cover the contract. The
 32-root, 32,800-entry, 100-sample end-to-end gate measured 1.003 ms median and
 2.577 ms p95 for publish plus public snapshot observation against an 8 ms p95
 budget; same-order no-op measured 0.003/0.005 ms median/p95. Dynamic
-add/remove, cross-root operation policy, and unavailable-root states remain.
+root membership is covered by the next result.
+
+Live-root-membership result (2026-07-23): `updateWorkspaceRoots` now replaces
+the ordered configured path list without reconstructing the explorer. It stats
+and validates the complete desired set first, rejects duplicate, overlapping,
+missing, and non-directory roots without publication, then performs one store
+mutation: retained paths preserve IDs and known descendants, deleted roots
+remove their complete known subtrees and both path-index directions, and new
+directories receive lazy root entries. An empty list is supported; re-adding a
+removed path receives a fresh identity. The configured-path list is now live
+shared state for resolution, excludes, lazy walks, and watcher normalization;
+watch registrations move with membership under the policy gate. Local events
+and host deltas carry every removed known ID, while port completion waits for
+all attached mirrors to evict removed records and receive the new root list.
+Rust atomicity/idempotence tests, local failure/retained-snapshot/lazy-hydration
+tests, two-client hydrated-descendant eviction, and added/removed-root watcher
+coverage lock the behavior down. The 32,770-entry, 100-sample churn gate
+measured 9.033 ms median and 10.712 ms p95 against a 16 ms p95 budget;
+same-list no-op measured 0.017/0.049 ms median/p95. Phase 3.2 still needs
+unavailable-root states and explicit cross-root operation/collision policy.
 
 #### 3.3 Persist navigation state
 

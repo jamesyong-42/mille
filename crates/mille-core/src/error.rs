@@ -144,6 +144,8 @@ fn io_kind_code(err: &std::io::Error) -> ErrorCode {
         K::PermissionDenied => ErrorCode::EACCES,
         K::NotFound => ErrorCode::ENOENT,
         K::AlreadyExists => ErrorCode::EEXIST,
+        K::NotADirectory => ErrorCode::ENOTDIR,
+        K::IsADirectory => ErrorCode::EISDIR,
         K::InvalidInput | K::InvalidData => ErrorCode::EINVAL,
         K::TimedOut | K::Interrupted => ErrorCode::EBUSY,
         K::Unsupported => ErrorCode::EUNSUPPORTED,
@@ -238,6 +240,14 @@ mod tests {
         let err = std::io::Error::new(std::io::ErrorKind::AlreadyExists, "boom");
         let fx = ErrorCode::from_io_error(&err, PathBuf::from("/x"));
         assert_eq!(fx.code(), ErrorCode::EEXIST);
+
+        let err = std::io::Error::new(std::io::ErrorKind::NotADirectory, "not a directory");
+        let fx = ErrorCode::from_io_error(&err, PathBuf::from("/x"));
+        assert_eq!(fx.code(), ErrorCode::ENOTDIR);
+
+        let err = std::io::Error::new(std::io::ErrorKind::IsADirectory, "is a directory");
+        let fx = ErrorCode::from_io_error(&err, PathBuf::from("/x"));
+        assert_eq!(fx.code(), ErrorCode::EISDIR);
     }
 
     #[test]

@@ -22,7 +22,7 @@ use crate::types::{ChangeNoticeJs, EntryJs, ErrorPayloadJs, FileSystemEventJs, W
 
 #[derive(Clone)]
 pub(crate) struct WatchConfig {
-    pub roots: Vec<PathBuf>,
+    pub roots: Arc<parking_lot::RwLock<Vec<PathBuf>>>,
     pub respect_ignore: bool,
     pub exclude_globs: Arc<parking_lot::RwLock<Vec<String>>>,
     pub policy_gate: Arc<Mutex<()>>,
@@ -74,7 +74,8 @@ pub(crate) fn create_watcher(
         },
     )?;
 
-    for root in &config.roots {
+    let configured_roots = config.roots.read().clone();
+    for root in &configured_roots {
         if let Err(err) = watcher.watch(
             root,
             WatcherOptions {
@@ -102,9 +103,10 @@ fn process_batch(
 ) {
     let _policy_guard = config.policy_gate.lock();
     let now = Instant::now();
+    let configured_roots = config.roots.read().clone();
     let raw: Vec<_> = raw
         .into_iter()
-        .map(|event| normalize_raw_event(event, &config.roots))
+        .map(|event| normalize_raw_event(event, &configured_roots))
         .collect();
     // Never leave an unmatched rename half waiting indefinitely for another
     // OS callback. Pair halves from this debounce batch, then degrade any
@@ -331,7 +333,7 @@ fn reconcile_event(
         } => reconcile_nearest_parent(store, config, path, Some(1)),
         FsChangeEvent::Coarse { root } => {
             let scope = nearest_known_directory(store, root)
-                .or_else(|| containing_root(&config.roots, root))
+                .or_else(|| containing_root(&config.roots.read(), root))
                 .unwrap_or_else(|| root.clone());
             let mut out = reconcile_directory(store, config, &scope, None)?;
             if let Some(entry) = store.get_by_path(&scope) {
@@ -355,7 +357,7 @@ fn reconcile_nearest_parent(
         path.parent().unwrap_or(path).to_path_buf()
     };
     let scope = nearest_known_directory(store, &start)
-        .or_else(|| containing_root(&config.roots, path))
+        .or_else(|| containing_root(&config.roots.read(), path))
         .ok_or_else(|| {
             FxError::InvalidInput(format!("watch path is outside configured roots: {path:?}"))
         })?;
@@ -516,7 +518,8 @@ fn walk_for_reconcile(
         return Ok((walk(directory, options)?, None, None));
     }
 
-    let root = containing_root(&config.roots, directory).unwrap_or_else(|| directory.to_path_buf());
+    let root =
+        containing_root(&config.roots.read(), directory).unwrap_or_else(|| directory.to_path_buf());
     let mut traversal = IgnoreMatcher::new();
     let mut repository_ignore = IgnoreMatcher::new();
     let mut excludes = IgnoreMatcher::new();

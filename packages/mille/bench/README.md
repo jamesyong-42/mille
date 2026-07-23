@@ -95,3 +95,16 @@ same-order calls and enforces a default 8 ms reorder p95 gate. Root count,
 entries per root, samples, and budget use `MILLE_ROOT_REORDER_ROOTS`,
 `MILLE_ROOT_REORDER_ENTRIES_PER_ROOT`, `MILLE_ROOT_REORDER_SAMPLES`, and
 `MILLE_ROOT_REORDER_P95_BUDGET_MS`.
+
+## Live workspace-root add/remove
+
+```sh
+pnpm bench:root-churn
+```
+
+The harness keeps a 32,768-entry root indexed while rotating a second root
+through 16 candidates for 100 measured replacements. Every sample includes
+filesystem validation, one immutable native publication, subtree/index
+removal, lazy root insertion, and public snapshot verification. It separately
+measures identical-list no-ops and enforces a 16 ms replacement p95 gate.
+Fixture size, candidates, samples, and budget use `MILLE_ROOT_CHURN_*`.

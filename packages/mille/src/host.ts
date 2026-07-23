@@ -1219,6 +1219,12 @@ class FileExplorerHostImpl implements FileExplorerHost {
         }
         return this.explorer.cancelOperation(operationId);
       }
+      case 'canUndo':
+        return this.explorer.canUndo();
+      case 'peekUndo':
+        return this.explorer.peekUndo();
+      case 'undo':
+        return this.explorer.undo();
       case 'resync': {
         const [id, recursive] = args;
         if (

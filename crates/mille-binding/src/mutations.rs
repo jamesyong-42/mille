@@ -18,7 +18,8 @@ use napi_derive::napi;
 use mille_core::{Entry, EntryId, EntryKind, EntryStore, FxError};
 
 /// Options for `FileExplorer.delete`. Mirrors api.d.ts `DeleteOptions`.
-/// `trash` is accepted but stubbed until PLAN 13.x adds per-platform trash.
+/// `trash` defaults to true: soft-delete into workspace `.mille-trash` so the
+/// operation is undoable. `trash: false` permanently removes the path.
 #[napi(object)]
 pub struct DeleteOptionsJs {
     pub trash: Option<bool>,

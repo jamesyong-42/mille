@@ -91,6 +91,31 @@ export interface VisibleRowCount {
 
 export type CollisionPolicy = 'error' | 'rename' | 'overwrite' | 'skip' | 'merge';
 
+export type UndoKind = 'create' | 'rename' | 'move' | 'delete';
+
+export interface UndoDescriptor {
+  readonly id: number;
+  readonly kind: UndoKind;
+  readonly label: string;
+  readonly undoable: boolean;
+  readonly reason?: string;
+  readonly timestampMs: number;
+}
+
+export interface UndoResult {
+  readonly id: number;
+  readonly kind: UndoKind;
+  readonly label: string;
+  readonly entryId?: number;
+}
+
+function normalizeUndoKind(value: unknown): UndoKind | null {
+  if (value === 'create' || value === 'rename' || value === 'move' || value === 'delete') {
+    return value;
+  }
+  return null;
+}
+
 export type DestinationProbeStatus = 'free' | 'exists' | 'case_conflict';
 
 export interface DestinationProbe {
@@ -254,6 +279,21 @@ type NativeFx = {
     options?: TransferOptions,
   ): Promise<Entry>;
   delete(id: number, options?: { trash?: boolean; recursive?: boolean }): Promise<void>;
+  canUndo(): boolean;
+  peekUndo(): {
+    id: number;
+    kind: string;
+    label: string;
+    undoable: boolean;
+    reason?: string;
+    timestampMs: number;
+  } | null;
+  undo(): Promise<{
+    id: number;
+    kind: string;
+    label: string;
+    entryId?: number | null;
+  }>;
   copy(
     id: number,
     newParentId: number,
@@ -924,7 +964,45 @@ export class FileExplorer {
   }
 
   delete(id: EntryId, options?: { trash?: boolean; recursive?: boolean }): Promise<void> {
+    // Default trash:true is applied natively when options omit trash.
     return wrap(this.nativeFx.delete(id, options));
+  }
+
+  canUndo(): boolean {
+    if (typeof this.nativeFx.canUndo !== 'function') return false;
+    return Boolean(this.nativeFx.canUndo());
+  }
+
+  peekUndo(): UndoDescriptor | null {
+    if (typeof this.nativeFx.peekUndo !== 'function') return null;
+    const raw = this.nativeFx.peekUndo() as Record<string, unknown> | null;
+    if (raw === null || raw === undefined || typeof raw !== 'object') return null;
+    const kind = normalizeUndoKind(raw.kind);
+    if (kind === null) return null;
+    const reason = raw.reason;
+    return {
+      id: Number(raw.id),
+      kind,
+      label: String(raw.label ?? ''),
+      undoable: Boolean(raw.undoable),
+      ...(typeof reason === 'string' && reason.length > 0 ? { reason } : null),
+      timestampMs: Number(raw.timestampMs ?? raw.timestamp_ms ?? 0),
+    };
+  }
+
+  async undo(): Promise<UndoResult> {
+    if (typeof this.nativeFx.undo !== 'function') {
+      throw new FileSystemError('EUNSUPPORTED', 'undo is not available on this binding');
+    }
+    const raw = (await wrap(this.nativeFx.undo())) as Record<string, unknown>;
+    const kind = normalizeUndoKind(raw.kind) ?? 'create';
+    const entryId = raw.entryId ?? raw.entry_id;
+    return {
+      id: Number(raw.id),
+      kind,
+      label: String(raw.label ?? ''),
+      ...(entryId !== undefined && entryId !== null ? { entryId: Number(entryId) } : null),
+    };
   }
 
   copy(

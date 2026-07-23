@@ -131,6 +131,24 @@ export interface Entry {
 
 export type CollisionPolicy = 'error' | 'rename' | 'overwrite' | 'skip' | 'merge';
 
+export type UndoKind = 'create' | 'rename' | 'move' | 'delete';
+
+export interface UndoDescriptor {
+  readonly id: number;
+  readonly kind: UndoKind;
+  readonly label: string;
+  readonly undoable: boolean;
+  readonly reason?: string;
+  readonly timestampMs: number;
+}
+
+export interface UndoResult {
+  readonly id: number;
+  readonly kind: UndoKind;
+  readonly label: string;
+  readonly entryId?: number;
+}
+
 export type DestinationProbeStatus = 'free' | 'exists' | 'case_conflict';
 
 export interface DestinationProbe {
@@ -644,7 +662,17 @@ export declare class FileExplorer implements Disposable {
     newName?: string,
     options?: TransferOptions,
   ): Promise<Entry>;
+  /**
+   * Delete an entry. Defaults to `trash: true` (soft-delete into workspace
+   * `.mille-trash`, undoable). Pass `trash: false` for a permanent delete.
+   */
   delete(id: EntryId, options?: { trash?: boolean; recursive?: boolean }): Promise<void>;
+  /** True when the undo journal has at least one reverseable operation. */
+  canUndo(): boolean;
+  /** Describe the next undoable operation without applying it. */
+  peekUndo(): UndoDescriptor | null;
+  /** Reverse the most recent undoable create / rename / move / soft-delete. */
+  undo(): Promise<UndoResult>;
   copy(
     id: EntryId,
     newParentId: EntryId,

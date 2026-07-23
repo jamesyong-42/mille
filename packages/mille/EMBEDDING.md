@@ -1096,6 +1096,31 @@ Cancelled **create** copies best-effort remove the partial destination.
 **Overwrite** copies stage into a sibling path and only swap on success, so a
 cancelled overwrite restores/keeps the original destination. Hosts using
 `createFileExplorerHost` forward `OP_*` warnings to every attached port client.
+
+### Trash and undo
+
+`delete(id)` defaults to **`trash: true`**: the entry is soft-deleted into
+`<workspaceRoot>/.mille-trash/<stamp>/` so it can be restored. Pass
+`{ trash: false }` for a permanent delete (not undoable).
+
+```ts
+await fx.delete(fileId); // soft-delete (default)
+await fx.delete(fileId, { trash: false }); // permanent
+
+fx.canUndo(); // boolean
+fx.peekUndo(); // { id, kind, label, undoable, timestampMs } | null
+await fx.undo(); // reverse create / rename / move / soft-delete
+```
+
+| Operation | Undo behavior |
+| --- | --- |
+| `create` | Permanently removes the created path |
+| `rename` / `move` | Renames/moves back when both paths are still valid |
+| soft `delete` (`trash: true`) | Restores from `.mille-trash` |
+| permanent `delete` | Not journaled; `canUndo` unchanged |
+
+The explorer advertises the `Trash` capability bit. Soft-trash folders are
+hidden by normal hidden-file rules (leading `.`).
 Same-volume directory moves preserve the complete known subtree identity;
 cross-device moves return `EUNSUPPORTED` without partial store mutation until
 the Phase 4 copy/delete fallback lands. Progress, cancellation, and undo

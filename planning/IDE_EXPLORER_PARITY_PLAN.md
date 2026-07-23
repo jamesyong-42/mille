@@ -1112,6 +1112,14 @@ transfer cancel wrapper; pre-count respects cancellation; internal DnD reports
 - Report when an operation is not undoable.
 - Reconcile or rescan affected subtrees after partial or ambiguous failure.
 
+First recovery/undo result (2026-07-23): `delete` defaults to soft-trash into
+workspace `.mille-trash/<stamp>/` (undoable restore). `{ trash: false }` is a
+permanent delete and is not journaled. An in-memory operation journal records
+create, rename, move, and soft-delete with `canUndo()`, `peekUndo()`, and
+`undo()`. The `Trash` capability bit is advertised. Four integration tests
+cover soft-delete restore, permanent non-undo, LIFO create/rename/move undo,
+and capability advertising.
+
 ### Exit criteria
 
 - OS drag-in copies actual file and directory contents.

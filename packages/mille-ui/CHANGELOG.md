@@ -4,6 +4,9 @@
 
 ### Added
 
+- **Trash default and undo journal** — `delete` soft-trashes into workspace
+  `.mille-trash` by default (undoable); `{ trash: false }` is permanent. Public
+  `canUndo` / `peekUndo` / `undo` reverse create, rename, move, and soft-delete.
 - **Transfer progress and cancellation** — recursive copies accept
   `operationId` / `AbortSignal`, emit `OP_PROGRESS` / `OP_COMPLETE` /
   `OP_CANCELLED` warnings, and honor `cancelOperation` between recursive steps

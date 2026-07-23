@@ -13,6 +13,7 @@ pub mod error;
 pub mod events;
 pub mod explorer;
 pub mod io;
+pub mod journal;
 pub mod mutations;
 pub mod snapshot;
 pub mod stream;

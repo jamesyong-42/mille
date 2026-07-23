@@ -21,6 +21,9 @@ use mille_core::{
 
 use crate::error::{fx_error_to_napi, io_to_fx};
 use crate::events::{Channel, EventBus};
+use crate::journal::{
+    JournalKind, OperationJournal, UndoDescriptorJs, UndoResultJs, MILLE_TRASH_DIR,
+};
 use crate::mutations::{
     kind_from_u8, resolve_entry_path, stat_to_entry, DeleteOptionsJs, TransferOptionsJs,
 };
@@ -57,10 +60,10 @@ pub struct ProjectionSettingsJs {
     pub file_nesting_rules: Vec<FileNestingRuleJs>,
 }
 
-/// Local-mode capability bitmask advertised in Phase 5 wave 1.
-/// ReadWrite (1) | CaseSensitive (2) | Watch (32) = 35.
-/// Keep in sync with api.d.ts `Capability` when later waves expand.
-const LOCAL_CAPABILITIES: u32 = 0b10_0011;
+/// Local-mode capability bitmask.
+/// ReadWrite (1) | CaseSensitive (2) | Trash (8) | Watch (32) = 43.
+/// Keep in sync with api.d.ts `Capability`.
+const LOCAL_CAPABILITIES: u32 = 0b10_1011;
 
 /// Options passed from JS when constructing FileExplorer. Mirrors
 /// `ExplorerOptions` in api.d.ts. Optional fields are `Option<T>`.
@@ -122,6 +125,8 @@ pub struct FileExplorer {
     /// In-flight long operations keyed by host-supplied operation id.
     /// `cancelOperation` trips the matching token between recursive steps.
     pub(crate) operations: Arc<parking_lot::Mutex<HashMap<String, CancellationToken>>>,
+    /// Undo stack for create / rename / move / soft-delete.
+    pub(crate) journal: Arc<parking_lot::Mutex<OperationJournal>>,
 }
 
 #[napi]
@@ -206,6 +211,7 @@ impl FileExplorer {
             policy_gate: Arc::new(parking_lot::Mutex::new(())),
             events: Arc::new(EventBus::new()),
             operations: Arc::new(parking_lot::Mutex::new(HashMap::new())),
+            journal: Arc::new(parking_lot::Mutex::new(OperationJournal::new())),
         })
     }
 
@@ -1288,6 +1294,7 @@ impl FileExplorer {
         let _policy_guard = self.policy_gate.lock();
         let exclude_matchers = self.current_exclude_matchers().map_err(fx_error_to_napi)?;
         entry.is_excluded = Self::path_is_excluded(&new_path, &entry, &exclude_matchers);
+        let created_path = new_path.clone();
         let new_id = self
             .store
             .insert(new_path, entry)
@@ -1298,6 +1305,7 @@ impl FileExplorer {
             .store
             .get_by_id(new_id)
             .ok_or_else(|| Error::from_reason("insert succeeded but id vanished"))?;
+        self.journal.lock().push_create(new_id, created_path);
         Ok(EntryJs::from_core(arc.as_ref()))
     }
 
@@ -1327,10 +1335,15 @@ impl FileExplorer {
         self.record_intent(new_path.clone(), IntentKind::Rename);
 
         let _policy_guard = self.policy_gate.lock();
-        self.store.rename(eid, new_path).map_err(fx_error_to_napi)?;
+        self.store
+            .rename(eid, new_path.clone())
+            .map_err(fx_error_to_napi)?;
         self.reclassify_current_excludes()
             .map_err(fx_error_to_napi)?;
 
+        self.journal
+            .lock()
+            .push_rename(eid, old_path, new_path);
         let arc = self
             .store
             .get_by_id(eid)
@@ -1566,6 +1579,9 @@ impl FileExplorer {
         self.reclassify_current_excludes()
             .map_err(fx_error_to_napi)?;
 
+        self.journal
+            .lock()
+            .push_move(eid, old_path, new_path.clone());
         let arc = self
             .store
             .get_by_id(eid)
@@ -1574,11 +1590,15 @@ impl FileExplorer {
     }
 
     /// Delete an entry. Directories with children require recursive: true.
-    /// `trash` is accepted but currently falls back to permanent delete.
+    ///
+    /// By default (`trash: true`) the path is soft-deleted into the owning
+    /// workspace root's `.mille-trash/<id>/` folder so `undo()` can restore it.
+    /// Pass `trash: false` for a permanent delete (not undoable).
     #[napi]
     pub async fn delete(&self, id: i64, options: Option<DeleteOptionsJs>) -> Result<()> {
         let eid = EntryId(id as u64);
         let recursive = options.as_ref().and_then(|o| o.recursive).unwrap_or(false);
+        let use_trash = options.as_ref().and_then(|o| o.trash).unwrap_or(true);
 
         let snap = self.store.snapshot();
         let path = resolve_entry_path(&self.store, eid).ok_or_else(|| {
@@ -1593,39 +1613,279 @@ impl FileExplorer {
                 id
             )))
         })?;
+        if entry.parent_id.is_none() {
+            return Err(fx_error_to_napi(FxError::InvalidInput(
+                "workspace roots cannot be deleted".into(),
+            )));
+        }
+        let parent_id = entry.parent_id.unwrap();
+        let name = entry.name.clone();
+        let was_dir = entry.kind == EntryKind::Directory
+            || entry.symlink_target_is_dir == Some(true);
 
-        match entry.kind {
-            EntryKind::Directory => {
-                if snap.has_children(eid) && !recursive {
-                    return Err(fx_error_to_napi(FxError::Unsupported(format!(
-                        "delete of non-empty directory {:?} requires recursive: true",
-                        path
-                    ))));
-                }
-                if recursive {
-                    tokio::fs::remove_dir_all(&path)
-                        .await
-                        .map_err(|e| fx_error_to_napi(io_to_fx(e, path.clone())))?;
-                } else {
-                    tokio::fs::remove_dir(&path)
-                        .await
-                        .map_err(|e| fx_error_to_napi(io_to_fx(e, path.clone())))?;
-                }
+        if was_dir {
+            if snap.has_children(eid) && !recursive {
+                return Err(fx_error_to_napi(FxError::Unsupported(format!(
+                    "delete of non-empty directory {:?} requires recursive: true",
+                    path
+                ))));
             }
-            _ => {
-                tokio::fs::remove_file(&path)
+        }
+
+        if use_trash {
+            let roots = self.roots.read().clone();
+            let root = configured_root_for_path(&roots, &path).ok_or_else(|| {
+                fx_error_to_napi(FxError::InvalidInput(
+                    "delete path is not under a configured root".into(),
+                ))
+            })?;
+            // Use a unique stamp so concurrent deletes never collide.
+            let stamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0);
+            let recycle_dir = root.join(MILLE_TRASH_DIR).join(format!("{stamp}"));
+            tokio::fs::create_dir_all(&recycle_dir)
+                .await
+                .map_err(|e| fx_error_to_napi(io_to_fx(e, recycle_dir.clone())))?;
+            let recycle_path = recycle_dir.join(&name);
+            tokio::fs::rename(&path, &recycle_path)
+                .await
+                .map_err(|e| fx_error_to_napi(io_to_fx(e, path.clone())))?;
+            self.record_intent(path.clone(), IntentKind::Delete);
+            self.record_intent(recycle_path.clone(), IntentKind::Create);
+            if recursive || was_dir {
+                let _ = self.store.remove_subtree(eid);
+            } else {
+                let _ = self.store.remove(eid);
+            }
+            self.journal.lock().push_soft_delete(
+                path,
+                recycle_path,
+                parent_id,
+                name,
+                was_dir,
+                recursive,
+            );
+            return Ok(());
+        }
+
+        // Permanent delete — not undoable.
+        if was_dir {
+            if recursive {
+                tokio::fs::remove_dir_all(&path)
+                    .await
+                    .map_err(|e| fx_error_to_napi(io_to_fx(e, path.clone())))?;
+            } else {
+                tokio::fs::remove_dir(&path)
                     .await
                     .map_err(|e| fx_error_to_napi(io_to_fx(e, path.clone())))?;
             }
+        } else {
+            tokio::fs::remove_file(&path)
+                .await
+                .map_err(|e| fx_error_to_napi(io_to_fx(e, path.clone())))?;
         }
         self.record_intent(path.clone(), IntentKind::Delete);
-
-        if recursive {
-            self.store.remove_subtree(eid);
+        if recursive || was_dir {
+            let _ = self.store.remove_subtree(eid);
         } else {
-            self.store.remove(eid);
+            let _ = self.store.remove(eid);
         }
+        // Permanent deletes clear the undo stack's top if we want strict
+        // semantics: leave stack alone so earlier undos remain valid.
         Ok(())
+    }
+
+    /// True when at least one undoable operation is on the journal stack.
+    #[napi(js_name = "canUndo")]
+    pub fn can_undo(&self) -> bool {
+        self.journal.lock().can_undo()
+    }
+
+    /// Describe the next undoable operation without applying it.
+    #[napi(js_name = "peekUndo")]
+    pub fn peek_undo(&self) -> Option<UndoDescriptorJs> {
+        self.journal.lock().peek().map(|e| e.descriptor())
+    }
+
+    /// Reverse the most recent undoable mutation. Returns a descriptor of
+    /// what was undone. Fails with EINVAL when the stack is empty or the
+    /// reverse mutation cannot be applied (e.g. path already recreated).
+    #[napi]
+    pub async fn undo(&self) -> Result<UndoResultJs> {
+        let entry = self.journal.lock().pop().ok_or_else(|| {
+            fx_error_to_napi(FxError::InvalidInput("nothing to undo".into()))
+        })?;
+        let descriptor = entry.descriptor();
+        match entry.kind {
+            JournalKind::Create { entry_id, path } => {
+                // Reverse create by permanent delete of the created path.
+                if path.exists() {
+                    let meta = tokio::fs::symlink_metadata(&path)
+                        .await
+                        .map_err(|e| fx_error_to_napi(io_to_fx(e, path.clone())))?;
+                    if meta.is_dir() && !meta.file_type().is_symlink() {
+                        tokio::fs::remove_dir_all(&path)
+                            .await
+                            .map_err(|e| fx_error_to_napi(io_to_fx(e, path.clone())))?;
+                    } else {
+                        tokio::fs::remove_file(&path)
+                            .await
+                            .map_err(|e| fx_error_to_napi(io_to_fx(e, path.clone())))?;
+                    }
+                    self.record_intent(path.clone(), IntentKind::Delete);
+                }
+                if self.store.get_by_id(entry_id).is_some() {
+                    let _ = self.store.remove_subtree(entry_id);
+                    let _ = self.store.remove(entry_id);
+                } else if let Some(existing) = self.store.get_by_path(&path) {
+                    let _ = self.store.remove_subtree(existing.id);
+                    let _ = self.store.remove(existing.id);
+                }
+                Ok(UndoResultJs {
+                    id: descriptor.id,
+                    kind: descriptor.kind,
+                    label: descriptor.label,
+                    entry_id: None,
+                })
+            }
+            JournalKind::Rename {
+                entry_id,
+                old_path,
+                new_path,
+            }
+            | JournalKind::Move {
+                entry_id,
+                old_path,
+                new_path,
+            } => {
+                if !new_path.exists() {
+                    return Err(fx_error_to_napi(FxError::InvalidInput(format!(
+                        "cannot undo: {:?} no longer exists",
+                        new_path
+                    ))));
+                }
+                if old_path.exists() {
+                    return Err(fx_error_to_napi(FxError::InvalidInput(format!(
+                        "cannot undo: {:?} already exists",
+                        old_path
+                    ))));
+                }
+                if let Some(parent) = old_path.parent() {
+                    tokio::fs::create_dir_all(parent)
+                        .await
+                        .map_err(|e| fx_error_to_napi(io_to_fx(e, parent.to_path_buf())))?;
+                }
+                tokio::fs::rename(&new_path, &old_path)
+                    .await
+                    .map_err(|e| fx_error_to_napi(io_to_fx(e, new_path.clone())))?;
+                self.record_intent(new_path.clone(), IntentKind::Rename);
+                self.record_intent(old_path.clone(), IntentKind::Rename);
+                let _policy_guard = self.policy_gate.lock();
+                if self.store.get_by_id(entry_id).is_some() {
+                    self.store
+                        .rename(entry_id, old_path.clone())
+                        .map_err(fx_error_to_napi)?;
+                } else {
+                    // Fall back to reindex if identity was lost.
+                    let config = self.watch_config();
+                    if let Some(parent) = old_path.parent() {
+                        let _ = crate::watch_runtime::reconcile_directory(
+                            &self.store,
+                            &config,
+                            parent,
+                            Some(1),
+                        );
+                    }
+                }
+                self.reclassify_current_excludes()
+                    .map_err(fx_error_to_napi)?;
+                Ok(UndoResultJs {
+                    id: descriptor.id,
+                    kind: descriptor.kind,
+                    label: descriptor.label,
+                    entry_id: Some(entry_id.raw() as i64),
+                })
+            }
+            JournalKind::SoftDelete {
+                original_path,
+                recycle_path,
+                parent_id,
+                name,
+                was_dir,
+                recursive,
+            } => {
+                let _ = (was_dir, recursive, name);
+                if !recycle_path.exists() {
+                    return Err(fx_error_to_napi(FxError::InvalidInput(format!(
+                        "cannot undo delete: recycle path missing {:?}",
+                        recycle_path
+                    ))));
+                }
+                if original_path.exists() {
+                    return Err(fx_error_to_napi(FxError::InvalidInput(format!(
+                        "cannot undo delete: {:?} already exists",
+                        original_path
+                    ))));
+                }
+                if let Some(parent) = original_path.parent() {
+                    tokio::fs::create_dir_all(parent)
+                        .await
+                        .map_err(|e| fx_error_to_napi(io_to_fx(e, parent.to_path_buf())))?;
+                }
+                tokio::fs::rename(&recycle_path, &original_path)
+                    .await
+                    .map_err(|e| fx_error_to_napi(io_to_fx(e, recycle_path.clone())))?;
+                self.record_intent(recycle_path.clone(), IntentKind::Delete);
+                self.record_intent(original_path.clone(), IntentKind::Create);
+                // Best-effort cleanup of empty recycle bucket.
+                if let Some(bucket) = recycle_path.parent() {
+                    let _ = tokio::fs::remove_dir(bucket).await;
+                }
+                let _policy_guard = self.policy_gate.lock();
+                let mut entry = stat_to_entry(
+                    &original_path,
+                    Some(parent_id),
+                    original_path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("restored")
+                        .to_string(),
+                )
+                .await
+                .map_err(fx_error_to_napi)?;
+                let exclude_matchers = self.current_exclude_matchers().map_err(fx_error_to_napi)?;
+                entry.is_excluded =
+                    Self::path_is_excluded(&original_path, &entry, &exclude_matchers);
+                let new_id = self
+                    .store
+                    .insert(original_path.clone(), entry)
+                    .map_err(fx_error_to_napi)?;
+                // Reconcile descendants for restored directories.
+                if tokio::fs::metadata(&original_path)
+                    .await
+                    .map(|m| m.is_dir())
+                    .unwrap_or(false)
+                {
+                    let config = self.watch_config();
+                    let _ = crate::watch_runtime::reconcile_directory(
+                        &self.store,
+                        &config,
+                        &original_path,
+                        None,
+                    );
+                }
+                self.reclassify_current_excludes()
+                    .map_err(fx_error_to_napi)?;
+                Ok(UndoResultJs {
+                    id: descriptor.id,
+                    kind: descriptor.kind,
+                    label: descriptor.label,
+                    entry_id: Some(new_id.raw() as i64),
+                })
+            }
+        }
     }
 
     /// Copy a file or directory under a new parent. Directories copy

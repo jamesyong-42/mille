@@ -486,6 +486,19 @@ export class PortFileExplorer {
     return result === true;
   }
 
+  async canUndo(): Promise<boolean> {
+    const result = await this.call('canUndo', []);
+    return result === true;
+  }
+
+  async peekUndo(): Promise<unknown> {
+    return this.call('peekUndo', []);
+  }
+
+  async undo(): Promise<unknown> {
+    return this.call('undo', []);
+  }
+
   async readFile(id: number): Promise<Uint8Array> {
     const data = (await this.mutate('readFile', { id })) as number[];
     return Uint8Array.from(data);

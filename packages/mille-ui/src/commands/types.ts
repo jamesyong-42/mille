@@ -12,6 +12,7 @@ import type {
   FileExplorer,
   MirrorSnapshot,
 } from '@vibecook/mille';
+import type { FileOpenEvent } from '../open-policy.js';
 
 /**
  * A single invocable command. Commands are the only mutation path in the
@@ -63,7 +64,7 @@ export interface Command {
  */
 export interface HostHooks {
   /** Open the given entry in the host's editor / preview surface. */
-  onOpen?(entry: Entry): void;
+  onOpen?(entry: Entry, event: FileOpenEvent): void;
   /** Reveal the entry in the host's editor (focus, but don't open). */
   onRevealInEditor?(entry: Entry): void;
   /** Open a terminal rooted at the given absolute path. */

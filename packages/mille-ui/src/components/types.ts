@@ -32,6 +32,7 @@ import type {
   FileTreeNavigationState,
   FileTreeSearchMode,
 } from '../navigation-state.js';
+import type { FileOpenBehavior, FileOpenEvent } from '../open-policy.js';
 
 // Observer signatures mirror virtual-core's. Declared here rather
 // than in the hook to avoid a component → hook → component cycle.
@@ -462,6 +463,12 @@ export interface FileTreeProps {
    */
   readonly autoRevealActiveEntry?: boolean;
 
+  /**
+   * Mouse open policy. Defaults to selection-only single click and permanent
+   * double-click. Keyboard, search, and command opens are permanent.
+   */
+  readonly openBehavior?: FileOpenBehavior;
+
   // ─── DEFERRED (Phase 4+): selection, focus, keyboard ─────────────
   readonly focusedId?: EntryId | null;
   readonly onFocusedIdChange?: (id: EntryId | null) => void;
@@ -559,8 +566,12 @@ export interface FileTreeProps {
    */
   readonly disableDragDrop?: boolean;
 
-  // ─── DEFERRED (Phase 5/6): open / reveal callbacks ───────────────
-  readonly onOpen?: (entry: Entry) => void;
+  // ─── Open / reveal callbacks ─────────────────────────────────────
+  /**
+   * Called when the tree requests that the host open a file. The event
+   * distinguishes preview from permanent opens and identifies the source.
+   */
+  readonly onOpen?: (entry: Entry, event: FileOpenEvent) => void;
   readonly onRevealInEditor?: (entry: Entry) => void;
 
   // ─── Phase 10: decoration pipeline ───────────────────────────────

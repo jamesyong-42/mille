@@ -7,7 +7,8 @@
 //
 // The hook is Radix-free: it produces a sorted list of groups, each
 // holding commands, plus a `onItemSelect(commandId)` callback that
-// dispatches through the registry and swallows the throw/rejection
+// resolves the current command and invokes it with the live menu context
+// while swallowing the throw/rejection
 // paths. Consumers can render into Radix, ARIA-only menus, a palette,
 // or anything else.
 
@@ -39,7 +40,7 @@ export interface UseFileContextMenuResult {
   readonly groups: readonly UseFileContextMenuGroup[];
   /** `true` when no command matched the current `when` context. */
   readonly isEmpty: boolean;
-  /** Dispatch a command by id; swallows errors per the menu contract. */
+  /** Invoke a command by id with the live context; swallows errors. */
   readonly onItemSelect: (commandId: string) => void;
   /** Invoke when the menu visually closes — runs the caller's `onClose`. */
   readonly onClose: () => void;
@@ -117,7 +118,16 @@ export function useFileContextMenu(
   const onItemSelect = useCallback(
     (commandId: string) => {
       try {
-        const result = registry.dispatch(commandId);
+        const command = registry.get(commandId);
+        if (!command) {
+          close();
+          return;
+        }
+        // The menu already owns the authoritative live context used for its
+        // visibility checks. Invoke the currently registered command with
+        // that same context instead of depending on a separate registry
+        // context provider that embedded trees may not install.
+        const result = command.run(context);
         if (result && typeof (result as Promise<void>).catch === 'function') {
           (result as Promise<void>).catch(() => {
             /* swallow — individual commands own their error paths */
@@ -128,7 +138,7 @@ export function useFileContextMenu(
       }
       close();
     },
-    [registry, close],
+    [registry, context, close],
   );
 
   return {

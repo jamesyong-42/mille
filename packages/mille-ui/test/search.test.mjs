@@ -291,7 +291,7 @@ test('Enter on selected hit calls onOpen with the entry id', async () => {
       createElement(SearchResultList, {
         fx,
         query: 'alp',
-        onOpen: (id) => opened.push(id),
+        onOpen: (id, event) => opened.push({ id, event }),
         __testObserveElementRect: obs.observeElementRect,
         __testObserveElementOffset: obs.observeElementOffset,
       }),
@@ -312,7 +312,12 @@ test('Enter on selected hit calls onOpen with the entry id', async () => {
     fireKey(listbox, 'Enter');
   });
 
-  assert.deepEqual(opened, [101], `expected onOpen(101), got ${JSON.stringify(opened)}`);
+  assert.deepEqual(opened, [
+    {
+      id: 101,
+      event: { mode: 'permanent', source: 'search' },
+    },
+  ]);
 
   await act(async () => { root.unmount(); });
   container.remove();

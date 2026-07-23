@@ -886,8 +886,26 @@ query per target, at most 38 materialized rows per read, and zero focus changes.
 The rejected path-state implementation measured 74.01 ms median / 114.03 ms p95
 over its initial five-sample signal; deriving known IDs directly from the
 controlled prop removed that extra state publication. Remaining Phase 3.4 work
-is configurable preview/permanent-open behavior and explicit policy for
+was configurable preview/permanent-open behavior and explicit policy for
 excluded, hidden, generated, or external active files.
+
+Second follow-editor result (2026-07-23): every open path now emits one typed
+intent containing `preview`/`permanent` mode and its single-click,
+double-click, keyboard, search, or command source. The default remains
+selection-only single click plus permanent double click; hosts opt into
+single-click preview through `openBehavior`. Modified selection clicks never
+open, while keyboard, search, and menu commands are permanent. The playground
+uses the same shared reducer in production, tests, and its benchmark: it keeps
+one replaceable preview slot, promotes without rereading, preserves permanent
+tabs, avoids duplicates, and revision-guards asynchronous reads so replaced
+previews cannot return. Context-menu commands now execute against the same live
+tree context used to render them instead of requiring a separately installed
+registry provider. The complete UI and playground suites passed 335/335 and
+19/19. With 64 permanent tabs, the 10,000-cycle gate measured preview
+replacement at 0.001791 ms median / 0.002000 ms p95 and promotion at
+0.001042 ms median / 0.001167 ms p95 against a 0.25 ms p95 ceiling. Remaining
+Phase 3.4 work is the explicit excluded, hidden, generated, and external active
+file policy.
 
 #### 3.5 Complete baseline actions
 

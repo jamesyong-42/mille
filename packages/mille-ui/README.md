@@ -104,6 +104,33 @@ hydrate only the target's ancestor chain. The active row exposes
 scrolls without changing tree focus or selection, and it runs only when the
 target changes, so later user navigation is not undone by unrelated updates.
 
+## Control file opening
+
+The default mouse policy selects on single click and opens permanently on
+double click. Opt into IDE-style preview tabs and use the typed intent to keep
+preview state in the editor host:
+
+```tsx
+import type { Entry } from '@vibecook/mille';
+import { FileTree, type FileOpenEvent } from '@vibecook/mille-ui';
+
+function openEditor(entry: Entry, event: FileOpenEvent) {
+  editor.open(entry, { preview: event.mode === 'preview' });
+}
+
+<FileTree
+  fx={fx}
+  ariaLabel="Files"
+  openBehavior={{ singleClick: 'preview' }}
+  onOpen={openEditor}
+/>;
+```
+
+`onOpen` reports both `mode` (`preview` or `permanent`) and `source`
+(`singleClick`, `doubleClick`, `keyboard`, `search`, or `command`). Keyboard,
+search, context-menu, and default double-click opens are permanent. A modified
+click used for range or multi-selection never opens a preview.
+
 ## Entry points
 
 | Import                              | What you get                            |

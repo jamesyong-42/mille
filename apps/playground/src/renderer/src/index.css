@@ -699,6 +699,14 @@ html[data-theme='light']
   border-bottom-color: var(--jb-accent);
 }
 
+.tab.is-preview {
+  font-style: italic;
+}
+
+.tab.is-preview .tab-close {
+  font-style: normal;
+}
+
 .tab .tab-close {
   opacity: 0.4;
   font-size: 14px;

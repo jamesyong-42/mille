@@ -81,6 +81,8 @@ export interface ToolbarProps {
   /** Keep the Project tree aligned with the editor's active file. */
   readonly followActiveEditor: boolean;
   onFollowActiveEditorChange(next: boolean): void;
+  readonly singleClickPreview: boolean;
+  onSingleClickPreviewChange(next: boolean): void;
   /**
    * v0.2 B6 — parent-supplied reset callback. Typically calls
    * `treeRef.current?.reset()` to clear selection, filter, and
@@ -102,6 +104,8 @@ export function Toolbar(props: ToolbarProps): ReactElement {
     iconThemeStatus,
     followActiveEditor,
     onFollowActiveEditorChange,
+    singleClickPreview,
+    onSingleClickPreviewChange,
     onReset,
     compact = false,
   } = props;
@@ -399,6 +403,14 @@ export function Toolbar(props: ToolbarProps): ReactElement {
       </div>
 
       <div className="toolbar-group">
+        <label>
+          <input
+            type="checkbox"
+            checked={singleClickPreview}
+            onChange={(e) => onSingleClickPreviewChange(e.target.checked)}
+          />
+          Preview files on single click
+        </label>
         <label>
           <input
             type="checkbox"

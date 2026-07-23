@@ -19,7 +19,7 @@ export interface ContextMenuItemProps {
   readonly command: Command;
   /** The live command context (used for `label(ctx)` evaluation). */
   readonly context: CommandContext;
-  /** The registry this item dispatches through. */
+  /** Registry used to resolve the latest command implementation by id. */
   readonly registry: CommandRegistry;
   /** Close the parent menu after invoke. */
   readonly onClose: () => void;
@@ -55,9 +55,12 @@ export function ContextMenuItem(props: ContextMenuItemProps): ReactElement {
       data-mille-command-id={command.id}
       onSelect={(event: Event) => {
         // Radix fires onSelect before it would close; closing ourselves
-        // lets hosts observe the registry dispatch first.
+        // lets hosts observe the command first. The menu context is the
+        // authoritative live context for both visibility and execution;
+        // embedded trees are not required to install a registry provider.
         try {
-          const result = registry.dispatch(command.id);
+          const registeredCommand = registry.get(command.id);
+          const result = registeredCommand?.run(context);
           if (result && typeof (result as Promise<void>).catch === 'function') {
             (result as Promise<void>).catch(() => {
               /* swallow — individual commands own their error paths */

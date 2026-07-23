@@ -153,6 +153,7 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
     navigationStateDebounceMs = 150,
     activeEntry,
     autoRevealActiveEntry = false,
+    openBehavior,
     multiSelect = true,
     focusedId: controlledFocusedId,
     onFocusedIdChange,
@@ -831,7 +832,14 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
     viewport: viewportActions,
     commands: commandsHandle,
     multiSelect,
-    ...(onOpen ? { onOpenFallback: (row: VisibleRow) => onOpen(row) } : {}),
+    ...(onOpen
+      ? {
+          onOpenFallback: (
+            row: VisibleRow,
+            event: Parameters<NonNullable<typeof onOpen>>[1],
+          ) => onOpen(row, event),
+        }
+      : {}),
     onStartRename: (id) => {
       renameState.startRename(id);
     },
@@ -908,7 +916,9 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
       selectedIds,
       isMultiSelect: multiSelect && selectedIds.size > 1,
       isRenaming: renameState.renameTargetId !== null,
-      host: {},
+      host: {
+        ...(onOpen ? { onOpen } : null),
+      },
       cutIds: clipboard.cutIds,
       copyIds: clipboard.copyIds,
     }, {
@@ -942,6 +952,7 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
     renameState.renameTargetId,
     clipboard.cutIds,
     clipboard.copyIds,
+    onOpen,
   ]);
 
   const contextMenuContent = useMemo<ReactNode>(() => {
@@ -1713,11 +1724,14 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
         query={filterText}
         {...(onOpen
           ? {
-              onOpen: (entryId) => {
+              onOpen: (entryId, event) => {
                 const entry = snapshot.getById(entryId);
                 if (entry) {
                   // `onOpen` receives a `VisibleRow`-compatible object.
-                  onOpen(entry as unknown as Parameters<typeof onOpen>[0]);
+                  onOpen(
+                    entry as unknown as Parameters<typeof onOpen>[0],
+                    event,
+                  );
                 }
               },
             }
@@ -1917,13 +1931,27 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
                 e.detail === 1
               ) {
                 onChevronClick(row.id, rowExpanded);
+              } else if (
+                !row.hasChildren &&
+                !withMod &&
+                e.detail === 1 &&
+                openBehavior?.singleClick === 'preview' &&
+                onOpen
+              ) {
+                onOpen(row, {
+                  mode: 'preview',
+                  source: 'singleClick',
+                });
               }
             },
             onDoubleClick: () => {
               // Folders already toggle on single-click; double-click only
               // opens leaf entries (files).
               if (!row.hasChildren && onOpen) {
-                onOpen(row);
+                onOpen(row, {
+                  mode: openBehavior?.doubleClick ?? 'permanent',
+                  source: 'doubleClick',
+                });
               }
             },
             onContextMenu: () => {

@@ -123,7 +123,7 @@ const { createElement, act } = await import('react');
 const { createRoot } = await import('react-dom/client');
 
 const { FileTree, FileTreeProvider } = await import('../dist/index.js');
-const { createCommandRegistry } = await import('../dist/commands.js');
+const { createCommandRegistry, defaultCommands } = await import('../dist/commands.js');
 const { createFakeEngine, createFakeSnapshot } = await import('../dist/testing.js');
 
 // ─── Helpers ──────────────────────────────────────────────────────────
@@ -347,6 +347,60 @@ test('menu items reflect registry\'s visibleInContextMenu commands', async () =>
   assert.ok(ids.includes('file.rename'));
   assert.ok(ids.includes('file.delete'));
   assert.ok(ids.includes('file.open'));
+
+  await act(async () => { root.unmount(); });
+  container.remove();
+});
+
+test('menu commands execute with the tree live context and open intent', async () => {
+  const fx = createFakeEngine();
+  fx.emitDelta(createFakeSnapshot({ rows: sampleRows(), treeVersion: 1 }));
+  const registry = createCommandRegistry(defaultCommands);
+  const opened = [];
+
+  // Deliberately do not install a registry context provider. A menu item must
+  // execute with the same live tree context that controlled its visibility.
+  const { container, root } = mount();
+  const obs = makeObservers();
+
+  await act(async () => {
+    root.render(
+      createElement(
+        FileTreeProvider,
+        { fx, commands: registry },
+        createElement(FileTree, {
+          ariaLabel: 'LiveMenuContext',
+          rowHeight: 22,
+          overscan: 50,
+          onOpen: (entry, event) => {
+            opened.push({ id: entry.id, event });
+          },
+          __testObserveElementRect: obs.observeElementRect,
+          __testObserveElementOffset: obs.observeElementOffset,
+        }),
+      ),
+    );
+  });
+
+  const rowEls = container.querySelectorAll('[role="treeitem"]');
+  await act(async () => { fireContextMenu(rowEls[1]); });
+
+  const openItem = hdDocument.body.querySelector(
+    '[data-mille-command-id="file.open"]',
+  );
+  assert.ok(openItem, 'Open command should be visible for a focused file');
+
+  await act(async () => {
+    openItem.dispatchEvent(new hdWindow.MouseEvent('click', {
+      bubbles: true,
+      cancelable: true,
+    }));
+  });
+
+  assert.deepEqual(opened, [{
+    id: 2,
+    event: { mode: 'permanent', source: 'command' },
+  }]);
 
   await act(async () => { root.unmount(); });
   container.remove();

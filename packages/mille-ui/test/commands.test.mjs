@@ -318,12 +318,16 @@ describe('defaultCommands — mutations', () => {
       makeCtx({
         fx,
         focusedEntry: entry,
-        host: { onOpen: (e) => opened.push(e) },
+        host: { onOpen: (e, event) => opened.push({ entry: e, event }) },
       }),
     );
     reg.dispatch('file.open');
     assert.equal(opened.length, 1);
-    assert.equal(opened[0], entry);
+    assert.equal(opened[0].entry, entry);
+    assert.deepEqual(opened[0].event, {
+      mode: 'permanent',
+      source: 'command',
+    });
     // No engine call.
     assert.equal(fx.calls.length, 0);
   });

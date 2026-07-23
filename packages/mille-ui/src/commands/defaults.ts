@@ -14,6 +14,7 @@
 // id is reserved and its label/keybinding are consistent.
 
 import type { Entry, EntryId } from '@vibecook/mille';
+import { commandOpenEvent } from '../open-policy.js';
 import type { Command } from './types.js';
 
 // Local mirror of api.d.ts `EntryKind`. The engine ships `entry.kind` as a
@@ -311,7 +312,7 @@ const openCommand: Command = {
   run(ctx, args) {
     const entry = resolveEntry(args, ctx);
     if (entry === null) return;
-    ctx.host.onOpen?.(entry);
+    ctx.host.onOpen?.(entry, commandOpenEvent(args));
   },
 };
 

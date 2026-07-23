@@ -23,6 +23,10 @@ import {
   type KeyboardEventLike,
 } from '../commands/keybinding.js';
 import type { CommandRegistryHandle } from '../types.js';
+import {
+  PERMANENT_KEYBOARD_OPEN,
+  type FileOpenEvent,
+} from '../open-policy.js';
 import type { FileTreeSelectionHandle } from './useFileTreeSelection.js';
 import { useTypeahead, type TypeaheadVisibleRow } from './useTypeahead.js';
 
@@ -93,7 +97,7 @@ export interface UseFileTreeKeyboardOptions {
   readonly commands?: CommandRegistryHandle | null;
   readonly multiSelect?: boolean;
   /** Host callback for `file.open` when the command registry is absent. */
-  readonly onOpenFallback?: (row: VisibleRow) => void;
+  readonly onOpenFallback?: (row: VisibleRow, event: FileOpenEvent) => void;
   /** Invoked when `Esc` is pressed; host can additionally hide filters etc. */
   readonly onEscape?: () => void;
   /**
@@ -627,8 +631,13 @@ export function useFileTreeKeyboard(
             );
           } else {
             // Dispatch file.open through registry if present, else host cb.
-            if (!tryDispatch(commands, 'file.open', { id: focusedId })) {
-              onOpenFallback?.(row);
+            if (
+              !tryDispatch(commands, 'file.open', {
+                id: focusedId,
+                ...PERMANENT_KEYBOARD_OPEN,
+              })
+            ) {
+              onOpenFallback?.(row, PERMANENT_KEYBOARD_OPEN);
             }
           }
           return;

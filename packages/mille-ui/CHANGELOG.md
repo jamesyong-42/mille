@@ -4,6 +4,11 @@
 
 ### Added
 
+- **Typed file-open policy** — `openBehavior` optionally previews files on
+  single click while retaining selection-only as the default.
+  `onOpen(entry, event)` identifies preview/permanent mode and the mouse,
+  keyboard, search, or command source so editor hosts can implement one preview
+  slot and permanent-tab promotion consistently.
 - **Active-editor following** — `activeEntry` marks the file active in the
   host editor independently of tree focus/selection, while
   `autoRevealActiveEntry` optionally expands and scrolls through the lazy

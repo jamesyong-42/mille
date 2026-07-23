@@ -86,6 +86,17 @@ export type {
 } from './hooks/index.js';
 export type { CommandRegistryHandle } from './types.js';
 export {
+  PERMANENT_KEYBOARD_OPEN,
+  PERMANENT_SEARCH_OPEN,
+  commandOpenEvent,
+} from './open-policy.js';
+export type {
+  FileOpenBehavior,
+  FileOpenEvent,
+  FileOpenMode,
+  FileOpenSource,
+} from './open-policy.js';
+export {
   FILE_TREE_NAVIGATION_STATE_VERSION,
   FILE_TREE_NAVIGATION_LIMITS,
   parseFileTreeNavigationState,

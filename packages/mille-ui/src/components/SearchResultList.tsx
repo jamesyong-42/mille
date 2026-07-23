@@ -3,7 +3,7 @@
 //
 // Phase 8. Replaces the tree DOM with a `role="listbox"` whose options
 // are `SearchHit`s returned by `fx.search(query, { limit })`. Arrow keys
-// move selection; Enter dispatches `onOpen(entryId)`.
+// move selection; Enter dispatches a permanent search open intent.
 
 import {
   useCallback,
@@ -19,6 +19,10 @@ import {
 } from 'react';
 import { useVirtualizer, type VirtualItem } from '@tanstack/react-virtual';
 import type { EntryId, SearchHit } from '@vibecook/mille';
+import {
+  PERMANENT_SEARCH_OPEN,
+  type FileOpenEvent,
+} from '../open-policy.js';
 import {
   useSearchResults,
   type SearchableEngine,
@@ -36,7 +40,7 @@ export interface SearchResultListProps {
   readonly rowHeight?: number;
   readonly overscan?: number;
   /** Called when the user presses Enter or double-clicks a hit. */
-  onOpen?(entryId: EntryId): void;
+  onOpen?(entryId: EntryId, event: FileOpenEvent): void;
   /** Rendered when `query` is non-empty but no hits came back. */
   readonly emptyState?: ReactNode;
   /** Rendered while a search is in flight. */
@@ -223,7 +227,7 @@ export function SearchResultList(props: SearchResultListProps): ReactElement {
     (idx: number) => {
       const hit = hits[idx];
       if (!hit || !onOpen) return;
-      onOpen(hit.entry.id);
+      onOpen(hit.entry.id, PERMANENT_SEARCH_OPEN);
     },
     [hits, onOpen],
   );

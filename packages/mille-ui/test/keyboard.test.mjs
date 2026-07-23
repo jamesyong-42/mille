@@ -368,7 +368,11 @@ test('Enter on a file dispatches file.open through the command registry', async 
   await act(async () => { fireKey(tree, 'Enter'); });
   const openCalls = dispatches.filter((d) => d.id === 'file.open');
   assert.equal(openCalls.length, 1);
-  assert.deepEqual(openCalls[0].args, { id: 2 });
+  assert.deepEqual(openCalls[0].args, {
+    id: 2,
+    mode: 'permanent',
+    source: 'keyboard',
+  });
 
   await act(async () => { root.unmount(); });
   container.remove();

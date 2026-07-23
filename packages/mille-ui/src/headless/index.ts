@@ -190,6 +190,17 @@ export type {
   HostHooks,
 } from '../commands/types.js';
 export type { CommandRegistryHandle } from '../types.js';
+export {
+  PERMANENT_KEYBOARD_OPEN,
+  PERMANENT_SEARCH_OPEN,
+  commandOpenEvent,
+} from '../open-policy.js';
+export type {
+  FileOpenBehavior,
+  FileOpenEvent,
+  FileOpenMode,
+  FileOpenSource,
+} from '../open-policy.js';
 
 // ─── Icon theme types (resolution surface; no renderer) ────────────
 //

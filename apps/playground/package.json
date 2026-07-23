@@ -13,6 +13,7 @@
     "test": "node --test test/*.test.mjs",
     "bench:watch": "node scripts/watch-bench.mjs",
     "bench:navigation": "node scripts/navigation-state-store-bench.mjs",
+    "bench:tabs": "node scripts/editor-tab-churn-bench.mjs",
     "start": "electron ."
   },
   "dependencies": {

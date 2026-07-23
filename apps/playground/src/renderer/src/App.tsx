@@ -17,6 +17,7 @@ import {
   FileTree,
   serializeFileTreeNavigationState,
   useFileTreeRef,
+  type FileOpenEvent,
   type FileTreeNavigationState,
 } from '@vibecook/mille-ui';
 import type { IconTheme } from '@vibecook/mille-ui/icons';
@@ -29,19 +30,15 @@ import { Toolbar, type ThemeMode } from './Toolbar';
 import { stageIconTheme } from './stageIconTheme';
 import { WatchBenchPanel } from './WatchBenchPanel';
 import { createTreeCommit, publishTreeCommit } from '../../../scripts/watch-bench-render-lib.mjs';
+import {
+  planEditorTabOpen,
+  settleEditorTabLoad,
+  type EditorTab,
+} from '../../../scripts/editor-tabs.mjs';
 
 interface ConnectionState {
   fx: PortFileExplorer;
   workspaceRoot: string;
-}
-
-interface EditorTab {
-  readonly id: string;
-  readonly title: string;
-  readonly kind: 'file' | 'welcome';
-  readonly entryId?: number;
-  readonly body: string;
-  readonly highlighted: boolean;
 }
 
 const WELCOME = `// Project tool window
@@ -261,6 +258,7 @@ function Explorer({ fx, root }: { fx: PortFileExplorer; root: string }): ReactEl
   /** Editor pane is secondary — off by default so Project feels primary. */
   const [editorOpen, setEditorOpen] = useState(false);
   const [followActiveEditor, setFollowActiveEditor] = useState(true);
+  const [singleClickPreview, setSingleClickPreview] = useState(true);
 
   useEffect(() => {
     if (!settingsOpen) return;
@@ -309,38 +307,28 @@ function Explorer({ fx, root }: { fx: PortFileExplorer; root: string }): ReactEl
       kind: 'welcome',
       body: WELCOME,
       highlighted: true,
+      preview: false,
     },
   ]);
   const [activeTabId, setActiveTabId] = useState('welcome');
-  const openTabIdsRef = useRef(new Set(['welcome']));
-
-  useEffect(() => {
-    openTabIdsRef.current = new Set(tabs.map((t) => t.id));
-  }, [tabs]);
+  const tabsRef = useRef<readonly EditorTab[]>(tabs);
+  const loadRevisionRef = useRef(new Map<number, number>());
 
   const activeTab = tabs.find((t) => t.id === activeTabId) ?? tabs[0]!;
 
   const openEntry = useCallback(
-    async (entry: Entry | VisibleRow) => {
+    async (entry: Entry | VisibleRow, event: FileOpenEvent) => {
       if (entry.kind === 1) return;
       setEditorOpen(true);
 
-      const tabId = `file:${entry.id}`;
-      setActiveTabId(tabId);
-      if (openTabIdsRef.current.has(tabId)) return;
-      openTabIdsRef.current.add(tabId);
+      const plan = planEditorTabOpen(tabsRef.current, entry, event.mode);
+      tabsRef.current = plan.tabs;
+      setTabs([...plan.tabs]);
+      setActiveTabId(plan.activeTabId);
+      if (!plan.shouldLoad) return;
 
-      setTabs((prev) => [
-        ...prev.filter((t) => t.kind !== 'welcome'),
-        {
-          id: tabId,
-          title: entry.name,
-          kind: 'file',
-          entryId: entry.id,
-          body: '// loading…',
-          highlighted: false,
-        },
-      ]);
+      const revision = (loadRevisionRef.current.get(entry.id) ?? 0) + 1;
+      loadRevisionRef.current.set(entry.id, revision);
 
       try {
         const text = await fx.readText(entry.id);
@@ -349,22 +337,30 @@ function Explorer({ fx, root }: { fx: PortFileExplorer; root: string }): ReactEl
         const highlight = /\.(ts|tsx|js|jsx|mjs|cjs|json|rs|md|css|toml|yml|yaml)$/i.test(
           entry.name,
         );
-        setTabs((prev) =>
-          prev.map((t) => (t.id === tabId ? { ...t, body: capped, highlighted: highlight } : t)),
+        const next = settleEditorTabLoad(
+          tabsRef.current,
+          plan.activeTabId,
+          capped,
+          highlight,
+          revision,
+          loadRevisionRef.current.get(entry.id),
         );
+        if (next === tabsRef.current) return;
+        tabsRef.current = next;
+        setTabs([...next]);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        setTabs((prev) =>
-          prev.map((t) =>
-            t.id === tabId
-              ? {
-                  ...t,
-                  body: `// failed to read\n// ${msg}`,
-                  highlighted: true,
-                }
-              : t,
-          ),
+        const next = settleEditorTabLoad(
+          tabsRef.current,
+          plan.activeTabId,
+          `// failed to read\n// ${msg}`,
+          true,
+          revision,
+          loadRevisionRef.current.get(entry.id),
         );
+        if (next === tabsRef.current) return;
+        tabsRef.current = next;
+        setTabs([...next]);
       }
     },
     [fx],
@@ -374,20 +370,20 @@ function Explorer({ fx, root }: { fx: PortFileExplorer; root: string }): ReactEl
     setTabs((prev) => {
       const next = prev.filter((t) => t.id !== id);
       if (next.length === 0) {
-        openTabIdsRef.current = new Set(['welcome']);
+        const welcome: EditorTab = {
+          id: 'welcome',
+          title: 'Welcome',
+          kind: 'welcome',
+          body: WELCOME,
+          highlighted: true,
+          preview: false,
+        };
+        tabsRef.current = [welcome];
         setActiveTabId('welcome');
         setEditorOpen(false);
-        return [
-          {
-            id: 'welcome',
-            title: 'Welcome',
-            kind: 'welcome',
-            body: WELCOME,
-            highlighted: true,
-          },
-        ];
+        return [welcome];
       }
-      openTabIdsRef.current = new Set(next.map((t) => t.id));
+      tabsRef.current = next;
       setActiveTabId((current) => (current === id ? next[next.length - 1]!.id : current));
       return next;
     });
@@ -478,6 +474,8 @@ function Explorer({ fx, root }: { fx: PortFileExplorer; root: string }): ReactEl
                     iconThemeStatus={iconThemeStatus}
                     followActiveEditor={followActiveEditor}
                     onFollowActiveEditorChange={setFollowActiveEditor}
+                    singleClickPreview={singleClickPreview}
+                    onSingleClickPreviewChange={setSingleClickPreview}
                     onReset={() => treeRef.current?.reset()}
                     compact
                   />
@@ -509,8 +507,11 @@ function Explorer({ fx, root }: { fx: PortFileExplorer; root: string }): ReactEl
                   onNavigationStateChange={persistNavigationState}
                   activeEntry={activeTab.entryId ?? null}
                   autoRevealActiveEntry={followActiveEditor}
-                  onOpen={(row) => {
-                    void openEntry(row);
+                  openBehavior={{
+                    singleClick: singleClickPreview ? 'preview' : 'select',
+                  }}
+                  onOpen={(row, event) => {
+                    void openEntry(row, event);
                   }}
                 />
               )}
@@ -528,7 +529,7 @@ function Explorer({ fx, root }: { fx: PortFileExplorer; root: string }): ReactEl
                   type="button"
                   role="tab"
                   aria-selected={tab.id === activeTab.id}
-                  className={`tab${tab.id === activeTab.id ? ' is-active' : ''}`}
+                  className={`tab${tab.id === activeTab.id ? ' is-active' : ''}${tab.preview ? ' is-preview' : ''}`}
                   onClick={() => setActiveTabId(tab.id)}
                 >
                   {tab.title}

@@ -226,6 +226,7 @@ type NativeFx = {
 type NativeProjectionSettings = {
   sortBy: string;
   caseSensitive: boolean;
+  locale?: string;
   foldersOnTop: boolean;
   showHiddenFiles: boolean;
   showIgnoredFiles: boolean;
@@ -346,6 +347,7 @@ function encodeProjectionSettings(settings: ExplorerProjectionSettings): NativeP
   return {
     sortBy: settings.sortBy,
     caseSensitive: settings.caseSensitive,
+    ...(settings.locale !== null ? { locale: settings.locale } : {}),
     foldersOnTop: settings.foldersOnTop,
     showHiddenFiles: settings.showHiddenFiles,
     showIgnoredFiles: settings.showIgnoredFiles,
@@ -409,6 +411,7 @@ export class FileExplorer {
     if (options.settings !== undefined) {
       nativeOpts.sortBy = options.settings.sortBy;
       nativeOpts.caseSensitive = options.settings.caseSensitive;
+      if (options.settings.locale !== null) nativeOpts.locale = options.settings.locale;
       nativeOpts.foldersOnTop = options.settings.foldersOnTop;
       nativeOpts.showHiddenFiles = options.settings.showHiddenFiles;
       nativeOpts.showIgnoredFiles = options.settings.showIgnoredFiles;
@@ -447,7 +450,7 @@ export class FileExplorer {
    * Atomically update display-only projection settings on the existing tree.
    * Indexed entries are reclassified immediately when exclude globs change;
    * newly un-excluded directory contents stay lazily hydrated until expansion.
-   * Locale remains omitted until the native comparator is locale-aware.
+   * Locale changes rebuild one native collator and re-sort known sibling lists.
    */
   updateProjectionSettings(settings: ExplorerProjectionSettings): number {
     return this.nativeFx.updateProjectionSettings(encodeProjectionSettings(settings));

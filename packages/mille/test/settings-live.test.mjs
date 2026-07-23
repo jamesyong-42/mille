@@ -100,6 +100,84 @@ test('local projection settings update atomically and no-op idempotently', async
   }
 });
 
+test('locale changes re-sort atomically and invalid locales preserve the snapshot', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'mille-settings-locale-live-'));
+  for (const name of ['z.txt', 'å.txt', 'ä.txt', 'ö.txt', 'file10.txt', 'file2.txt']) {
+    writeFileSync(join(root, name), '');
+  }
+  const english = { ...INITIAL, locale: 'en' };
+  const fx = new FileExplorer({ roots: [root], settings: english });
+  try {
+    await fx.populateFromRoots();
+    const before = fx.getSnapshot();
+    const rootEntry = before.roots()[0];
+    assert.ok(rootEntry);
+    assert.ok(
+      names(before, rootEntry.id).indexOf('å.txt') < names(before, rootEntry.id).indexOf('z.txt'),
+    );
+
+    const swedish = { ...english, locale: 'sv' };
+    const version = fx.updateProjectionSettings(swedish);
+    const after = fx.getSnapshot();
+    assert.equal(after.treeVersion, version);
+    assert.equal(version, before.treeVersion + 1);
+    assert.ok(
+      names(after, rootEntry.id).indexOf('z.txt') < names(after, rootEntry.id).indexOf('å.txt'),
+    );
+    assert.ok(
+      names(after, rootEntry.id).indexOf('file2.txt') <
+        names(after, rootEntry.id).indexOf('file10.txt'),
+    );
+
+    assert.throws(
+      () => fx.updateProjectionSettings({ ...swedish, locale: 'not_a_locale' }),
+      /invalid BCP-47 locale/,
+    );
+    assert.equal(fx.getTreeVersion(), version);
+    assert.equal(fx.getSnapshot().treeVersion, version);
+    assert.deepEqual(names(fx.getSnapshot(), rootEntry.id), names(after, rootEntry.id));
+  } finally {
+    await fx.dispose();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('locale re-sort reaches a port mirror before the update resolves', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'mille-settings-locale-port-'));
+  for (const name of ['z.txt', 'å.txt', 'ä.txt', 'ö.txt']) {
+    writeFileSync(join(root, name), '');
+  }
+  const english = { ...INITIAL, locale: 'en' };
+  const host = await createFileExplorerHost({ roots: [root], settings: english });
+  await host.local.populateFromRoots();
+  const channel = new MessageChannel();
+  host.attachPort(channel.port1);
+  const client = await connectFileExplorer(channel.port2);
+  try {
+    const rootEntry = client.getSnapshot().roots()[0];
+    assert.ok(rootEntry);
+    client.setExpanded({ add: [rootEntry.id] });
+    await waitFor(() =>
+      names(client.getSnapshot(), rootEntry.id).includes('å.txt') ? true : undefined,
+    );
+    assert.ok(
+      names(client.getSnapshot(), rootEntry.id).indexOf('å.txt') <
+        names(client.getSnapshot(), rootEntry.id).indexOf('z.txt'),
+    );
+
+    const version = await client.updateProjectionSettings({ ...english, locale: 'sv' });
+    assert.equal(client.getSnapshot().treeVersion, version);
+    assert.ok(
+      names(client.getSnapshot(), rootEntry.id).indexOf('z.txt') <
+        names(client.getSnapshot(), rootEntry.id).indexOf('å.txt'),
+    );
+  } finally {
+    await client.dispose();
+    await host.dispose();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('exclude globs add and remove without erasing repository-ignore provenance', async () => {
   const root = mkdtempSync(join(tmpdir(), 'mille-excludes-live-'));
   writeFileSync(join(root, '.gitignore'), 'repository.log\n');

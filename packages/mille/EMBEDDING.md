@@ -889,9 +889,15 @@ const fx = new FileExplorer({
 });
 ```
 
-Name, type/extension, modified-time, case-sensitive, and folders-on-top
-ordering are applied in the native store and preserved across the host/port
-boundary. Modified-time order is newest first.
+Name, type/extension, modified-time, case-sensitive, locale-aware, and
+folders-on-top ordering are applied in the native store and preserved across
+the host/port boundary. Modified-time order is newest first. A non-null
+`locale` accepts a BCP-47 locale such as `en`, `sv`, or `es-u-co-trad`;
+numeric filename ordering remains enabled. Case-insensitive locale sorting
+distinguishes accents but ignores case, while case-sensitive sorting also uses
+case at the tertiary comparison level. Equal collation weights fall back to
+Mille's deterministic natural order. Invalid locale tags reject construction
+or live reconfiguration without publishing a partial tree version.
 
 Hidden and ignored visibility is also applied at the snapshot boundary, so
 rows, ID-only projections, counts, indexes, typeahead, and port viewports agree.
@@ -943,15 +949,14 @@ await fx.updateProjectionSettings({
 ```
 
 The update publishes one atomic tree version covering sort mode, case
-sensitivity, folders-on-top, hidden/ignored visibility, compact folders, and
-file nesting. Changing `excludeGlobs` reclassifies every indexed entry in the
-same publication without losing repository-ignore provenance. Future lazy
-walks, mutations, and watcher reconciliation use the new rules; descendants of
-a newly un-excluded directory remain bounded and hydrate when it is expanded.
-Existing snapshots remain immutable. On a port client, the promise resolves
-only after every attached mirror has received the new projection. Locale is
-intentionally absent from `ExplorerProjectionSettings` until the native
-comparator is locale-aware.
+sensitivity, locale, folders-on-top, hidden/ignored visibility, compact
+folders, and file nesting. Changing `excludeGlobs` reclassifies every indexed
+entry in the same publication without losing repository-ignore provenance.
+Future lazy walks, mutations, and watcher reconciliation use the new rules;
+descendants of a newly un-excluded directory remain bounded and hydrate when it
+is expanded. Existing snapshots remain immutable. On a port client, the
+promise resolves only after every attached mirror has received the new
+projection.
 Counts, indexes, typeahead, host viewports, and port mirrors use the same leaf
 identity. In roots-only mode the host follows the chain with bounded depth-1
 reads and stops at the first branch; it does not eagerly walk the subtree.

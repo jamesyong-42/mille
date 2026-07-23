@@ -61,3 +61,25 @@ test('native snapshot applies type, modified, case, and folders-on-top settings'
   });
   assert.ok(caseSensitive.indexOf('Beta.txt') < caseSensitive.indexOf('alpha.txt'));
 });
+
+test('native snapshot applies locale tailoring without losing numeric ordering', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'mille-settings-locale-'));
+  for (const name of ['z.txt', 'å.txt', 'ä.txt', 'ö.txt', 'file10.txt', 'file2.txt']) {
+    writeFileSync(join(root, name), '');
+  }
+
+  const english = await namesFor(root, {
+    locale: 'en',
+    foldersOnTop: false,
+  });
+  const swedish = await namesFor(root, {
+    locale: 'sv',
+    foldersOnTop: false,
+  });
+
+  assert.ok(english.indexOf('å.txt') < english.indexOf('z.txt'));
+  assert.ok(swedish.indexOf('z.txt') < swedish.indexOf('å.txt'));
+  assert.ok(swedish.indexOf('å.txt') < swedish.indexOf('ä.txt'));
+  assert.ok(swedish.indexOf('ä.txt') < swedish.indexOf('ö.txt'));
+  assert.ok(swedish.indexOf('file2.txt') < swedish.indexOf('file10.txt'));
+});

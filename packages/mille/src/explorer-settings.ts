@@ -31,6 +31,7 @@ export type ExplorerProjectionSettings = Pick<
   ResolvedExplorerSettings,
   | 'sortBy'
   | 'caseSensitive'
+  | 'locale'
   | 'foldersOnTop'
   | 'showHiddenFiles'
   | 'showIgnoredFiles'

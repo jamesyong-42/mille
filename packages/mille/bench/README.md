@@ -53,3 +53,17 @@ reports add/remove exclusion latency, aggregate atomic native update latency,
 the first 200-row ready projection, and the idempotent no-op path. Default p95
 gates are 125 ms update, 160 ms ready, and 0.1 ms no-op. Fixture size and
 budgets use the `MILLE_RECONFIGURE_*` environment variables.
+
+## Locale collation
+
+```sh
+pnpm bench:locale
+```
+
+The native harness builds a 30,004-entry Unicode-heavy directory and alternates
+English and Swedish BCP-47 collation 20 times. Every sample verifies the
+locale-specific `z`/`å` relationship, numeric `file2`/`file10` ordering, the
+atomic tree version, and a ready 200-row viewport. It reports native update and
+ready-projection median/p95 latency, with default p95 gates of 90/100 ms.
+Fixture size, samples, and budgets use the `MILLE_LOCALE_*` environment
+variables.

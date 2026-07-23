@@ -32,6 +32,10 @@ ignore = "0.4"
 # Glob matching
 globset = "0.4"
 
+# Locale-aware filename collation
+icu_collator = "2.2.1"
+icu_locale_core = "2.2"
+
 # Concurrent data structures
 dashmap = "6.1"
 arc-swap = "1.9"

@@ -117,7 +117,7 @@ impl EntryStore {
     /// ignore, symlink-target, and kind changes at a stable path.
     pub fn update(&self, id: EntryId, mut updated: Entry) -> Result<bool, FxError> {
         let _guard = self.write_lock.lock();
-        let sibling_order = *self.sibling_order.read();
+        let sibling_order = self.sibling_order.read().clone();
         let visibility = *self.visibility.read();
         let current = self.inner.load_full();
         let existing = current
@@ -209,7 +209,7 @@ impl EntryStore {
 
     pub fn insert(&self, path: PathBuf, mut entry: Entry) -> Result<EntryId, FxError> {
         let _guard = self.write_lock.lock();
-        let sibling_order = *self.sibling_order.read();
+        let sibling_order = self.sibling_order.read().clone();
         let visibility = *self.visibility.read();
         // Watch callbacks and an in-flight walker can discover the same path
         // concurrently. Path identity wins: returning the existing id keeps
@@ -512,7 +512,7 @@ impl EntryStore {
 
     pub fn rename(&self, id: EntryId, new_path: PathBuf) -> Result<(), FxError> {
         let _guard = self.write_lock.lock();
-        let sibling_order = *self.sibling_order.read();
+        let sibling_order = self.sibling_order.read().clone();
         let entry = self
             .inner
             .load()
@@ -646,7 +646,7 @@ impl EntryStore {
         F: Fn(&Path, &Entry) -> bool,
     {
         let snapshot = self.inner.load_full();
-        let sibling_order = *self.sibling_order.read();
+        let sibling_order = self.sibling_order.read().clone();
         self.reconfigure_projection_with_exclusions(
             sibling_order,
             snapshot.visibility,
@@ -694,7 +694,7 @@ impl EntryStore {
     {
         let _guard = self.write_lock.lock();
         let current = self.inner.load_full();
-        let policy_changed = *self.sibling_order.read() != sibling_order
+        let policy_changed = self.sibling_order.read().ne(&sibling_order)
             || current.visibility != visibility
             || current.compact_folders != compact_folders
             || current.file_nesting != file_nesting;
@@ -1018,11 +1018,9 @@ mod tests {
     fn configured_type_modified_case_and_folder_order_are_applied() {
         use crate::sort::{SiblingOrder, SortBy};
 
-        let by_type = EntryStore::with_sibling_order(SiblingOrder {
-            sort_by: SortBy::Type,
-            case_sensitive: false,
-            folders_on_top: false,
-        });
+        let by_type = EntryStore::with_sibling_order(
+            SiblingOrder::try_new(SortBy::Type, false, false, None).unwrap(),
+        );
         let root = by_type.insert("/r".into(), dir("r", None)).unwrap();
         let ts = by_type
             .insert("/r/z.ts".into(), leaf("z.ts", Some(root)))
@@ -1035,11 +1033,9 @@ mod tests {
             .unwrap();
         assert_eq!(by_type.snapshot().children_of(root), &[js, ts, folder]);
 
-        let by_modified = EntryStore::with_sibling_order(SiblingOrder {
-            sort_by: SortBy::Modified,
-            case_sensitive: true,
-            folders_on_top: true,
-        });
+        let by_modified = EntryStore::with_sibling_order(
+            SiblingOrder::try_new(SortBy::Modified, true, true, None).unwrap(),
+        );
         let root = by_modified.insert("/m".into(), dir("m", None)).unwrap();
         let mut older = leaf("Alpha", Some(root));
         older.mtime_ms = 10;
@@ -1312,11 +1308,8 @@ mod tests {
         assert!(before.projected_children_of(root, false).contains(&hidden));
         assert!(before.projected_children_of(root, false).contains(&test));
 
-        let updated_order = SiblingOrder {
-            sort_by: crate::sort::SortBy::Name,
-            case_sensitive: true,
-            folders_on_top: false,
-        };
+        let updated_order =
+            SiblingOrder::try_new(crate::sort::SortBy::Name, true, false, None).unwrap();
         let updated_visibility = VisibilityPolicy {
             show_hidden_files: false,
             show_ignored_files: true,
@@ -1324,7 +1317,7 @@ mod tests {
         let updated_nesting =
             FileNestingPolicy::new([("*.ts".into(), vec!["${capture}.test.ts".into()])], true);
         let version = s.reconfigure_projection(
-            updated_order,
+            updated_order.clone(),
             updated_visibility,
             true,
             updated_nesting.clone(),

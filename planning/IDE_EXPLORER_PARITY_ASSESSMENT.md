@@ -356,20 +356,20 @@ end-user behavior:
 ### 4. Explorer settings and state persistence are incomplete
 
 The versioned global/workspace/root settings record now drives native natural,
-type, modified-time, case, folders-on-top, hidden, ignored, exclude-glob,
-compact-folder, and file-nesting behavior at explorer construction. Native and
-renderer-mirror projections share visibility, compact leaf identities, and
-authoritative nested child lists, and exclude globs apply to initial, lazy, and
-watcher-reconciliation walks. Live settings updates now preserve separate
-repository-ignore and configured-exclude provenance, atomically reclassify
-indexed entries, and update future lazy walks, mutations, and watcher batches.
-The 50,001-entry gate changes 20,000 exclusion flags per toggle: 43.23/93.73 ms
-median/p95 for the complete atomic update, 114.14 ms ready p95 for 200 rows,
-and 0.004 ms no-op p95. Remaining settings gaps include:
+locale-aware, type, modified-time, case, folders-on-top, hidden, ignored,
+exclude-glob, compact-folder, and file-nesting behavior at explorer
+construction and during atomic live updates. Native and renderer-mirror
+projections share visibility, compact leaf identities, and authoritative
+nested child lists, and exclude globs apply to initial, lazy, and
+watcher-reconciliation walks. Repository-ignore and configured-exclude
+provenance remain separate. The 50,001-entry exclusion gate changes 20,000
+flags per toggle at 43.23/93.73 ms median/p95 and 114.14 ms ready p95. The
+30,004-entry locale gate alternates English and Swedish at 19.15/19.79 ms
+native-update median/p95 and 20.74/21.59 ms ready p95. Full ICU locale data
+adds 1,217,840 bytes to the optimized macOS arm64 binding (45.1%). Remaining
+settings gaps include:
 
-- locale-aware collation beyond the live natural/type/modified,
-  case-sensitive, folders-on-top native ordering policy;
-- UI controls for hidden/ignored visibility and exclusion settings;
+- UI controls for locale, hidden/ignored visibility, and exclusion settings;
 - same-display-name multi-root disambiguation for the new bounded, versioned,
   durably stored expansion/selection/focus/filter/scroll navigation state.
 

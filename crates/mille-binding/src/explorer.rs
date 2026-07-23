@@ -34,6 +34,7 @@ pub struct FileNestingRuleJs {
 pub struct ProjectionSettingsJs {
     pub sort_by: String,
     pub case_sensitive: bool,
+    pub locale: Option<String>,
     pub folders_on_top: bool,
     pub show_hidden_files: bool,
     pub show_ignored_files: bool,
@@ -65,6 +66,7 @@ pub struct ExplorerOptionsJs {
     pub max_cached_entries: Option<u32>,
     pub sort_by: Option<String>,
     pub case_sensitive: Option<bool>,
+    pub locale: Option<String>,
     pub folders_on_top: Option<bool>,
     pub show_hidden_files: Option<bool>,
     pub show_ignored_files: Option<bool>,
@@ -155,15 +157,17 @@ impl FileExplorer {
                 .unwrap_or(500_000),
         };
 
-        let sibling_order = mille_core::sort::SiblingOrder {
-            sort_by: match options.sort_by.as_deref() {
+        let sibling_order = mille_core::sort::SiblingOrder::try_new(
+            match options.sort_by.as_deref() {
                 Some("type") => mille_core::sort::SortBy::Type,
                 Some("modified") => mille_core::sort::SortBy::Modified,
                 _ => mille_core::sort::SortBy::Name,
             },
             case_sensitive,
-            folders_on_top: options.folders_on_top.unwrap_or(true),
-        };
+            options.folders_on_top.unwrap_or(true),
+            options.locale.as_deref(),
+        )
+        .map_err(fx_error_to_napi)?;
         let visibility = mille_core::VisibilityPolicy {
             show_hidden_files: options.show_hidden_files.unwrap_or(true),
             show_ignored_files: options.show_ignored_files.unwrap_or(true),
@@ -593,15 +597,17 @@ impl FileExplorer {
             None
         };
         let previous_version = self.store.tree_version() as u32;
-        let sibling_order = mille_core::sort::SiblingOrder {
-            sort_by: match settings.sort_by.as_str() {
+        let sibling_order = mille_core::sort::SiblingOrder::try_new(
+            match settings.sort_by.as_str() {
                 "type" => mille_core::sort::SortBy::Type,
                 "modified" => mille_core::sort::SortBy::Modified,
                 _ => mille_core::sort::SortBy::Name,
             },
-            case_sensitive: settings.case_sensitive,
-            folders_on_top: settings.folders_on_top,
-        };
+            settings.case_sensitive,
+            settings.folders_on_top,
+            settings.locale.as_deref(),
+        )
+        .map_err(fx_error_to_napi)?;
         let visibility = mille_core::VisibilityPolicy {
             show_hidden_files: settings.show_hidden_files,
             show_ignored_files: settings.show_ignored_files,

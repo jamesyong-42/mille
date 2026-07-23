@@ -714,6 +714,24 @@ mutation, lazy-prefetch, no-op, and two-client tests cover the contract. The
 exclusions, 32.91/34.32 ms for removing them, 114.14 ms p95 through the first
 200-row projection, and 0.004 ms no-op p95. Locale-aware collation remains.
 
+Locale-collation result (2026-07-23): a non-null BCP-47 locale now creates one
+ICU4X 2.2.1 compiled-data collator per immutable sibling-order policy. Numeric
+ordering stays enabled; case-insensitive mode uses secondary strength so
+accents remain meaningful, case-sensitive mode uses tertiary strength, and
+Mille's natural comparator breaks equal-weight ties deterministically. A null
+locale preserves the prior allocation-free ASCII path. The policy applies to
+name and extension ordering at construction and during live reconfiguration;
+invalid locales fail before a snapshot, version, or port delta is published.
+Rust tests cover Swedish and traditional-Spanish tailoring, numeric order,
+case ties, and invalid input; local and port tests cover initial and live
+ordering plus atomic rollback. The 30,004-entry Unicode-heavy gate alternated
+English and Swedish over 20 measured samples: native update median/p95 was
+19.15/19.79 ms and the ready 200-row projection was 20.74/21.59 ms, under
+90/100 ms p95 budgets. Full locale data increased the optimized macOS arm64
+binding from 2,698,000 to 3,915,840 bytes (+1,217,840, 45.1%); this is the
+explicit cost of supporting arbitrary locale tailoring. This completes the
+engine/settings scope of Phase 3.1; UI controls remain product-integration work.
+
 #### 3.2 Complete multi-root workspace behavior
 
 - Add, remove, rename-display, and reorder workspace roots.

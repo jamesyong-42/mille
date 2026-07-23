@@ -18,6 +18,10 @@ jwalk.workspace = true
 ignore.workspace = true
 globset.workspace = true
 
+# Locale-aware filename collation
+icu_collator.workspace = true
+icu_locale_core.workspace = true
+
 # Concurrent data structures
 dashmap.workspace = true
 arc-swap.workspace = true

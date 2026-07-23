@@ -1,8 +1,59 @@
-import { appendFile, copyFile, mkdir, rename, rm, writeFile } from 'node:fs/promises';
+import { watch } from 'node:fs';
+import { appendFile, copyFile, mkdir, rename, rm, unlink, writeFile } from 'node:fs/promises';
 import { resolve, sep } from 'node:path';
 
 const FILE_KIND = 0;
 const DIRECTORY_KIND = 1;
+
+export async function probeWatcherEnvironment(
+  root,
+  { timeoutMs = 1_000, watchImpl = watch, writeFileImpl = writeFile, unlinkImpl = unlink } = {},
+) {
+  const probePath = safePath(root, '__mille_watch_probe__.txt');
+  let watcher;
+  try {
+    return await new Promise((resolveProbe) => {
+      let settled = false;
+      const finish = (result) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        watcher?.close();
+        resolveProbe(result);
+      };
+      const timer = setTimeout(
+        () => finish({ ok: false, code: 'ETIMEOUT', message: 'fs.watch emitted no event' }),
+        timeoutMs,
+      );
+      try {
+        watcher = watchImpl(root, () => finish({ ok: true }));
+        watcher.on?.('error', (error) =>
+          finish({
+            ok: false,
+            code:
+              error && typeof error === 'object' && 'code' in error
+                ? String(error.code)
+                : 'EUNKNOWN',
+            message: String(error),
+          }),
+        );
+        void writeFileImpl(probePath, 'probe').catch((error) =>
+          finish({ ok: false, code: 'EWRITE', message: String(error) }),
+        );
+      } catch (error) {
+        finish({
+          ok: false,
+          code:
+            error && typeof error === 'object' && 'code' in error ? String(error.code) : 'EUNKNOWN',
+          message: String(error),
+        });
+      }
+    });
+  } finally {
+    watcher?.close();
+    await unlinkImpl(probePath).catch(() => {});
+  }
+}
 
 function payload(length, marker) {
   const prefix = `${marker}:`;
@@ -276,6 +327,7 @@ export function createFatalBenchmarkReport(base, fatal, failed, observations) {
 }
 
 export function benchmarkReportExitCode(report) {
+  if (report?.status === 'unavailable') return 2;
   if (report?.status === 'fatal') return 1;
   if (report?.status === 'complete') {
     return report.summary?.qualityGate?.passed === true ? 0 : 1;

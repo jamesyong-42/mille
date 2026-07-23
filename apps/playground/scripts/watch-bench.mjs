@@ -1,12 +1,17 @@
 #!/usr/bin/env node
 
-import { mkdtemp, mkdir, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 
-import { benchmarkReportExitCode, seedReferenceTree } from './watch-bench-lib.mjs';
+import {
+  benchmarkReportExitCode,
+  parseBuildIdentity,
+  probeWatcherEnvironment,
+  seedReferenceTree,
+} from './watch-bench-lib.mjs';
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const playgroundDir = dirname(scriptDir);
@@ -57,6 +62,26 @@ const reportPath = requestedReportPath
 await mkdir(workspaceRoot);
 await mkdir(dirname(reportPath), { recursive: true });
 await rm(reportPath, { force: true });
+const preflight = await probeWatcherEnvironment(workspaceRoot);
+console.log('[mille watch bench] preflight', JSON.stringify(preflight));
+if (!preflight.ok) {
+  const unavailableReport = {
+    generatedAt: new Date().toISOString(),
+    status: 'unavailable',
+    preflight,
+    buildIdentity: parseBuildIdentity(process.env.MILLE_BUILD_IDENTITY_JSON),
+  };
+  await writeFile(reportPath, `${JSON.stringify(unavailableReport, null, 2)}\n`);
+  console.error(
+    `[mille watch bench] watcher environment unavailable (${preflight.code}): ${preflight.message}`,
+  );
+  if (keep) {
+    console.log(`[mille watch bench] preserved sandbox: ${sandboxBase}`);
+  } else {
+    await rm(sandboxBase, { recursive: true, force: true });
+  }
+  process.exit(2);
+}
 const reference = await seedReferenceTree(workspaceRoot, seedFiles);
 
 const binary = join(

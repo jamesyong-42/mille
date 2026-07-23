@@ -15,7 +15,11 @@ function run(command, args, cwd) {
     child.on('error', reject);
     child.on('exit', (code, signal) => {
       if (code === 0) resolve();
-      else reject(new Error(`${command} exited with ${signal ?? code ?? 'unknown status'}`));
+      else {
+        const error = new Error(`${command} exited with ${signal ?? code ?? 'unknown status'}`);
+        error.exitCode = typeof code === 'number' ? code : 1;
+        reject(error);
+      }
     });
   });
 }
@@ -44,5 +48,6 @@ try {
   );
 } catch (error) {
   console.error('[mille watch soak]', error instanceof Error ? error.message : String(error));
-  process.exitCode = 1;
+  process.exitCode =
+    error && typeof error === 'object' && Number.isInteger(error.exitCode) ? error.exitCode : 1;
 }

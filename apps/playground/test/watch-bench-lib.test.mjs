@@ -10,6 +10,7 @@ import {
   createFatalBenchmarkReport,
   executeOperation,
   parseBuildIdentity,
+  probeWatcherEnvironment,
   seedReferenceTree,
   summarizeLatencies,
 } from '../scripts/watch-bench-lib.mjs';
@@ -53,6 +54,53 @@ test('one complete operation cycle leaves the sandbox consistent', async () => {
     const plan = buildOperationPlan(12);
     for (const operation of plan) await executeOperation(root, operation);
     assert.deepEqual(await readdir(root), []);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('watcher preflight distinguishes ready, timeout, and host-limit failures', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'mille-watch-preflight-test-'));
+  const noOpUnlink = async () => {};
+  try {
+    const ready = await probeWatcherEnvironment(root, {
+      timeoutMs: 20,
+      watchImpl: (_path, listener) => {
+        queueMicrotask(listener);
+        return { on() {}, close() {} };
+      },
+      writeFileImpl: async () => {},
+      unlinkImpl: noOpUnlink,
+    });
+    assert.deepEqual(ready, { ok: true });
+
+    const timedOut = await probeWatcherEnvironment(root, {
+      timeoutMs: 5,
+      watchImpl: () => ({ on() {}, close() {} }),
+      writeFileImpl: async () => {},
+      unlinkImpl: noOpUnlink,
+    });
+    assert.deepEqual(timedOut, {
+      ok: false,
+      code: 'ETIMEOUT',
+      message: 'fs.watch emitted no event',
+    });
+
+    const limited = await probeWatcherEnvironment(root, {
+      timeoutMs: 20,
+      watchImpl: () => {
+        const error = new Error('watch limit reached');
+        error.code = 'EMFILE';
+        throw error;
+      },
+      writeFileImpl: async () => {},
+      unlinkImpl: noOpUnlink,
+    });
+    assert.deepEqual(limited, {
+      ok: false,
+      code: 'EMFILE',
+      message: 'Error: watch limit reached',
+    });
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -239,6 +287,7 @@ test('fatal benchmark reports preserve stage, operation, and partial observation
 });
 
 test('persisted report status drives automated launcher exit', () => {
+  assert.equal(benchmarkReportExitCode({ status: 'unavailable' }), 2);
   assert.equal(benchmarkReportExitCode({ status: 'fatal' }), 1);
   assert.equal(
     benchmarkReportExitCode({

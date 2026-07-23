@@ -66,10 +66,14 @@ to reach the snapshot:
 Further isolation showed this was a restricted-runner false negative, not an
 engine regression: a direct Node `fs.watch` probe failed with `EMFILE` in the
 sandbox, while the same watcher tests passed against the same build outside the
-sandbox. This is still a harness problem. Watcher suites must preflight the host
-watch facility and reports must identify the exact native and TypeScript
-artifacts so an environmental failure or stale binding cannot masquerade as a
-source defect.
+sandbox. The harness now preflights the host watch facility by requiring a real
+event. Unavailable environments emit `status: "unavailable"` diagnostics and
+exit 2, while product/quality failures remain exit 1. On this restricted runner
+the Electron launcher now stops before launch with an explicit `EMFILE` report
+instead of producing operation misses. Reports also identify the exact native
+and TypeScript artifacts, so an environmental failure or stale binding no
+longer masquerades as a source defect. A watch-capable real-browser pass is
+still outstanding.
 
 ## First optimization result
 

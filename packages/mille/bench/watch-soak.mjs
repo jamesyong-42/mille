@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 
-import { watch } from 'node:fs';
-import { mkdtemp, rm, unlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
 import { performance } from 'node:perf_hooks';
@@ -10,6 +9,7 @@ import { createHash } from 'node:crypto';
 import {
   buildOperationPlan,
   executeOperation,
+  probeWatcherEnvironment,
   summarizeLatencies,
 } from '../../../apps/playground/scripts/watch-bench-lib.mjs';
 import { buildIdentity, FileExplorer } from '../dist/index.js';
@@ -35,54 +35,6 @@ function stringOption(args, name) {
 
 function sleep(ms) {
   return ms > 0 ? new Promise((resolve) => setTimeout(resolve, ms)) : Promise.resolve();
-}
-
-async function probeWatcherEnvironment(root, timeoutMs = 1_000) {
-  const probePath = join(root, '__mille_watch_probe__.txt');
-  let watcher;
-  try {
-    const result = await new Promise((resolveProbe) => {
-      let settled = false;
-      const finish = (resultValue) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        watcher?.close();
-        resolveProbe(resultValue);
-      };
-      const timer = setTimeout(
-        () => finish({ ok: false, code: 'ETIMEOUT', message: 'fs.watch emitted no event' }),
-        timeoutMs,
-      );
-      try {
-        watcher = watch(root, () => finish({ ok: true }));
-        watcher.on('error', (error) =>
-          finish({
-            ok: false,
-            code:
-              error && typeof error === 'object' && 'code' in error
-                ? String(error.code)
-                : 'EUNKNOWN',
-            message: String(error),
-          }),
-        );
-        void writeFile(probePath, 'probe').catch((error) =>
-          finish({ ok: false, code: 'EWRITE', message: String(error) }),
-        );
-      } catch (error) {
-        finish({
-          ok: false,
-          code:
-            error && typeof error === 'object' && 'code' in error ? String(error.code) : 'EUNKNOWN',
-          message: String(error),
-        });
-      }
-    });
-    return result;
-  } finally {
-    watcher?.close();
-    await unlink(probePath).catch(() => {});
-  }
 }
 
 async function runObservedOperation(fx, root, operation, options) {

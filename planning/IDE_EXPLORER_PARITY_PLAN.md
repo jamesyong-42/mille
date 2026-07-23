@@ -556,6 +556,16 @@ or failure from closing a newer rename session. The 500,000-row gate appends
 1,000 unrelated rows while editing and reports preserved input identity, draft,
 and focus in 118.80 ms with zero animation markers.
 
+Watcher-readiness gate result (2026-07-22): the headless soak and Electron
+launcher now share one active `fs.watch` probe that requires a real file event,
+not merely successful watcher construction. An unavailable host writes a
+diagnostic report with `status: "unavailable"` and exits 2; product or quality
+failures remain exit 1 and a passing gate remains exit 0. The focused harness
+passes 13/13 tests across ready, timeout, and `EMFILE` paths. This restricted
+runner now reports `EMFILE` and exits 2 before launching Electron, so it no
+longer produces misleading operation misses. Phase 2's real-browser exit gate
+still requires a clean run on a watch-capable host.
+
 ### Exit criteria
 
 - Real-browser churn scenarios stay within the ratified frame and latency

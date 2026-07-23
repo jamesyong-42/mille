@@ -37,6 +37,7 @@ export type {
   FileTreeEngine,
   FileTreeProps,
   FileTreeRef,
+  FileTreeNavigationRestoreResult,
   FileTreeRowProps,
   FileTreeSnapshotLike,
   MergedDecoration,

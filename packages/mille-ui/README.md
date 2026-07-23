@@ -55,6 +55,33 @@ export function Sidebar() {
   all drop in).
 - Drag-and-drop: tree↔tree, OS→tree, and tree→chat via
   `application/vnd.claude.attachment`.
+- Bounded, versioned navigation persistence with lazy path-based restore.
+
+## Persist navigation
+
+The tree owns navigation state but leaves the storage location to the host:
+
+```tsx
+import {
+  FileTree,
+  serializeFileTreeNavigationState,
+} from '@vibecook/mille-ui';
+
+const storageKey = 'workspace:demo:file-tree';
+
+<FileTree
+  fx={fx}
+  ariaLabel="Files"
+  initialNavigationState={localStorage.getItem(storageKey)}
+  onNavigationStateChange={(state) => {
+    localStorage.setItem(storageKey, serializeFileTreeNavigationState(state));
+  }}
+/>;
+```
+
+The persisted record uses root-qualified paths, not process-local entry IDs,
+and includes expansion, selection, focus, filter text/mode, and scroll anchor.
+Missing paths are skipped during restore.
 
 ## Entry points
 

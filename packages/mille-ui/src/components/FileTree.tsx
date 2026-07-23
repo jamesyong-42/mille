@@ -66,6 +66,7 @@ import {
 import { useContextMenuState } from '../hooks/useContextMenuState.js';
 import { useClipboardState } from '../hooks/useClipboardState.js';
 import { useFilterState } from '../hooks/useFilterState.js';
+import { useControlledState } from '../hooks/useControlledState.js';
 import { useFileTreeDragDrop } from '../hooks/useFileTreeDragDrop.js';
 import { FileTreeRow } from './FileTreeRow.js';
 import { FileContextMenu } from './FileContextMenu.js';
@@ -75,9 +76,16 @@ import type { SearchableEngine } from '../hooks/useSearchResults.js';
 import { mergeDecorations } from '../hooks/useFileDecorations.js';
 import type { Command, CommandContext, CommandRegistry } from '../commands/types.js';
 import { defaultCommands } from '../commands/defaults.js';
+import {
+  captureFileTreeNavigationState,
+  parseFileTreeNavigationState,
+  type FileTreeNavigationState,
+  type FileTreeSearchMode,
+} from '../navigation-state.js';
 import type {
   AriaRowProps,
   FileTreeEngine,
+  FileTreeNavigationRestoreResult,
   FileTreeProps,
   FileTreeRef,
   FileTreeRowProps,
@@ -139,6 +147,9 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
     style,
     rowRenderer,
     stickyRoots = true,
+    initialNavigationState,
+    onNavigationStateChange,
+    navigationStateDebounceMs = 150,
     multiSelect = true,
     focusedId: controlledFocusedId,
     onFocusedIdChange,
@@ -154,7 +165,7 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
     disableContextMenu = false,
     filter: controlledFilter,
     onFilterChange,
-    searchMode = 'off',
+    searchMode: controlledSearchMode,
     onSearchModeChange,
     filterInputRef,
     showFilter = false,
@@ -179,6 +190,9 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
   // delaying the store itself or any non-React consumers.
   const snapshot = useDeferredValue(latestSnapshot);
   const commandsHandle = ctx.commands;
+  const initialNavigationStateRef = useRef<FileTreeNavigationState | null>(
+    parseFileTreeNavigationState(initialNavigationState),
+  );
 
   // Rename + create state. Drives the inline FileRenameInput on the
   // matching row. Controlled mode when caller passes `renameTargetId`.
@@ -204,8 +218,13 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
       ? { controlled: { value: controlledFilter, onChange: onFilterChange } }
       : controlledFilter !== undefined
         ? { controlled: { value: controlledFilter, onChange: () => {} } }
-        : {},
+        : { defaultValue: initialNavigationStateRef.current?.filter ?? '' },
   );
+  const [searchMode, setSearchMode] = useControlledState<FileTreeSearchMode>({
+    value: controlledSearchMode,
+    defaultValue: initialNavigationStateRef.current?.searchMode ?? 'off',
+    ...(onSearchModeChange ? { onChange: onSearchModeChange } : {}),
+  });
 
   // Embedded filter input ref (used when `showFilter` is true). Separate
   // from `filterInputRef` so we can fall back to focusing the embedded
@@ -1263,6 +1282,173 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
     [resolvePath, revealResolvedId],
   );
 
+  const pendingNavigationScrollRef = useRef<{
+    readonly id: EntryId;
+    readonly offsetPx: number;
+  } | null>(null);
+
+  const captureNavigationState = useCallback((): FileTreeNavigationState => {
+    const scrollTop = scrollerRef.current?.scrollTop ?? viewportScrollOffset;
+    const anchorIndex =
+      count === 0 ? -1 : Math.max(0, Math.min(count - 1, Math.floor(scrollTop / rowHeight)));
+    const anchorRow = anchorIndex === -1 ? undefined : projection.readRows(anchorIndex, 1)[0];
+    return captureFileTreeNavigationState({
+      snapshot,
+      expandedIds: expanded,
+      selectedIds: selection.selectedIds,
+      focusedId: selection.focusedId,
+      filter: filterState.filter,
+      searchMode,
+      scrollAnchor: anchorRow
+        ? {
+            id: anchorRow.id,
+            offsetPx: Math.max(0, scrollTop - anchorIndex * rowHeight),
+          }
+        : null,
+    });
+  }, [
+    viewportScrollOffset,
+    count,
+    rowHeight,
+    projection,
+    snapshot,
+    expanded,
+    selection.selectedIds,
+    selection.focusedId,
+    filterState.filter,
+    searchMode,
+  ]);
+
+  const restoreNavigationState = useCallback(
+    async (
+      input: FileTreeNavigationState | string,
+    ): Promise<FileTreeNavigationRestoreResult> => {
+      const state = parseFileTreeNavigationState(input);
+      if (state === null) throw new TypeError('Invalid file-tree navigation state');
+
+      const allPaths = new Set<string>([
+        ...state.expandedPaths,
+        ...state.selectedPaths,
+        ...(state.focusedPath ? [state.focusedPath] : []),
+        ...(state.scrollAnchor ? [state.scrollAnchor.path] : []),
+      ]);
+      const resolved = new Map<string, EntryId>();
+      const paths = [...allPaths];
+      // Keep lazy hydration bounded: large persisted workspaces should not
+      // launch thousands of filesystem walks in one microtask.
+      for (let offset = 0; offset < paths.length; offset += 32) {
+        const batch = paths.slice(offset, offset + 32);
+        const ids = await Promise.all(
+          batch.map(async (path) => {
+            try {
+              return await resolvePath(path);
+            } catch {
+              return null;
+            }
+          }),
+        );
+        for (let index = 0; index < batch.length; index += 1) {
+          const path = batch[index]!;
+          const id = ids[index];
+          if (id !== null && id !== undefined) resolved.set(path, id);
+        }
+      }
+
+      const expandedIds = state.expandedPaths.flatMap((path) => {
+        const id = resolved.get(path);
+        return id === undefined ? [] : [id];
+      });
+      clearExpanded();
+      setManyExpanded({ add: expandedIds });
+
+      const selectedIds = new Set<EntryId>();
+      for (const path of state.selectedPaths) {
+        const id = resolved.get(path);
+        if (id !== undefined) selectedIds.add(id);
+      }
+      selection.setSelection(selectedIds);
+
+      const focusedId =
+        state.focusedPath === null ? undefined : resolved.get(state.focusedPath);
+      selection.setFocused(focusedId ?? null);
+      selection.setAnchor(focusedId ?? null);
+      filterState.setFilter(state.filter);
+      setSearchMode(state.searchMode);
+
+      const scrollId =
+        state.scrollAnchor === null ? undefined : resolved.get(state.scrollAnchor.path);
+      if (scrollId !== undefined && state.scrollAnchor !== null) {
+        pendingNavigationScrollRef.current = {
+          id: scrollId,
+          offsetPx: state.scrollAnchor.offsetPx,
+        };
+        setManyExpanded({ add: ancestorsOf(scrollId, fx.getSnapshot()) });
+      }
+
+      const missingPaths = paths.filter((path) => !resolved.has(path));
+      return {
+        expanded: expandedIds.length,
+        selected: selectedIds.size,
+        focused: focusedId !== undefined,
+        scrollAnchored: scrollId !== undefined,
+        missingPaths,
+      };
+    },
+    [
+      resolvePath,
+      clearExpanded,
+      setManyExpanded,
+      selection,
+      filterState,
+      setSearchMode,
+      ancestorsOf,
+      fx,
+    ],
+  );
+
+  useLayoutEffect(() => {
+    const pending = pendingNavigationScrollRef.current;
+    if (pending === null) return;
+    const index = projection.findExactRowIndex(pending.id, mountedViewportOffset);
+    if (index === -1) return;
+    const top = index * rowHeight + pending.offsetPx;
+    const scroller = scrollerRef.current;
+    if (scroller) scroller.scrollTo({ top });
+    else scrollToIndex(index, { align: 'start' });
+    pendingNavigationScrollRef.current = null;
+  }, [projection, mountedViewportOffset, rowHeight, scrollToIndex]);
+
+  const didRestoreInitialNavigationRef = useRef(false);
+  useEffect(() => {
+    if (didRestoreInitialNavigationRef.current || snapshot.roots().length === 0) return;
+    didRestoreInitialNavigationRef.current = true;
+    const state = initialNavigationStateRef.current;
+    if (state !== null) void restoreNavigationState(state);
+  }, [snapshot, restoreNavigationState]);
+
+  const didPublishNavigationRef = useRef(false);
+  const lastPublishedNavigationRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!onNavigationStateChange) return;
+    if (!didPublishNavigationRef.current) {
+      didPublishNavigationRef.current = true;
+      lastPublishedNavigationRef.current = JSON.stringify(captureNavigationState());
+      return;
+    }
+    const timeout = setTimeout(() => {
+      const state = captureNavigationState();
+      const serialized = JSON.stringify(state);
+      if (serialized === lastPublishedNavigationRef.current) return;
+      lastPublishedNavigationRef.current = serialized;
+      onNavigationStateChange(state);
+    }, Math.max(0, navigationStateDebounceMs));
+    return () => clearTimeout(timeout);
+  }, [
+    onNavigationStateChange,
+    navigationStateDebounceMs,
+    captureNavigationState,
+  ]);
+
   const focusFilter = useCallback((): boolean => {
     const ext = filterInputRef?.current;
     if (ext && typeof ext.focus === 'function') {
@@ -1300,6 +1486,8 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
       expand: (ids: readonly EntryId[]) => {
         setManyExpanded({ add: ids });
       },
+      captureNavigationState,
+      restoreNavigationState,
       focusFilter,
       reset: () => {
         selection.clear();
@@ -1337,6 +1525,8 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
       clipboard,
       clearExpanded,
       setManyExpanded,
+      captureNavigationState,
+      restoreNavigationState,
       focusFilter,
       projection,
     ],
@@ -1422,7 +1612,7 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
         if (onFilterChange) onFilterChange(next);
       }}
       onModeChange={(next) => {
-        if (onSearchModeChange) onSearchModeChange(next);
+        setSearchMode(next);
       }}
     />
   ) : null;

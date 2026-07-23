@@ -1,6 +1,6 @@
 # IDE Explorer Parity Implementation Plan
 
-**Status:** active — Phase 0 complete, Phases 1–2 in progress
+**Status:** active — Phase 0 complete, Phases 1–3 in progress
 **Created:** 2026-07-21  
 **Baseline assessment:**
 [IDE_EXPLORER_PARITY_ASSESSMENT.md](./IDE_EXPLORER_PARITY_ASSESSMENT.md)
@@ -611,6 +611,20 @@ do not implement a second incompatible tree model only in React.
 - Focus, selection, active filter mode, and scroll anchor where appropriate.
 - Restore lazily without forcing an eager full-tree walk.
 - Version and bound persisted state so stale workspaces do not grow indefinitely.
+
+First persistence result (2026-07-22): `FileTree` now captures and restores a
+stable schema using root-qualified paths rather than process-local entry IDs.
+The v1 record includes expansion, selection, focus, filter text/mode, and a
+row-plus-pixel scroll anchor; it migrates the pre-release unversioned path
+shape, rejects unknown versions, and caps expansion at 4,096 paths, selection
+at 1,024 paths, and individual paths/filter text at 4,096 characters. Restore
+uses the indexed path resolver in batches of 32, skips and reports missing
+paths, and does not eagerly materialize the visible tree. Both declarative
+`initialNavigationState`/debounced `onNavigationStateChange` wiring and
+imperative capture/restore methods are covered. The maximum-state gate measured
+capture p50/p95 1.93/2.30 ms, 158,124-byte serialization 0.46/0.59 ms, and
+validated parse 0.84/2.45 ms. Durable storage in the reference playground and
+same-display-name multi-root disambiguation remain paired with Phase 3.2.
 
 #### 3.4 Follow the editor
 

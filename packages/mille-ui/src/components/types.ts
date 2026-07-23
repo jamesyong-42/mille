@@ -28,6 +28,10 @@ import type {
 } from '@vibecook/mille';
 import type { IconTheme } from '../icons/types.js';
 import type { CommandRegistryHandle } from '../types.js';
+import type {
+  FileTreeNavigationState,
+  FileTreeSearchMode,
+} from '../navigation-state.js';
 
 // Observer signatures mirror virtual-core's. Declared here rather
 // than in the hook to avoid a component → hook → component cycle.
@@ -314,6 +318,17 @@ export interface FileTreeRef {
    */
   expand(ids: readonly EntryId[]): void;
 
+  /** Capture bounded, versioned, path-based state suitable for persistence. */
+  captureNavigationState(): FileTreeNavigationState;
+
+  /**
+   * Restore path-based state through the engine's lazy resolver. Missing paths
+   * are skipped and reported instead of invalidating the entire restore.
+   */
+  restoreNavigationState(
+    state: FileTreeNavigationState | string,
+  ): Promise<FileTreeNavigationRestoreResult>;
+
   /**
    * Focus the filter input. Returns `true` if a filter input was found
    * (the caller-supplied `filterInputRef` or the tree's embedded
@@ -326,6 +341,14 @@ export interface FileTreeRef {
    * keyboard focus to the tree container.
    */
   reset(): void;
+}
+
+export interface FileTreeNavigationRestoreResult {
+  readonly expanded: number;
+  readonly selected: number;
+  readonly focused: boolean;
+  readonly scrollAnchored: boolean;
+  readonly missingPaths: readonly string[];
 }
 
 /**
@@ -393,6 +416,12 @@ export interface FileTreeProps {
   readonly style?: CSSProperties;
   readonly rowRenderer?: ComponentType<FileTreeRowProps>;
   readonly stickyRoots?: boolean;
+  /** One-time path-based state restored lazily after the first root arrives. */
+  readonly initialNavigationState?: FileTreeNavigationState | string | null;
+  /** Debounced observer for hosts that persist state to workspace storage. */
+  readonly onNavigationStateChange?: (state: FileTreeNavigationState) => void;
+  /** Persistence observer debounce. Default 150 ms. */
+  readonly navigationStateDebounceMs?: number;
 
   // ─── DEFERRED (Phase 4+): selection, focus, keyboard ─────────────
   readonly focusedId?: EntryId | null;
@@ -460,8 +489,8 @@ export interface FileTreeProps {
    *                   selected hit via `onOpen`.
    * Default `'off'` for backward compatibility.
    */
-  readonly searchMode?: 'off' | 'filter' | 'search';
-  readonly onSearchModeChange?: (next: 'off' | 'filter' | 'search') => void;
+  readonly searchMode?: FileTreeSearchMode;
+  readonly onSearchModeChange?: (next: FileTreeSearchMode) => void;
   /**
    * Phase 8 — forwarded to the `Mod+F` handler. When set, pressing
    * `Mod+F` while focus is in the tree focuses the filter input; when

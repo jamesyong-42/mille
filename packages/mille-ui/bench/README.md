@@ -74,6 +74,14 @@ work.
 Path reveal additionally requires exactly one indexed path query and rejects any
 fallback that scans the complete visible projection.
 
+## Navigation persistence gate
+
+`pnpm bench:navigation` exercises the Phase 3 path-based persistence boundary at
+its configured maximum: 4,096 expanded paths and 1,024 selected paths. It
+reports capture, stable JSON serialization, and validating parse p50/p95; fails
+if those paths exceed 50/20/30 ms respectively, if the JSON exceeds 500 KB, or
+if the bounded schema/round-trip invariants fail.
+
 ## Why happy-dom
 
 Same reason the test suite uses it: fast, deterministic, no browser

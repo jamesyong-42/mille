@@ -4,6 +4,12 @@
 
 ### Added
 
+- **Versioned navigation persistence** — path-based expansion, selection,
+  focus, filter mode, and pixel scroll anchors via
+  `initialNavigationState`, `onNavigationStateChange`, and
+  `FileTreeRef.captureNavigationState()` / `restoreNavigationState()`.
+  State is migrated, validated, bounded, and restored through lazy indexed
+  path resolution rather than unstable process-local entry IDs.
 - **Minimal archival theme** — paper/ink Structure-panel look from the
   spaghetti-ui `FileTreeNode` design. CSS:
   `@vibecook/mille-ui/theme/minimal.css` (activate with

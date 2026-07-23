@@ -342,7 +342,9 @@ sorting. Missing settings include:
 - configurable compact folders;
 - hidden-file, `files.exclude`, and Git-ignore visibility;
 - per-workspace-root overrides;
-- persisted expansion, selection, focus, filter, and scroll state.
+- reference-playground durable storage and same-display-name multi-root
+  disambiguation for the new bounded, versioned expansion/selection/focus/
+  filter/scroll navigation state.
 
 ### 5. File operations need product-level recovery
 

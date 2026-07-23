@@ -86,7 +86,8 @@
     "test": "node --test test/*.test.mjs",
     "size": "size-limit",
     "size:why": "size-limit --why",
-    "bench": "node bench/scroll-expand.mjs"
+    "bench": "node bench/scroll-expand.mjs",
+    "bench:navigation": "node bench/navigation-state.mjs"
   },
   "size-limit": [
     {

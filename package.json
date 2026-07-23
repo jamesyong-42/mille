@@ -14,6 +14,7 @@
     "bench": "pnpm bench:watch",
     "bench:core": "cargo bench -p mille-bench",
     "bench:ui": "node packages/mille-ui/bench/scroll-expand.mjs",
+    "bench:navigation": "node packages/mille-ui/bench/navigation-state.mjs",
     "bench:viewport": "node packages/mille/bench/viewport-retention.mjs",
     "bench:wide-folder": "node packages/mille/bench/wide-folder-order.mjs",
     "bench:watch": "node scripts/watch-bench.mjs",

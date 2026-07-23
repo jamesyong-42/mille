@@ -85,6 +85,20 @@ export type {
   UseAutoExpandDwellOptions,
 } from './hooks/index.js';
 export type { CommandRegistryHandle } from './types.js';
+export {
+  FILE_TREE_NAVIGATION_STATE_VERSION,
+  FILE_TREE_NAVIGATION_LIMITS,
+  parseFileTreeNavigationState,
+  serializeFileTreeNavigationState,
+  fileTreePathForId,
+  captureFileTreeNavigationState,
+} from './navigation-state.js';
+export type {
+  FileTreeNavigationState,
+  FileTreeScrollAnchor,
+  FileTreeSearchMode,
+  CaptureFileTreeNavigationStateOptions,
+} from './navigation-state.js';
 
 // Phase 3 — virtualized read-only tree.
 // Phase 6 adds FileContextMenu + ContextMenuItem.
@@ -110,6 +124,7 @@ export type {
   FileTreeEngine,
   FileTreeProps,
   FileTreeRef,
+  FileTreeNavigationRestoreResult,
   FileTreeRowProps,
   FileTreeSnapshotLike,
   IndentGuidesProps,

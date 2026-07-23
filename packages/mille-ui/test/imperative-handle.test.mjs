@@ -170,7 +170,14 @@ function cutIds(container) {
  * Renders a FileTree with a forwarded ref + optional props. Returns a
  * handle the test uses to mutate state and observe DOM.
  */
-async function mountTree({ fx, showFilter = false, filterInputRef, filter, onFilterChange } = {}) {
+async function mountTree({
+  fx,
+  showFilter = false,
+  filterInputRef,
+  filter,
+  onFilterChange,
+  ...extra
+} = {}) {
   const ref = createRef();
   const { container, root } = mount();
   const obs = makeObservers();
@@ -185,6 +192,7 @@ async function mountTree({ fx, showFilter = false, filterInputRef, filter, onFil
     searchMode: showFilter ? 'filter' : 'off',
     __testObserveElementRect: obs.observeElementRect,
     __testObserveElementOffset: obs.observeElementOffset,
+    ...extra,
   };
   if (filterInputRef !== undefined) props.filterInputRef = filterInputRef;
   if (filter !== undefined) props.filter = filter;
@@ -303,6 +311,116 @@ test('ref.clearClipboard() drops cut ids', async () => {
   await act(async () => { h.ref.current.clearClipboard(); });
 
   assert.deepEqual(cutIds(h.container), []);
+
+  await h.cleanup();
+});
+
+test('ref captures and lazily restores path-based navigation state', async () => {
+  const fx = createFakeEngine();
+  fx.emitDelta(createFakeSnapshot({ rows: sampleRows(), treeVersion: 1 }));
+  fx.resolvePath = async (path) => new Map([
+    ['root', 1],
+    ['root/sub', 2],
+    ['root/sub/deep.ts', 3],
+  ]).get(path) ?? null;
+
+  const h = await mountTree({ fx });
+  const subChevron = rowByEntryId(h.container, 2)?.querySelector(
+    'button[data-mille-chevron]',
+  );
+  assert.ok(subChevron);
+  await act(async () => {
+    subChevron.dispatchEvent(new hdWindow.MouseEvent('click', { bubbles: true }));
+  });
+  const deep = rowByEntryId(h.container, 3);
+  assert.ok(deep);
+  await act(async () => { clickRow(deep); });
+
+  const captured = h.ref.current.captureNavigationState();
+  assert.deepEqual(captured.expandedPaths, ['root', 'root/sub']);
+  assert.deepEqual(captured.selectedPaths, ['root/sub/deep.ts']);
+  assert.equal(captured.focusedPath, 'root/sub/deep.ts');
+
+  await act(async () => {
+    h.ref.current.collapseAll();
+    h.ref.current.clearSelection();
+  });
+  let result;
+  await act(async () => {
+    result = await h.ref.current.restoreNavigationState(
+      JSON.stringify({
+        ...captured,
+        expandedPaths: [...captured.expandedPaths, 'root/missing'],
+      }),
+    );
+  });
+
+  assert.deepEqual(result, {
+    expanded: 2,
+    selected: 1,
+    focused: true,
+    scrollAnchored: true,
+    missingPaths: ['root/missing'],
+  });
+  assert.deepEqual(selectedIds(h.container), [3]);
+  const restored = h.ref.current.captureNavigationState();
+  assert.deepEqual(restored.expandedPaths, ['root', 'root/sub']);
+  assert.deepEqual(restored.selectedPaths, ['root/sub/deep.ts']);
+  assert.equal(restored.focusedPath, 'root/sub/deep.ts');
+
+  await h.cleanup();
+});
+
+test('initialNavigationState restores once and persistence observer publishes later changes', async () => {
+  const fx = createFakeEngine();
+  fx.emitDelta(createFakeSnapshot({ rows: sampleRows(), treeVersion: 1 }));
+  fx.resolvePath = async (path) => new Map([
+    ['root', 1],
+    ['root/sub', 2],
+    ['root/sub/deep.ts', 3],
+  ]).get(path) ?? null;
+  const published = [];
+  const h = await mountTree({
+    fx,
+    searchMode: undefined,
+    initialNavigationState: {
+      version: 1,
+      expandedPaths: ['root', 'root/sub'],
+      selectedPaths: ['root/sub/deep.ts'],
+      focusedPath: 'root/sub/deep.ts',
+      filter: 'deep',
+      searchMode: 'filter',
+      scrollAnchor: null,
+    },
+    onNavigationStateChange: (state) => published.push(state),
+    navigationStateDebounceMs: 0,
+  });
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  });
+
+  assert.deepEqual(selectedIds(h.container), [3]);
+  const restored = h.ref.current.captureNavigationState();
+  assert.equal(restored.focusedPath, 'root/sub/deep.ts');
+  assert.equal(restored.filter, 'deep');
+  assert.equal(restored.searchMode, 'filter');
+
+  const subChevron = rowByEntryId(h.container, 2)?.querySelector(
+    'button[data-mille-chevron]',
+  );
+  assert.ok(subChevron);
+  published.length = 0;
+  await act(async () => {
+    fx.emitDelta(createFakeSnapshot({ rows: sampleRows(), treeVersion: 2 }));
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  });
+  assert.equal(published.length, 0, 'structural snapshot alone does not rewrite storage');
+  await act(async () => {
+    subChevron.dispatchEvent(new hdWindow.MouseEvent('click', { bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  });
+  assert.ok(published.length > 0);
+  assert.deepEqual(published.at(-1).expandedPaths, ['root']);
 
   await h.cleanup();
 });

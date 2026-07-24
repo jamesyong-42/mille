@@ -1,6 +1,8 @@
 # IDE Explorer Parity Implementation Plan
 
-**Status:** active — Phases 0–4 complete for planned scope; Phase 5.1 diagnostics decorations landed (SCM already present); 5.2–5.4 open
+**Status:** active — Phases 0–5 complete for planned scope; Phase 6.1 first
+slice landed (`@vibecook/mille/provider` memfs + capability gate + tree
+session); 6.2/6.3 partial (path helpers, live announcer)
 **Created:** 2026-07-21  
 **Baseline assessment:**
 [IDE_EXPLORER_PARITY_ASSESSMENT.md](./IDE_EXPLORER_PARITY_ASSESSMENT.md)
@@ -1216,10 +1218,16 @@ tree component per view.
   `scm.compareWithPrevious`; playground side-by-side diff panel.
 - Revert/restore hooks with confirmation and progress.
   **Done** — `runScmRevert` with confirm + progress phases; shell
-  `git restore` / `checkout`.
+  `git restore` / `checkout`. Multi-root: `selectedScmTargets` /
+  `groupScmTargetsByRoot` + per-root `rootPath` on revert batches.
 - Context-aware SCM commands.
   **Done** — `scmHistoryCommands` (`scm.*`) registered with playground
   `hostHooks` on `FileTree`.
+- Path containment + AbortSignal kill of git children.
+  **Done** — `assertPathUnderRoot` in shell clients; playground IPC trusts
+  only the active workspace root. Real temp-git integration tests in
+  `history-scm.test.mjs` (skipped without `git` on PATH). Bench:
+  `bench:history`.
 
 #### 5.4 Command contribution contract
 
@@ -1227,24 +1235,34 @@ tree component per view.
   **Done (2026-07-24)** — `contributeCommands`, `Command.submenu` /
   `submenuLabel` / `order` / `enablement`, menu partition + Radix submenus,
   disabled items. Keybindings remain on `Command.keybinding` + registry
-  `getBinding`.
+  `getBinding`. `dispatch` / `dispatchWithContext` honor enablement
+  (keyboard + menu paths).
 - Commands receive stable selection, workspace, editor, SCM, and diagnostic
   context.
   **Done** — `buildCommandContext` + `CommandContext` fields
   (`workspaceRoot`, `editor`, `scm`, `diagnostics`, `extensions`, `signal`,
   `reportProgress`).
 - Async progress, cancellation, failure notification, and telemetry hooks.
-  **Done** — `dispatchWithLifecycle` + `CommandLifecycleHooks`.
+  **Done** — `dispatchWithLifecycle` builds **per-dispatch** context (no
+  shared registry lifecycle stash across concurrent awaits). Bench:
+  `bench:commands`.
   Tests: `packages/mille-ui/test/command-contribution.test.mjs`.
 
 ### Exit criteria
 
 - The reference playground demonstrates SCM, diagnostics, Open Files, Changed
   Files, and Problems against live data.
+  **Partial (2026-07-24)** — Changed Files uses live `git status` IPC; Open
+  Files tracks editor tabs; Problems / Failed Tests use live
+  `MapDiagnosticsClient` / `MapTestStatusClient` (shared seed with decoration
+  hosts, `onChange` re-resolves). Not an LSP / test-runner bridge yet — hosts
+  swap the Map clients for real backends without view changes.
 - Decoration-only churn remains within the browser performance budget.
 - Command contribution is documented and tested without requiring the styled
   entry point.
 - Every visual status has equivalent accessible text.
+- SCM path containment + multi-root destructive targets + concurrent lifecycle
+  + keyboard enablement are covered by unit tests (Phase 5.3/5.4 safety).
 
 ## Phase 6 — Provider and platform depth
 
@@ -1258,33 +1276,65 @@ the accessibility/platform quality matrix.
 #### 6.1 Filesystem provider boundary
 
 - Define URI-first stat, list, read, write, watch, and mutation capabilities.
+  **Done (first slice, 2026-07-24)** — `@vibecook/mille/provider` exports
+  `FileSystemProvider`, `Capability`, URI helpers, and
+  `createMemoryFileSystemProvider`.
 - Advertise provider capabilities rather than assuming every operation exists.
+  **Done** — `providerSupports` / `requireCapability` /
+  `describeUnsupported` / `withCapabilityGate`; unsupported ops throw
+  `FileSystemError(EUNSUPPORTED)` with a human message.
 - Model latency, pagination, reconnect, offline state, and eventual consistency.
+  **Partial** — `withLatency`, `withOfflineGate` (reconnect simulation).
+  Pagination / eventual-consistency models still open.
 - Keep local Rust/native behavior as the optimized default provider.
+  **Done** — provider module is additive; native `FileExplorer` unchanged.
+  Native `registerProvider` scheme dispatch still deferred.
+- Renderable non-local tree.
+  **Done** — `createProviderTreeSession` materializes provider → flattenable
+  snapshot for hosts/tests. Bench: `bench:provider`.
+  Tests: `packages/mille/test/provider.test.mjs`.
 
 #### 6.2 Platform matrix
 
 - Windows drive and UNC behavior.
+  **Partial** — `parsePlatformPath` / `isUncPath` / `isWindowsDrivePath`.
 - macOS Unicode normalization and case-insensitive defaults.
+  **Partial** — `normalizeFileName` / `pathsEqual` with NFC/NFD.
 - Linux case-sensitive and inotify limit behavior.
+  **Open** (inotify limits remain native-watcher territory).
 - Symlink/junction policies and permission boundaries.
+  **Open**.
 - Network and remote-like latency/failure simulation.
+  **Partial** — `withLatency` + offline gate on providers.
 
 #### 6.3 Accessibility validation
 
 - Automated axe checks in the Electron/browser suite.
+  **Partial** — existing axe-lite ARIA tree tests; full axe-core still open.
 - VoiceOver on macOS and NVDA on Windows scripted acceptance scenarios.
+  **Open**.
 - High contrast, zoom, reduced motion, and keyboard-only operation.
+  **Partial** — reduced-motion already covered; high-contrast matrix open.
 - Announce create, rename, delete, move, errors, loading, and result counts
   without flooding live regions during event storms.
+  **Done (first slice)** — `@vibecook/mille-ui/a11y` `createLiveAnnouncer`
+  (lazy mount, coalesce + min-interval throttle + `announceMany`). Default
+  mutation commands (`file.create` / `rename` / `delete` / `move` / `copy`)
+  call `host.notify` on success; playground wires notify → announcer.
+  Tests: `packages/mille-ui/test/live-announcer.test.mjs` (real timer gate).
 
 ### Exit criteria
 
 - A non-local test provider renders and supports its advertised mutation set.
+  **Met (memfs + ProviderTreeSession)** for the TypeScript provider path.
 - Unsupported provider operations are disabled with an explanation.
+  **Met** at the provider API (`describeUnsupported` / capability gate).
+  Command-menu wiring of explanations in playground still open.
 - Platform-specific filesystem scenarios pass in CI or a documented hardware
   lane.
+  **Partial** — pure path-helper unit tests in CI; hardware lane open.
 - The accessibility acceptance matrix has no critical open failures.
+  **Partial** — live-region storm control landed; AT scripted matrix open.
 
 ## Cross-cutting test matrix
 

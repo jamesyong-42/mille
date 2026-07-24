@@ -85,6 +85,10 @@
       "types": "./dist/testing.d.ts",
       "import": "./dist/testing.js"
     },
+    "./a11y": {
+      "types": "./dist/a11y.d.ts",
+      "import": "./dist/a11y.js"
+    },
     "./tailwind-preset": {
       "default": "./dist/tailwind-preset.js"
     },

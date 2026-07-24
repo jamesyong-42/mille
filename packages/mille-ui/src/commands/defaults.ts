@@ -21,13 +21,22 @@ import {
   type FileSearchRequestKind,
 } from '../file-search.js';
 import { expandedDescendantIds } from '../tree-expansion.js';
-import type { Command } from './types.js';
+import type { Command, CommandContext } from './types.js';
 
 // Local mirror of api.d.ts `EntryKind`. The engine ships `entry.kind` as a
 // plain `number` in the public types and doesn't re-export the enum, so we
 // keep numeric constants here. Values match api.d.ts §EntryKind.
 const KIND_FILE = 0;
 const KIND_DIRECTORY = 1;
+
+/** Phase 6.3 — surface mutation success via host.notify (live announcer). */
+function announceMutation(ctx: CommandContext, message: string): void {
+  try {
+    ctx.host.notify?.('info', message);
+  } catch {
+    /* host notify must not break mutations */
+  }
+}
 
 // ─── Tree structure commands ───────────────────────────────────────────────
 
@@ -176,6 +185,8 @@ const createCommand: Command = {
     const parsed = parseCreateArgs(args, ctx);
     if (parsed === null) return;
     await ctx.fx.create(parsed.parentId, parsed.name, parsed.kind);
+    const kindLabel = parsed.kind === KIND_DIRECTORY ? 'Folder' : 'File';
+    announceMutation(ctx, `Created ${kindLabel.toLowerCase()} ${parsed.name}`);
   },
 };
 
@@ -201,6 +212,7 @@ const renameCommand: Command = {
     const parsed = parseRenameArgs(args, ctx);
     if (parsed === null) return;
     await ctx.fx.rename(parsed.id, parsed.newName);
+    announceMutation(ctx, `Renamed to ${parsed.newName}`);
   },
 };
 
@@ -234,6 +246,11 @@ const deleteCommand: Command = {
     for (const id of parsed.ids) {
       await ctx.fx.delete(id, { trash: parsed.toTrash, recursive: parsed.recursive });
     }
+    const n = parsed.ids.length;
+    announceMutation(
+      ctx,
+      n === 1 ? 'Deleted 1 item' : `Deleted ${n} items`,
+    );
   },
 };
 
@@ -250,6 +267,8 @@ const moveCommand: Command = {
     for (const id of parsed.ids) {
       await ctx.fx.move(id, parsed.targetParentId, parsed.newName);
     }
+    const n = parsed.ids.length;
+    announceMutation(ctx, n === 1 ? 'Moved 1 item' : `Moved ${n} items`);
   },
 };
 
@@ -266,6 +285,8 @@ const copyCommand: Command = {
     for (const id of parsed.ids) {
       await ctx.fx.copy(id, parsed.targetParentId, parsed.newName);
     }
+    const n = parsed.ids.length;
+    announceMutation(ctx, n === 1 ? 'Copied 1 item' : `Copied ${n} items`);
   },
 };
 

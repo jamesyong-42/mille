@@ -36,6 +36,11 @@
 
 ### Added
 
+- **Live announcer (Phase 6.3)** — `@vibecook/mille-ui/a11y` exports
+  `createLiveAnnouncer` for storm-safe `aria-live` feedback (lazy DOM mount,
+  coalesce window + min interval + `announceMany`). Mutation defaults
+  (`file.create` / `rename` / `delete` / `move` / `copy`) call `host.notify`
+  on success so hosts can forward to the announcer.
 - **Command contribution contract (Phase 5.4)** — `@vibecook/mille-ui/commands`
   adds `contributeCommands`, `dispatchWithLifecycle` (progress / cancel /
   failure notify / telemetry), `evaluateEnablement`, `partitionCommandsForMenu`

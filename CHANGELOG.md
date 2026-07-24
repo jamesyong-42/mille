@@ -14,6 +14,11 @@
   → `await refresh()` never resolves with a tree read before the write.
   Local `FileExplorer` unchanged; native `registerProvider` still deferred.
 
+### UI (`@vibecook/mille-ui`)
+
+- **Live announcer (Phase 6.3)** — `@vibecook/mille-ui/a11y`
+  `createLiveAnnouncer` coalesces and throttles `aria-live` feedback.
+
 ## 0.2.1 — 2026-07-12
 
 Explorer correctness + soft-duotone icons + docs site. No public-API breaks.

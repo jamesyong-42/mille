@@ -61,6 +61,7 @@ import {
   type ScmCompareResult,
   type ScmHostHooks,
 } from '@vibecook/mille-ui/history';
+import { createLiveAnnouncer } from '@vibecook/mille-ui/a11y';
 import type { Entry, FileExplorer, VisibleRow } from '@vibecook/mille';
 import { connectFileExplorer, type PortFileExplorer } from '@vibecook/mille/port';
 import { fxPortReady, onFxPort } from './fx-port';
@@ -225,8 +226,20 @@ function Explorer({ fx, root }: { fx: PortFileExplorer; root: string }): ReactEl
   );
   const treeRef = useFileTreeRef();
   const [fileActionStatus, setFileActionStatus] = useState<string | null>(null);
+  // Phase 6.3 — storm-safe AT announcements (created in effect, not render).
+  const liveAnnouncerRef = useRef<ReturnType<typeof createLiveAnnouncer> | null>(
+    null,
+  );
+  useEffect(() => {
+    liveAnnouncerRef.current = createLiveAnnouncer({ minIntervalMs: 400 });
+    return () => {
+      liveAnnouncerRef.current?.dispose();
+      liveAnnouncerRef.current = null;
+    };
+  }, []);
   const reportStatus = useCallback((message: string) => {
     setFileActionStatus(message);
+    liveAnnouncerRef.current?.announce(message);
   }, []);
   const [historyPanel, setHistoryPanel] = useState<{
     path: string;

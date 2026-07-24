@@ -41,14 +41,9 @@ import {
 } from './protocol.js';
 import type { Disposable, MessagePortLike } from './types.js';
 import type { ExplorerProjectionSettings } from './explorer-settings.js';
-import type {
-  ResyncOptions,
-  TransferOptions,
-  UndoDescriptor,
-  UndoResult,
-  Uri,
-} from './client.js';
-import { normalizeUndoDescriptor, normalizeUndoResult } from './client.js';
+import type { ResyncOptions, TransferOptions, Uri } from './client.js';
+import type { UndoDescriptor, UndoResult } from './undo.js';
+import { normalizeUndoDescriptor, normalizeUndoResult } from './undo.js';
 
 interface PendingRequest {
   resolve: (value: unknown) => void;

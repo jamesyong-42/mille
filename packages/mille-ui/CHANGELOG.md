@@ -4,6 +4,9 @@
 
 ### Added
 
+- **Browser-safe undo types** — port client imports undo normalizers from a
+  Node-free module so the Electron/Vite renderer build no longer pulls the
+  native loader via `client.ts`.
 - **Test-status decorations (Phase 5.1)** — `@vibecook/mille-ui/test-status`
   exports `registerTestStatusDecorations`, `TestStatusClient`, and
   `createMapTestStatusClient`. Leaf glyphs: `✗` failed, `!` errored, `…`

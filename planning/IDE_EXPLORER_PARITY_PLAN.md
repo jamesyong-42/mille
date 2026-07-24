@@ -1169,17 +1169,19 @@ Move from a capable filesystem tree to a central IDE navigation surface.
   `createMapTestStatusClient`. Status order:
   `failed > errored > running > skipped > passed`. Leaf glyphs `✗ ! … ○ ✓`
   (passed off by default via `showPassed: false`); folder aggregates show
-  failure counts. Hardening matches diagnostics. Tests:
+  failure counts. Suite folders (dir kind or explicit `counts`) use aggregate
+  presentation. Hardening matches diagnostics. Bench:
+  `pnpm --filter @vibecook/mille-ui bench:test-status`. Tests:
   `packages/mille-ui/test/test-status-decorations.test.mjs`.
 - Dirty/open/active editor state.
   **Done (2026-07-23)** — `@vibecook/mille-ui/editor-state` exports
   `registerEditorStateDecorations` + `EditorStateClient` /
   `createMapEditorStateClient`. Dirty → `●`, open → `○` (optional via
-  `decorateOpen`), tooltips for active/unsaved/open. Same hardening as
-  diagnostics (generation token, resolvePath fallback, path validation,
-  value-diff, onError). Playground wires open tabs to the port client
-  (`decorateOpen: false` until a dirty buffer model exists). Active row
-  highlight remains `activeEntry` on `FileTree`.
+  `decorateOpen`); clean active emits nothing so it cannot recolor
+  diagnostics via later-wins merge. Tooltips include optional tab `title`.
+  Bench: `pnpm --filter @vibecook/mille-ui bench:editor-state`. Playground
+  wires open tabs with `decorateOpen: false`. Active row highlight remains
+  `activeEntry` on `FileTree`.
   Tests: `packages/mille-ui/test/editor-state-decorations.test.mjs`.
 - Excluded, generated, library, and read-only state. *(partial via active-entry /
   ignore flags; decoration overlays still open)*

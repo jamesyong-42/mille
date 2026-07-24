@@ -27,8 +27,10 @@ export interface EditorTabState {
 export interface EditorStateSnapshot {
   readonly open: readonly EditorTabState[];
   /**
-   * When set, this path is treated as the sole active editor even if
-   * individual tabs have conflicting `active` flags. `null` clears.
+   * Active-path override:
+   * - non-empty string → sole active editor
+   * - `null` or `''` → clear active on every path
+   * - omitted/`undefined` → keep per-tab `active` flags
    */
   readonly activePath?: string | null;
 }
@@ -53,12 +55,18 @@ export interface EditorPathFlags {
   readonly open: boolean;
   readonly dirty: boolean;
   readonly active: boolean;
+  /** Optional display name from the last tab that claimed this path. */
+  readonly title?: string;
 }
 
 /**
  * Collapse a snapshot into a path → flags map. Later tabs override
- * earlier ones for the same path. `activePath` (when a non-empty string)
- * forces active on that path and clears active on others.
+ * earlier ones for the same path.
+ *
+ * `activePath` semantics:
+ *   - non-empty string → that path is the sole active editor
+ *   - `null` or `''` → clear active on every path
+ *   - `undefined` (omitted) → keep per-tab `active` flags as-is
  */
 export function normalizeEditorState(
   snapshot: EditorStateSnapshot,
@@ -66,19 +74,35 @@ export function normalizeEditorState(
   const out = new Map<string, EditorPathFlags>();
   for (const tab of snapshot.open) {
     const prev = out.get(tab.path);
+    const title =
+      tab.title !== undefined && tab.title.length > 0
+        ? tab.title
+        : prev?.title;
     out.set(tab.path, {
       open: true,
       dirty: Boolean(tab.dirty) || Boolean(prev?.dirty),
       active: Boolean(tab.active) || Boolean(prev?.active),
+      ...(title !== undefined ? { title } : {}),
     });
   }
   const activePath = snapshot.activePath;
-  if (typeof activePath === 'string' && activePath.length > 0) {
+  if (activePath === null || activePath === '') {
+    // Explicit clear: drop active from every open path.
+    for (const [path, flags] of out) {
+      out.set(path, {
+        open: flags.open,
+        dirty: flags.dirty,
+        active: false,
+        ...(flags.title !== undefined ? { title: flags.title } : {}),
+      });
+    }
+  } else if (typeof activePath === 'string' && activePath.length > 0) {
     for (const [path, flags] of out) {
       out.set(path, {
         open: flags.open,
         dirty: flags.dirty,
         active: path === activePath,
+        ...(flags.title !== undefined ? { title: flags.title } : {}),
       });
     }
     // Active path not in open list still counts as open+active.

@@ -114,7 +114,11 @@ export function formatEditorStateTooltip(flags: EditorPathFlags): string {
   if (flags.active) parts.push('Active editor');
   if (flags.dirty) parts.push('Unsaved changes');
   else if (flags.open) parts.push('Open in editor');
-  return parts.join(' · ');
+  const summary = parts.join(' · ');
+  if (flags.title !== undefined && flags.title.length > 0) {
+    return summary.length > 0 ? `${flags.title} — ${summary}` : flags.title;
+  }
+  return summary;
 }
 
 export function formatEditorStateBadge(flags: EditorPathFlags): string {
@@ -175,25 +179,23 @@ export function registerEditorStateDecorations(
   function buildDecoration(flags: EditorPathFlags): Decoration | null {
     if (!flags.open && !flags.dirty && !flags.active) return null;
 
+    // Open-clean (and active-clean) without decorateOpen: emit nothing.
+    // Tooltip/color-only decorations would still win the shared `color`
+    // field under later-wins merge and recolor diagnostics/SCM badges.
+    // Active-row chrome is owned by FileTree `activeEntry`, not this provider.
+    if (!flags.dirty && !decorateOpen) {
+      return null;
+    }
+
     let badge =
       badgeFor !== undefined
         ? badgeFor(flags)
         : formatEditorStateBadge(flags);
     if (badge === undefined) badge = formatEditorStateBadge(flags);
 
-    // Open-clean without decorateOpen: still emit tooltip-only decoration
-    // for active; skip clean open entirely when decorateOpen is false.
-    if (!flags.dirty && flags.open && !flags.active && !decorateOpen) {
+    // No badge → no decoration. Never contribute color/tooltip alone.
+    if (badge === undefined || badge.length === 0) {
       return null;
-    }
-    if (
-      !flags.dirty &&
-      flags.open &&
-      !decorateOpen &&
-      flags.active
-    ) {
-      // Active-only: no hollow circle unless host wants it.
-      badge = '';
     }
 
     const tooltip =
@@ -202,16 +204,8 @@ export function registerEditorStateDecorations(
         : formatEditorStateTooltip(flags);
     const color = resolveColor(flags);
 
-    if (
-      (badge === undefined || badge.length === 0) &&
-      tooltip.length === 0 &&
-      color === undefined
-    ) {
-      return null;
-    }
-
     return {
-      ...(badge !== undefined && badge.length > 0 ? { badge } : {}),
+      badge,
       ...(color !== undefined ? { color } : {}),
       ...(tooltip.length > 0 ? { tooltip } : {}),
       propagate: false,

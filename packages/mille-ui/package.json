@@ -104,7 +104,9 @@
     "bench:file-actions": "node bench/file-action-path.mjs",
     "bench:search-scope": "node bench/file-search-scope.mjs",
     "bench:collapse": "node bench/collapse-descendants.mjs",
-    "bench:diagnostics": "node bench/diagnostics-update.mjs"
+    "bench:diagnostics": "node bench/diagnostics-update.mjs",
+    "bench:editor-state": "node bench/editor-state-update.mjs",
+    "bench:test-status": "node bench/test-status-update.mjs"
   },
   "size-limit": [
     {

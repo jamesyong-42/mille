@@ -219,6 +219,79 @@ test('ancestor aggregate shows failure count', async () => {
   handle.dispose();
 });
 
+test('directory-keyed suite uses aggregate badge not leaf ✗', async () => {
+  const { fx } = createFakeEngine(sampleRows());
+  // Key the suite folder itself with aggregate counts.
+  const client = createMapTestStatusClient({
+    initial: [
+      {
+        path: 'src',
+        status: 'failed',
+        counts: {
+          passed: 7,
+          failed: 3,
+          errored: 0,
+          skipped: 0,
+          running: 0,
+        },
+      },
+    ],
+  });
+  const handle = registerTestStatusDecorations({
+    fx,
+    client,
+    rootPath: '/ROOT',
+    propagateToParent: false,
+  });
+  await handle.refresh();
+  const provider = fx._stats().providers[0];
+  const folder = provider.provide({ id: 2 });
+  assert.ok(folder);
+  assert.equal(folder.badge, '3', 'suite folder shows failure count');
+  assert.ok(folder.tooltip.includes('3 failed'));
+  assert.ok(folder.tooltip.includes('7 passed'));
+  assert.notEqual(folder.badge, '✗');
+  handle.dispose();
+});
+
+test('stale recompute does not overwrite newer test-status', async () => {
+  const { fx } = createFakeEngine(sampleRows());
+  let call = 0;
+  const client = {
+    getResults() {
+      call += 1;
+      const n = call;
+      if (n === 1) {
+        return (async () => {
+          await sleep(80);
+          return new Map([
+            ['src/a.test.ts', { path: 'src/a.test.ts', status: 'running' }],
+          ]);
+        })();
+      }
+      return new Map([
+        ['src/a.test.ts', { path: 'src/a.test.ts', status: 'failed' }],
+      ]);
+    },
+    onChange() {
+      return () => {};
+    },
+  };
+  const handle = registerTestStatusDecorations({
+    fx,
+    client,
+    rootPath: '/ROOT',
+    propagateToParent: false,
+  });
+  await sleep(10);
+  await handle.refresh();
+  await sleep(100);
+  const dec = fx._stats().providers[0].provide({ id: 3 });
+  assert.ok(dec);
+  assert.equal(dec.badge, '✗', 'stale running must not overwrite failed');
+  handle.dispose();
+});
+
 test('running and skipped glyphs', async () => {
   const { fx } = createFakeEngine(sampleRows());
   const client = createMapTestStatusClient({

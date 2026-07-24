@@ -29,14 +29,17 @@ export type {
   ResyncOptions,
   TransferOptions,
   TransferProgress,
-  UndoDescriptor,
-  UndoKind,
-  UndoResult,
   Uri,
   VisibleRow,
   VisibleRowCount,
   VisibleRowsOptions,
 } from './client.js';
+export type { UndoDescriptor, UndoKind, UndoResult } from './undo.js';
+export {
+  normalizeUndoDescriptor,
+  normalizeUndoKind,
+  normalizeUndoResult,
+} from './undo.js';
 export { DecorationStore } from './decorations.js';
 export type { DecorationProvider } from './decorations.js';
 export { createFileExplorerHost } from './host.js';

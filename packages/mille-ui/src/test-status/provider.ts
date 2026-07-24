@@ -385,14 +385,21 @@ export function registerTestStatusDecorations(
         const counts = countsFromResult(result);
         const status =
           maxStatusFromCounts(counts) ?? result.status;
+        // Suite folders (directory entries) and results that already
+        // carry aggregate `counts` use the aggregate presentation
+        // (failure counts + summary tooltip), not the leaf ✗ glyph.
+        const isDirEntry =
+          entry.kind === 1 || entry.symlinkTargetIsDir === true;
+        const aggregated =
+          isDirEntry || result.counts !== undefined;
         const decoration = buildDecoration(
           status,
           counts,
-          false,
-          result,
+          aggregated,
+          aggregated ? null : result,
         );
         if (decoration === null) return null;
-        return { id: entry.id, counts, decoration };
+        return { id: entry.id, counts, decoration, aggregated };
       },
     );
 

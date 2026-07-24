@@ -38,6 +38,36 @@ function fixture() {
   return { sandbox, root };
 }
 
+/**
+ * Run `fn` with process env temp dirs redirected into a private sandbox so
+ * soft-delete recycle tests never touch the user-level `$TMPDIR/mille-recycle`
+ * pool (which may hold live application payloads or concurrent test data).
+ *
+ * Restores TMPDIR/TMP/TEMP afterward and deletes the isolated tree.
+ */
+async function withIsolatedTemp(fn) {
+  const isolated = mkdtempSync(join(tmpdir(), 'mille-undo-tmp-'));
+  const prev = {
+    TMPDIR: process.env.TMPDIR,
+    TMP: process.env.TMP,
+    TEMP: process.env.TEMP,
+  };
+  process.env.TMPDIR = isolated;
+  process.env.TMP = isolated;
+  process.env.TEMP = isolated;
+  try {
+    return await fn(isolated);
+  } finally {
+    if (prev.TMPDIR === undefined) delete process.env.TMPDIR;
+    else process.env.TMPDIR = prev.TMPDIR;
+    if (prev.TMP === undefined) delete process.env.TMP;
+    else process.env.TMP = prev.TMP;
+    if (prev.TEMP === undefined) delete process.env.TEMP;
+    else process.env.TEMP = prev.TEMP;
+    rmSync(isolated, { recursive: true, force: true });
+  }
+}
+
 async function idAt(fx, path) {
   const id = await fx.resolvePath(path);
   assert.ok(id !== null, `expected ${path}`);
@@ -182,62 +212,40 @@ test('P0: undo-rename refuses when destination was replaced', async () => {
 });
 
 test('P0: soft-delete refuses symlink-hijacked recycle base', async () => {
-  const { sandbox, root } = fixture();
-  // Plant a symlink at $TMPDIR/mille-recycle itself pointing outside.
-  // ensure_managed_recycle_base must remove the hijack and use a real dir.
-  const pool = join(tmpdir(), 'mille-recycle');
-  const external = join(sandbox, 'evil-target');
-  mkdirSync(external, { recursive: true });
-  let poolBackup = null;
-  try {
-    if (existsSync(pool)) {
-      poolBackup = join(sandbox, 'mille-recycle-backup');
-      const { renameSync } = await import('node:fs');
-      try {
-        renameSync(pool, poolBackup);
-      } catch {
-        /* fall through */
-      }
-    }
-    const { symlinkSync, lstatSync, rmSync: rm } = await import('node:fs');
+  await withIsolatedTemp(async (isolatedTemp) => {
+    const { sandbox, root } = fixture();
+    // Plant a symlink at the *isolated* temp pool only — never the user
+    // $TMPDIR/mille-recycle used by other processes.
+    const pool = join(isolatedTemp, 'mille-recycle');
+    const external = join(sandbox, 'evil-target');
+    mkdirSync(external, { recursive: true });
+    const { symlinkSync, lstatSync } = await import('node:fs');
     try {
-      rm(pool, { recursive: true, force: true });
-    } catch {
-      /* ignore */
-    }
-    symlinkSync(external, pool);
+      symlinkSync(external, pool);
 
-    const fx = new FileExplorer({ roots: [root], settings, watchDebounceMs: 60_000 });
-    try {
-      await fx.populateFromRoots();
-      const noteId = await idAt(fx, join(root, 'note.txt'));
-      await fx.delete(noteId);
-      assert.equal(existsSync(join(root, 'note.txt')), false);
-      const st = lstatSync(pool);
-      assert.equal(st.isSymbolicLink(), false, 'recycle pool must not remain a symlink');
-      const evilNames = readdirSync(external);
-      assert.equal(
-        evilNames.includes('note.txt'),
-        false,
-        `workspace file must not land in symlink target; found ${evilNames.join(',')}`,
-      );
-      await fx.undo();
-      assert.equal(readFileSync(join(root, 'note.txt'), 'utf8'), 'hello');
-    } finally {
-      await fx.dispose();
-    }
-  } finally {
-    try {
-      const { renameSync, rmSync: rm } = await import('node:fs');
-      rm(pool, { recursive: true, force: true });
-      if (poolBackup && existsSync(poolBackup)) {
-        renameSync(poolBackup, pool);
+      const fx = new FileExplorer({ roots: [root], settings, watchDebounceMs: 60_000 });
+      try {
+        await fx.populateFromRoots();
+        const noteId = await idAt(fx, join(root, 'note.txt'));
+        await fx.delete(noteId);
+        assert.equal(existsSync(join(root, 'note.txt')), false);
+        const st = lstatSync(pool);
+        assert.equal(st.isSymbolicLink(), false, 'recycle pool must not remain a symlink');
+        const evilNames = readdirSync(external);
+        assert.equal(
+          evilNames.includes('note.txt'),
+          false,
+          `workspace file must not land in symlink target; found ${evilNames.join(',')}`,
+        );
+        await fx.undo();
+        assert.equal(readFileSync(join(root, 'note.txt'), 'utf8'), 'hello');
+      } finally {
+        await fx.dispose();
       }
-    } catch {
-      /* best-effort cleanup */
+    } finally {
+      rmSync(sandbox, { recursive: true, force: true });
     }
-    rmSync(sandbox, { recursive: true, force: true });
-  }
+  });
 });
 
 test('P0: overwrite-move is reported non-undoable', async () => {
@@ -285,52 +293,58 @@ test('default soft-delete is outside the workspace tree and undo restores', asyn
 });
 
 test('P1: soft-delete undo refuses replaced recycle payload', async () => {
-  const { sandbox, root } = fixture();
-  const fx = new FileExplorer({ roots: [root], settings, watchDebounceMs: 60_000 });
-  try {
-    await fx.populateFromRoots();
-    const noteId = await idAt(fx, join(root, 'note.txt'));
-    await fx.delete(noteId);
-    assert.equal(existsSync(join(root, 'note.txt')), false);
-    assert.equal(fx.peekUndo()?.kind, 'delete');
+  await withIsolatedTemp(async (isolatedTemp) => {
+    const { sandbox, root } = fixture();
+    const fx = new FileExplorer({ roots: [root], settings, watchDebounceMs: 60_000 });
+    try {
+      await fx.populateFromRoots();
+      const noteId = await idAt(fx, join(root, 'note.txt'));
+      await fx.delete(noteId);
+      assert.equal(existsSync(join(root, 'note.txt')), false);
+      assert.equal(fx.peekUndo()?.kind, 'delete');
 
-    // Locate the recycled payload under $TMPDIR/mille-recycle and replace it.
-    const pool = join(tmpdir(), 'mille-recycle');
-    assert.equal(existsSync(pool), true, 'recycle pool should exist after soft-delete');
-    const { statSync } = await import('node:fs');
-    /** @type {string | null} */
-    let recycleFile = null;
-    function walkSync(dir, depth = 0) {
-      if (depth > 4 || recycleFile) return;
-      for (const name of readdirSync(dir)) {
-        const p = join(dir, name);
-        if (name === 'note.txt') {
-          recycleFile = p;
-          return;
-        }
-        try {
-          if (statSync(p).isDirectory()) walkSync(p, depth + 1);
-        } catch {
-          /* ignore */
+      // Locate the recycled payload only under this test's isolated pool.
+      const pool = join(isolatedTemp, 'mille-recycle');
+      assert.equal(existsSync(pool), true, 'isolated recycle pool should exist');
+      const { statSync } = await import('node:fs');
+      /** @type {string | null} */
+      let recycleFile = null;
+      function walkSync(dir, depth = 0) {
+        if (depth > 4 || recycleFile) return;
+        for (const name of readdirSync(dir)) {
+          const p = join(dir, name);
+          if (name === 'note.txt') {
+            recycleFile = p;
+            return;
+          }
+          try {
+            if (statSync(p).isDirectory()) walkSync(p, depth + 1);
+          } catch {
+            /* ignore */
+          }
         }
       }
+      walkSync(pool);
+      assert.ok(recycleFile, 'must find recycled note.txt in isolated pool');
+      assert.ok(
+        String(recycleFile).startsWith(isolatedTemp),
+        'recycle file must stay under the isolated temp root',
+      );
+
+      // Replace the recycled object with an impostor of different identity.
+      rmSync(recycleFile);
+      writeFileSync(recycleFile, 'IMPOSTOR');
+
+      await assert.rejects(fx.undo(), (error) => error?.code === 'EINVAL');
+      // Must not restore the impostor into the workspace.
+      assert.equal(existsSync(join(root, 'note.txt')), false);
+      assert.equal(fx.canUndo(), true, 'failed undo keeps journal entry');
+      assert.equal(fx.peekUndo()?.kind, 'delete');
+    } finally {
+      await fx.dispose();
+      rmSync(sandbox, { recursive: true, force: true });
     }
-    walkSync(pool);
-    assert.ok(recycleFile, 'must find recycled note.txt');
-
-    // Replace the recycled object with an impostor of different identity.
-    rmSync(recycleFile);
-    writeFileSync(recycleFile, 'IMPOSTOR');
-
-    await assert.rejects(fx.undo(), (error) => error?.code === 'EINVAL');
-    // Must not restore the impostor into the workspace.
-    assert.equal(existsSync(join(root, 'note.txt')), false);
-    assert.equal(fx.canUndo(), true, 'failed undo keeps journal entry');
-    assert.equal(fx.peekUndo()?.kind, 'delete');
-  } finally {
-    await fx.dispose();
-    rmSync(sandbox, { recursive: true, force: true });
-  }
+  });
 });
 
 test('permanent delete is reported non-undoable via lastMutation', async () => {

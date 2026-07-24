@@ -188,11 +188,11 @@ test('decorateOpen: false skips clean open badges', async () => {
   handle.dispose();
 });
 
-test('activePath forces active tooltip', async () => {
+test('activePath forces active tooltip when decorateOpen is true', async () => {
   const { fx } = createFakeEngine(sampleRows());
   const client = createMapEditorStateClient({
     initial: {
-      open: [{ path: 'README.md' }],
+      open: [{ path: 'README.md', title: 'Read me' }],
       activePath: 'README.md',
     },
   });
@@ -200,11 +200,79 @@ test('activePath forces active tooltip', async () => {
     fx,
     client,
     rootPath: '/ROOT',
+    decorateOpen: true,
   });
   await handle.refresh();
   const dec = fx._stats().providers[0].provide({ id: 5 });
   assert.ok(dec);
   assert.ok(dec.tooltip.includes('Active editor'));
+  assert.ok(dec.tooltip.includes('Read me'), 'title appears in tooltip');
+  handle.dispose();
+});
+
+test('decorateOpen: false does not recolor active clean files', async () => {
+  const { fx } = createFakeEngine(sampleRows());
+  const client = createMapEditorStateClient({
+    initial: {
+      open: [{ path: 'src/a.ts', active: true }],
+      activePath: 'src/a.ts',
+    },
+  });
+  const handle = registerEditorStateDecorations({
+    fx,
+    client,
+    rootPath: '/ROOT',
+    decorateOpen: false,
+  });
+  await handle.refresh();
+  // Must not emit color/tooltip-only decoration (would steal diagnostics color).
+  assert.equal(fx._stats().providers[0].provide({ id: 3 }), null);
+  handle.dispose();
+});
+
+test('activePath null clears active flags', () => {
+  const map = normalizeEditorState({
+    open: [{ path: 'src/a.ts', active: true }],
+    activePath: null,
+  });
+  assert.deepEqual(map.get('src/a.ts'), {
+    open: true,
+    dirty: false,
+    active: false,
+  });
+});
+
+test('stale recompute does not overwrite newer editor-state', async () => {
+  const { fx } = createFakeEngine(sampleRows());
+  let call = 0;
+  const client = {
+    getEditorState() {
+      call += 1;
+      const n = call;
+      if (n === 1) {
+        return (async () => {
+          await sleep(80);
+          return { open: [{ path: 'src/a.ts', dirty: false }] };
+        })();
+      }
+      return { open: [{ path: 'src/a.ts', dirty: true }] };
+    },
+    onChange() {
+      return () => {};
+    },
+  };
+  const handle = registerEditorStateDecorations({
+    fx,
+    client,
+    rootPath: '/ROOT',
+    decorateOpen: true,
+  });
+  await sleep(10);
+  await handle.refresh();
+  await sleep(100);
+  const dec = fx._stats().providers[0].provide({ id: 3 });
+  assert.ok(dec);
+  assert.equal(dec.badge, '●', 'stale clean open must not overwrite dirty');
   handle.dispose();
 });
 

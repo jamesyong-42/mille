@@ -242,8 +242,12 @@ export interface CommandRegistry {
   /**
    * Dispatch with an explicit context (menus that already own a live
    * selection snapshot). Honors `enablement` against that context.
+   *
+   * Optional so that hosts with their own `CommandRegistry` implementation
+   * keep compiling; `createCommandRegistry` always provides it, and callers
+   * feature-detect before use.
    */
-  dispatchWithContext(
+  dispatchWithContext?(
     id: string,
     ctx: CommandContext,
     args?: unknown,
@@ -253,8 +257,10 @@ export interface CommandRegistry {
    * Materialize the current command context via the installed provider.
    * Used by `dispatchWithLifecycle` to build a per-dispatch context with
    * signal / progress without shared mutable lifecycle state.
+   *
+   * Optional for the same reason as `dispatchWithContext`.
    */
-  getContext(): CommandContext;
+  getContext?(): CommandContext;
 
   /** All registered commands in registration order (after id overrides). */
   all(): readonly Command[];

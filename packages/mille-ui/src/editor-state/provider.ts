@@ -38,7 +38,7 @@ import type {
   EditorStateClient,
   EditorStateSnapshot,
 } from './types.js';
-import { normalizeEditorState } from './types.js';
+import { editorPathFromIdentity, normalizeEditorState } from './types.js';
 
 // ─── Minimal fx surface ───────────────────────────────────────────────
 
@@ -266,17 +266,7 @@ export function registerEditorStateDecorations(
 
     const flagsByPath = normalizeEditorState(snapshot);
     const entries = [...flagsByPath.entries()]
-      .map(([key, flags]) => {
-        const path =
-          flags.path !== undefined && flags.path.length > 0
-            ? flags.path
-            : key.startsWith('root:')
-              ? key.slice(key.indexOf('\0') + 1)
-              : key.startsWith('entry:')
-                ? ''
-                : key;
-        return [path, flags] as const;
-      })
+      .map(([key, flags]) => [editorPathFromIdentity(key, flags), flags] as const)
       .filter(([path]) => isSafeWorkspaceRelativePath(path));
 
     const resolved = await mapPool(

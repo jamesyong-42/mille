@@ -118,16 +118,8 @@ export function useFileContextMenu(
         // Live menu context is authoritative for selection/enablement.
         // Prefer dispatchWithContext so enablement is re-checked at invoke.
         const result =
-          typeof (registry as { dispatchWithContext?: unknown })
-            .dispatchWithContext === 'function'
-            ? (
-                registry as {
-                  dispatchWithContext(
-                    id: string,
-                    ctx: typeof context,
-                  ): void | Promise<void>;
-                }
-              ).dispatchWithContext(commandId, context)
+          typeof registry.dispatchWithContext === 'function'
+            ? registry.dispatchWithContext(commandId, context)
             : command.run(context);
         if (result && typeof (result as Promise<void>).then === 'function') {
           void (result as Promise<void>).then(undefined, (error: unknown) => {

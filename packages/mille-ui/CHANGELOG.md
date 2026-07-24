@@ -14,6 +14,10 @@
   vanishing. Batch mutations announce partial progress when they fail partway
   (`Deleted 2 of 4 items: EACCES…`) and single mutations announce failure;
   previously only whole-batch success was announced.
+- **`CommandRegistry` additions are optional** — `getContext` and
+  `dispatchWithContext` are declared optional so hosts with their own
+  registry implementation keep compiling. `createCommandRegistry` always
+  provides them and callers already feature-detect.
 - **Multi-root active tab override** — bare `activePath` no longer marks every
   root’s matching file active; use `activeEntryId` or `activeRootPath` +
   `activePath` to disambiguate.

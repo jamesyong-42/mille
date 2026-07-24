@@ -10,7 +10,10 @@ import {
   totalDiagnosticCount,
 } from '../diagnostics/types.js';
 import type { EditorStateSnapshot } from '../editor-state/types.js';
-import { normalizeEditorState } from '../editor-state/types.js';
+import {
+  editorPathFromIdentity,
+  normalizeEditorState,
+} from '../editor-state/types.js';
 import type { GitStatusEntry, GitStatusLetter } from '../git/client.js';
 import type { TestResult, TestStatus } from '../test-status/types.js';
 import {
@@ -47,14 +50,7 @@ export function projectOpenFilesView(
   const seeds: ExplorerViewSeed[] = [];
   for (const [key, f] of flags) {
     if (options.dirtyOnly === true && !f.dirty) continue;
-    const path =
-      f.path !== undefined && f.path.length > 0
-        ? f.path
-        : key.startsWith('root:')
-          ? key.slice(key.indexOf('\0') + 1)
-          : key.startsWith('entry:')
-            ? f.path ?? ''
-            : key;
+    const path = editorPathFromIdentity(key, f);
     if (path.length === 0) continue;
     let order = 100;
     if (f.active) order = 0;

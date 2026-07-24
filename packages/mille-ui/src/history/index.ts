@@ -27,5 +27,10 @@ export {
   createMapScmClient,
 } from './map-client.js';
 
-export type { ScmHostHooks } from './commands.js';
-export { scmHistoryCommands } from './commands.js';
+export type { ScmHostHooks, ScmPathTarget } from './commands.js';
+export {
+  focusedScmTarget,
+  groupScmTargetsByRoot,
+  scmHistoryCommands,
+  selectedScmTargets,
+} from './commands.js';

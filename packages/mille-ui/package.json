@@ -115,13 +115,15 @@
     "bench:diagnostics": "node bench/diagnostics-update.mjs",
     "bench:editor-state": "node bench/editor-state-update.mjs",
     "bench:test-status": "node bench/test-status-update.mjs",
-    "bench:views": "node bench/views-update.mjs"
+    "bench:views": "node bench/views-update.mjs",
+    "bench:history": "node bench/history-scm.mjs",
+    "bench:commands": "node bench/command-lifecycle.mjs"
   },
   "size-limit": [
     {
-      "name": "headless (SPEC \u00a712 target; 14 KB ratchet from the 13.84 KB Phase-3 baseline)",
+      "name": "headless (SPEC \u00a712 target; 15 KB ratchet after Phase-5 enablement on registry)",
       "path": "dist/headless.js",
-      "limit": "14 KB",
+      "limit": "15 KB",
       "gzip": true,
       "ignore": [
         "react",

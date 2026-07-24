@@ -252,6 +252,186 @@ test('dispatchWithLifecycle cancels on aborted signal', async () => {
   assert.ok(!phases.includes('completed'));
 });
 
+test('concurrent dispatchWithLifecycle does not cross-wire signals', async () => {
+  const seen = [];
+  const registry = createCommandRegistry([
+    {
+      id: 'host.hold',
+      label: 'Hold',
+      async run(ctx) {
+        const label = ctx.extensions?.label ?? '?';
+        seen.push({ label, hasSignal: Boolean(ctx.signal), signal: ctx.signal });
+        await new Promise((r) => setTimeout(r, 30));
+        seen.push({
+          label: `${label}-after`,
+          hasSignal: Boolean(ctx.signal),
+          signal: ctx.signal,
+        });
+      },
+    },
+  ]);
+  registry.setContextProvider(() => fakeCtx());
+  const a = new AbortController();
+  const b = new AbortController();
+  await Promise.all([
+    dispatchWithLifecycle(registry, 'host.hold', {
+      signal: a.signal,
+      context: { ...fakeCtx(), extensions: { label: 'A' } },
+    }),
+    dispatchWithLifecycle(registry, 'host.hold', {
+      signal: b.signal,
+      context: { ...fakeCtx(), extensions: { label: 'B' } },
+    }),
+  ]);
+  const aRuns = seen.filter((s) => s.label === 'A' || s.label === 'A-after');
+  const bRuns = seen.filter((s) => s.label === 'B' || s.label === 'B-after');
+  assert.equal(aRuns.length, 2);
+  assert.equal(bRuns.length, 2);
+  for (const s of aRuns) {
+    assert.equal(s.signal, a.signal);
+  }
+  for (const s of bRuns) {
+    assert.equal(s.signal, b.signal);
+  }
+  // Subsequent normal dispatch has no stale signal.
+  let postSignal;
+  registry.register({
+    id: 'host.post',
+    label: 'Post',
+    run(ctx) {
+      postSignal = ctx.signal;
+    },
+  });
+  registry.dispatch('host.post');
+  assert.equal(postSignal, undefined);
+});
+
+test('dispatch honors enablement (keyboard path)', async () => {
+  let ran = false;
+  const registry = createCommandRegistry([
+    {
+      id: 'only.folder',
+      label: 'Folder only',
+      enablement: 'focusedIs.folder',
+      keybinding: 'Mod+Shift+F',
+      run: () => {
+        ran = true;
+      },
+    },
+  ]);
+  const fileCtx = fakeCtx({
+    focusedEntry: { id: 1, name: 'a.ts', kind: 0, parentId: null },
+    focusedId: 1,
+  });
+  registry.setContextProvider(() => fileCtx);
+  const binding = registry.getBinding('Mod+Shift+F');
+  assert.ok(binding);
+  // getBinding still finds it, but dispatch no-ops when disabled.
+  registry.dispatch('only.folder');
+  assert.equal(ran, false);
+
+  // Folder focus enables it.
+  registry.setContextProvider(() =>
+    fakeCtx({
+      focusedEntry: { id: 2, name: 'src', kind: 1, parentId: null },
+      focusedId: 2,
+    }),
+  );
+  registry.dispatch('only.folder');
+  assert.equal(ran, true);
+});
+
+test('dispatchWithContext uses menu context enablement', () => {
+  let ran = false;
+  const registry = createCommandRegistry([
+    {
+      id: 'only.folder',
+      label: 'Folder only',
+      enablement: 'focusedIs.folder',
+      run: () => {
+        ran = true;
+      },
+    },
+  ]);
+  registry.setContextProvider(() =>
+    fakeCtx({
+      focusedEntry: { id: 2, name: 'src', kind: 1, parentId: null },
+      focusedId: 2,
+    }),
+  );
+  // Menu passes a file-focused context — must not run.
+  registry.dispatchWithContext(
+    'only.folder',
+    fakeCtx({
+      focusedEntry: { id: 1, name: 'a.ts', kind: 0, parentId: null },
+      focusedId: 1,
+    }),
+  );
+  assert.equal(ran, false);
+});
+
+test('submenu partition + disabled enablement for keyboard/menu contract', () => {
+  const registry = createCommandRegistry([
+    {
+      id: 'scm.compareWithHead',
+      label: 'Compare with HEAD',
+      group: '5_scm',
+      submenu: 'compare',
+      submenuLabel: 'Compare',
+      order: 10,
+      when: 'focusedIs.file',
+      enablement: 'focusedIs.file',
+      keybinding: 'Mod+Alt+C',
+      run: () => {},
+    },
+    {
+      id: 'scm.folderOnly',
+      label: 'Folder SCM',
+      group: '5_scm',
+      when: 'focusedIs.file || focusedIs.folder',
+      enablement: 'focusedIs.folder',
+      keybinding: 'Mod+Alt+F',
+      run: () => {},
+    },
+  ]);
+  const fileCtx = fakeCtx({
+    focusedEntry: { id: 1, name: 'a.ts', kind: 0, parentId: null },
+    focusedId: 1,
+  });
+  const folderCtx = fakeCtx({
+    focusedEntry: { id: 2, name: 'src', kind: 1, parentId: null },
+    focusedId: 2,
+  });
+
+  const groups = partitionCommandsForMenu(registry.all(), fileCtx);
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].submenus.length, 1);
+  assert.equal(groups[0].submenus[0].label, 'Compare');
+  assert.equal(groups[0].submenus[0].items[0].id, 'scm.compareWithHead');
+
+  assert.equal(evaluateEnablement(registry.get('scm.folderOnly'), fileCtx), false);
+  assert.equal(evaluateEnablement(registry.get('scm.folderOnly'), folderCtx), true);
+  assert.equal(evaluateEnablement(registry.get('scm.compareWithHead'), fileCtx), true);
+
+  let ran = false;
+  const withSpy = createCommandRegistry([
+    {
+      id: 'scm.folderOnly',
+      label: 'Folder SCM',
+      enablement: 'focusedIs.folder',
+      keybinding: 'Mod+Alt+F',
+      run: () => {
+        ran = true;
+      },
+    },
+  ]);
+  withSpy.setContextProvider(() => fileCtx);
+  // Keyboard path: binding found, dispatch no-ops when disabled.
+  assert.ok(withSpy.getBinding('Mod+Alt+F'));
+  withSpy.dispatch('scm.folderOnly');
+  assert.equal(ran, false);
+});
+
 test('buildCommandContext attaches IDE surfaces', () => {
   const ctx = buildCommandContext(
     {

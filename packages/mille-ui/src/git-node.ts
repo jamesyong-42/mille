@@ -14,6 +14,8 @@
 export { createShellGitClient } from './git/shell-client.js';
 export { watchDotGit } from './git/watch-dotgit.js';
 export {
+  assertPathUnderRoot,
+  assertSafeRevision,
   createShellFileHistoryClient,
   createShellScmClient,
   parseGitLogLines,

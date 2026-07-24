@@ -42,7 +42,15 @@ import {
   type ExplorerViewModel,
 } from '@vibecook/mille-ui/views';
 import type { GitStatusEntry, GitStatusLetter } from '@vibecook/mille-ui/git';
-import type { TestResult } from '@vibecook/mille-ui/test-status';
+import {
+  createMapDiagnosticsClient,
+  type MapDiagnosticsClient,
+} from '@vibecook/mille-ui/diagnostics';
+import {
+  createMapTestStatusClient,
+  type MapTestStatusClient,
+  type TestResult,
+} from '@vibecook/mille-ui/test-status';
 import type { IconTheme } from '@vibecook/mille-ui/icons';
 import { defaultIconTheme, duotoneIconTheme, minimalIconTheme } from '@vibecook/mille-ui/icons';
 import { createCommandRegistry, defaultCommands } from '@vibecook/mille-ui/commands';
@@ -66,6 +74,10 @@ import {
   type EditorTab,
 } from '../../../scripts/editor-tabs.mjs';
 import type { PlaygroundFileAction } from '../../../scripts/file-actions.mjs';
+import {
+  demoDiagnosticsSeed,
+  demoTestStatusSeed,
+} from '../../shared/demo-explorer-data';
 
 type SidebarView = Extract<
   ExplorerViewKind,
@@ -95,69 +107,6 @@ function asGitStatusEntries(
     });
   }
   return out;
-}
-
-/** Demo failed-tests seed (mirrors utility-process test-status decorations). */
-function demoFailedTests(): TestResult[] {
-  return [
-    {
-      path: 'packages/mille/test/undo-journal.test.mjs',
-      status: 'failed',
-      message: 'Demo: simulated assertion failure',
-    },
-    {
-      path: 'packages/mille-ui/test/editor-state-decorations.test.mjs',
-      status: 'running',
-    },
-    {
-      path: 'packages/mille-ui/test/diagnostics-decorations.test.mjs',
-      status: 'passed',
-    },
-  ];
-}
-
-/** Demo problems mirror of the utility-process diagnostics seed (Phase 5.1). */
-function demoProblemsMap(): Map<
-  string,
-  ReadonlyArray<{ path: string; severity: 'error' | 'warning' | 'info' | 'hint'; message?: string }>
-> {
-  return new Map([
-    [
-      'packages/mille-ui/package.json',
-      [
-        {
-          path: 'packages/mille-ui/package.json',
-          severity: 'warning',
-          message: 'Demo: consider pinning peerDependency ranges',
-        },
-      ],
-    ],
-    [
-      'packages/mille-ui/src/index.ts',
-      [
-        {
-          path: 'packages/mille-ui/src/index.ts',
-          severity: 'error',
-          message: "Demo: Cannot find name 'example'",
-        },
-        {
-          path: 'packages/mille-ui/src/index.ts',
-          severity: 'warning',
-          message: 'Demo: unused export surface',
-        },
-      ],
-    ],
-    [
-      'planning/IDE_EXPLORER_PARITY_PLAN.md',
-      [
-        {
-          path: 'planning/IDE_EXPLORER_PARITY_PLAN.md',
-          severity: 'info',
-          message: 'Demo: Phase 5.2 views',
-        },
-      ],
-    ],
-  ]);
 }
 
 interface ConnectionState {
@@ -276,6 +225,9 @@ function Explorer({ fx, root }: { fx: PortFileExplorer; root: string }): ReactEl
   );
   const treeRef = useFileTreeRef();
   const [fileActionStatus, setFileActionStatus] = useState<string | null>(null);
+  const reportStatus = useCallback((message: string) => {
+    setFileActionStatus(message);
+  }, []);
   const [historyPanel, setHistoryPanel] = useState<{
     path: string;
     revisions: readonly FileHistoryRevision[];
@@ -294,43 +246,46 @@ function Explorer({ fx, root }: { fx: PortFileExplorer; root: string }): ReactEl
           : action === 'revealInFileManager'
             ? 'Revealed'
             : 'Opened';
-        setFileActionStatus(`${verb}: ${result.value}`);
+        reportStatus(`${verb}: ${result.value}`);
       } catch (error) {
-        setFileActionStatus(
+        reportStatus(
           `Action unavailable: ${error instanceof Error ? error.message : String(error)}`,
         );
       }
     },
-    [root],
+    [root, reportStatus],
   );
   const refreshFromDisk = useCallback(
     async (target: FileRefreshTarget): Promise<void> => {
       try {
         if (target.kind === 'workspace') {
           await fx.resyncWorkspace();
-          setFileActionStatus('Workspace refreshed from disk');
+          reportStatus('Workspace refreshed from disk');
         } else {
           await fx.resync(target.id, { recursive: true });
-          setFileActionStatus('Subtree refreshed from disk');
+          reportStatus('Subtree refreshed from disk');
         }
       } catch (error) {
-        setFileActionStatus(
+        reportStatus(
           `Refresh unavailable: ${error instanceof Error ? error.message : String(error)}`,
         );
       }
     },
-    [fx],
+    [fx, reportStatus],
   );
-  const handoffSearchScope = useCallback((request: FileSearchRequest): void => {
-    const paths = request.targets.map((target) => target.rootQualifiedPath).join(', ');
-    const label =
-      request.kind === 'findInFolder'
-        ? 'Find in folder'
-        : request.kind === 'include'
-          ? 'Search include'
-          : 'Search exclude';
-    setFileActionStatus(`${label}: ${paths}`);
-  }, []);
+  const handoffSearchScope = useCallback(
+    (request: FileSearchRequest): void => {
+      const paths = request.targets.map((target) => target.rootQualifiedPath).join(', ');
+      const label =
+        request.kind === 'findInFolder'
+          ? 'Find in folder'
+          : request.kind === 'include'
+            ? 'Search include'
+            : 'Search exclude';
+      reportStatus(`${label}: ${paths}`);
+    },
+    [reportStatus],
+  );
   useEffect(() => {
     if (fileActionStatus === null) return;
     const timer = window.setTimeout(() => setFileActionStatus(null), 4_000);
@@ -454,6 +409,34 @@ function Explorer({ fx, root }: { fx: PortFileExplorer; root: string }): ReactEl
   const [followActiveEditor, setFollowActiveEditor] = useState(true);
   const [singleClickPreview, setSingleClickPreview] = useState(true);
 
+  // Phase 5.2/5.3 — live Map clients for Problems / Failed Tests views.
+  // Same seed as utility-process decorations; hosts swap for LSP / runner.
+  const diagnosticsClientRef = useRef<MapDiagnosticsClient | null>(null);
+  if (diagnosticsClientRef.current === null) {
+    diagnosticsClientRef.current = createMapDiagnosticsClient({
+      initial: demoDiagnosticsSeed(),
+    });
+  }
+  const testStatusClientRef = useRef<MapTestStatusClient | null>(null);
+  if (testStatusClientRef.current === null) {
+    testStatusClientRef.current = createMapTestStatusClient({
+      initial: [...demoTestStatusSeed()],
+    });
+  }
+  const [liveDataEpoch, setLiveDataEpoch] = useState(0);
+  useEffect(() => {
+    const d = diagnosticsClientRef.current;
+    const t = testStatusClientRef.current;
+    if (!d || !t) return;
+    const bump = () => setLiveDataEpoch((n) => n + 1);
+    const offD = d.onChange(bump);
+    const offT = t.onChange(bump);
+    return () => {
+      offD();
+      offT();
+    };
+  }, []);
+
   // Phase 5.3 — SCM/history host hooks (IPC to main-process shell git).
   // Declared after editorOpen so compare can open the secondary pane.
   const scmHostHooks = useMemo((): ScmHostHooks => {
@@ -480,14 +463,18 @@ function Explorer({ fx, root }: { fx: PortFileExplorer; root: string }): ReactEl
           });
         },
       },
+      resolveRootPath: () => root,
       confirm: (message) => window.confirm(message),
+      notify: (level, message) => {
+        reportStatus(`${level}: ${message}`);
+      },
       onProgress: (event) => {
         if (event.phase === 'completed' || event.phase === 'failed') {
-          setFileActionStatus(`${event.action}: ${event.message ?? event.phase}`);
+          reportStatus(`${event.action}: ${event.message ?? event.phase}`);
         }
       },
       onError: (error, ctx) => {
-        setFileActionStatus(
+        reportStatus(
           `${ctx.action} failed: ${error instanceof Error ? error.message : String(error)}`,
         );
       },
@@ -495,16 +482,16 @@ function Explorer({ fx, root }: { fx: PortFileExplorer; root: string }): ReactEl
         setComparePanel(result);
         setHistoryPanel(null);
         setEditorOpen(true);
-        setFileActionStatus(`Compare ${result.path}: ${result.leftLabel} ↔ ${result.rightLabel}`);
+        reportStatus(`Compare ${result.path}: ${result.leftLabel} ↔ ${result.rightLabel}`);
       },
       onHistoryResult: (path, revisions) => {
         setHistoryPanel({ path, revisions });
         setComparePanel(null);
         setEditorOpen(true);
-        setFileActionStatus(`History ${path}: ${revisions.length} revision(s)`);
+        reportStatus(`History ${path}: ${revisions.length} revision(s)`);
       },
     };
-  }, [root]);
+  }, [root, reportStatus]);
 
   useEffect(() => {
     if (!settingsOpen) return;
@@ -648,9 +635,13 @@ function Explorer({ fx, root }: { fx: PortFileExplorer; root: string }): ReactEl
         return;
       }
       if (sidebarView === 'problems') {
-        // Demo seed until a live diagnostics bridge is available; still
-        // re-resolve when the tree snapshot changes so ids refresh.
-        const definition = projectProblemsView(demoProblemsMap(), {
+        // Live MapDiagnosticsClient (same seed as decorations); onChange
+        // and tree deltas both re-resolve. Hosts swap for LSP clients.
+        const client = diagnosticsClientRef.current;
+        const map = client
+          ? await client.getDiagnostics(root)
+          : new Map();
+        const definition = projectProblemsView(map, {
           minSeverity: 'info',
         });
         const model = await resolveExplorerView({
@@ -679,8 +670,13 @@ function Explorer({ fx, root }: { fx: PortFileExplorer; root: string }): ReactEl
         return;
       }
       if (sidebarView === 'failedTests') {
-        // Default projector keeps failed+errored; include running for demo.
-        const definition = projectFailedTestsView(demoFailedTests(), {
+        const client = testStatusClientRef.current;
+        let results: TestResult[] = [];
+        if (client) {
+          const raw = await client.getResults(root);
+          results = [...raw.values()];
+        }
+        const definition = projectFailedTestsView(results, {
           statuses: ['failed', 'errored', 'running'],
           title: 'Failed Tests',
         });
@@ -696,7 +692,8 @@ function Explorer({ fx, root }: { fx: PortFileExplorer; root: string }): ReactEl
     void materialize();
 
     // Re-resolve when the engine publishes tree/decoration deltas so renames,
-    // deletes, and newly hydrated paths refresh the view.
+    // deletes, and newly hydrated paths refresh the view. liveDataEpoch
+    // tracks Map client onChange for Problems / Failed Tests.
     const unsubTree =
       typeof fx.on === 'function'
         ? fx.on('change:tree', () => {
@@ -724,7 +721,7 @@ function Explorer({ fx, root }: { fx: PortFileExplorer; root: string }): ReactEl
         /* ignore */
       }
     };
-  }, [fx, root, sidebarView, buildOpenTabs]);
+  }, [fx, root, sidebarView, buildOpenTabs, liveDataEpoch]);
 
   const openEntry = useCallback(
     async (entry: Entry | VisibleRow, event: FileOpenEvent) => {

@@ -2,6 +2,38 @@
 
 ## Unreleased
 
+### Fixed
+
+- **Multi-root active tab override** — bare `activePath` no longer marks every
+  root’s matching file active; use `activeEntryId` or `activeRootPath` +
+  `activePath` to disambiguate.
+- **SCM path containment (P0)** — `createShellScmClient` / history clients
+  validate every relative path with `assertPathUnderRoot` (rejects `..`,
+  absolute, drive paths). Playground IPC no longer trusts renderer-supplied
+  `rootPath` (active workspace only).
+- **Git revision argument injection (P0)** — `getContents` interpolates
+  `revision` into the positional `git show <rev>:<path>` argument, so a
+  revision beginning with `-` reached git as an *option*
+  (`--output=<file>` is an arbitrary-file-write primitive; it carries no
+  `:`, so the old colon check missed it). New exported `assertSafeRevision`
+  rejects option-like and non-revision characters before any spawn.
+  `git log --max-count` is now a coerced positive integer.
+- **Multi-root SCM revert (P0)** — `scm.revert` groups by owning root via
+  `selectedScmTargets` / `groupScmTargetsByRoot` and passes `rootPath` per
+  batch so `rootA/same.ts` and `rootB/same.ts` cannot collapse.
+- **Concurrent command lifecycle (P1)** — `dispatchWithLifecycle` builds a
+  per-dispatch context (no registry WeakMap stash). Concurrent awaits no
+  longer cross-wire `signal` / `reportProgress`.
+- **Enablement on normal dispatch (P1)** — `registry.dispatch` and
+  `dispatchWithContext` honor `enablement`; context menus use the latter and
+  surface failures via `host.notify`.
+- **Open Files multi-root identity (P1)** — `normalizeEditorState` /
+  `projectOpenFilesView` key by entryId / rootPath+path so identical relative
+  paths across roots stay distinct.
+- **Shell SCM AbortSignal (P1)** — in-flight git children are `kill`ed on abort.
+- **Playground git-status IPC** — `get-git-status` uses the same trusted
+  active-workspace root check as history/SCM handlers.
+
 ### Added
 
 - **Command contribution contract (Phase 5.4)** — `@vibecook/mille-ui/commands`

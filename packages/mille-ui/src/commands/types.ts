@@ -231,11 +231,30 @@ export interface CommandRegistry {
   register(command: Command): CommandDisposable;
 
   /**
-   * Dispatch a command by id. Resolves synchronously if `run` returned
-   * `void`; awaits if it returned a Promise. Throws if no command with
-   * that id is registered, or if no context provider has been installed.
+   * Dispatch a command by id using the installed context provider.
+   * Honors `enablement` (no-ops when disabled). Resolves synchronously if
+   * `run` returned `void`; awaits if it returned a Promise. Throws if no
+   * command with that id is registered, or if no context provider has been
+   * installed.
    */
   dispatch(id: string, args?: unknown): void | Promise<void>;
+
+  /**
+   * Dispatch with an explicit context (menus that already own a live
+   * selection snapshot). Honors `enablement` against that context.
+   */
+  dispatchWithContext(
+    id: string,
+    ctx: CommandContext,
+    args?: unknown,
+  ): void | Promise<void>;
+
+  /**
+   * Materialize the current command context via the installed provider.
+   * Used by `dispatchWithLifecycle` to build a per-dispatch context with
+   * signal / progress without shared mutable lifecycle state.
+   */
+  getContext(): CommandContext;
 
   /** All registered commands in registration order (after id overrides). */
   all(): readonly Command[];
@@ -244,6 +263,8 @@ export interface CommandRegistry {
    * Key/event → command lookup. The string overload tests against the
    * parsed form of the keybinding string; the `KeyboardEvent` overload
    * tests modifier + key against each command's `keybinding` entries.
+   * Does not evaluate enablement — call `dispatch` / `dispatchWithContext`
+   * which do.
    */
   getBinding(key: string): Command | undefined;
   getBinding(event: KeyboardEvent): Command | undefined;

@@ -16,13 +16,13 @@ import type {
   CommandRegistry,
   CommandRegistryOptions,
 } from './types.js';
+import { evaluateEnablement } from './enablement.js';
 import {
   matchKeybinding,
   parseKeybinding,
   type KeyboardEventLike,
   type ParsedKeybinding,
 } from './keybinding.js';
-import { getActiveCommandLifecycle } from './contribution.js';
 
 interface Entry {
   readonly command: Command;
@@ -77,6 +77,25 @@ export function createCommandRegistry(
     return list;
   }
 
+  function requireEntry(id: string): Entry {
+    const entry = entries.get(id);
+    if (!entry) {
+      throw new Error(`CommandRegistry.dispatch: unknown command "${id}"`);
+    }
+    return entry;
+  }
+
+  function runIfEnabled(
+    command: Command,
+    ctx: CommandContext,
+    args?: unknown,
+  ): void | Promise<void> {
+    if (!evaluateEnablement(command, ctx)) {
+      return;
+    }
+    return command.run(ctx, args);
+  }
+
   const registry: CommandRegistry = {
     get(id) {
       return entries.get(id)?.command;
@@ -109,17 +128,27 @@ export function createCommandRegistry(
     },
 
     dispatch(id, args) {
-      const entry = entries.get(id);
-      if (!entry) {
-        throw new Error(`CommandRegistry.dispatch: unknown command "${id}"`);
-      }
+      const entry = requireEntry(id);
       if (!contextProvider) {
         throw new Error(
           `CommandRegistry.dispatch: no context provider installed — call setContextProvider() first`,
         );
       }
-      const ctx = contextProvider();
-      return entry.command.run(ctx, args);
+      return runIfEnabled(entry.command, contextProvider(), args);
+    },
+
+    dispatchWithContext(id, ctx, args) {
+      const entry = requireEntry(id);
+      return runIfEnabled(entry.command, ctx, args);
+    },
+
+    getContext() {
+      if (!contextProvider) {
+        throw new Error(
+          `CommandRegistry.getContext: no context provider installed — call setContextProvider() first`,
+        );
+      }
+      return contextProvider();
     },
 
     all() {
@@ -158,20 +187,7 @@ export function createCommandRegistry(
     },
 
     setContextProvider(provider) {
-      // Wrap so dispatchWithLifecycle can inject signal / reportProgress
-      // without hosts rewriting their provider.
-      contextProvider = () => {
-        const ctx = provider();
-        const life = getActiveCommandLifecycle(registry);
-        if (!life) return ctx;
-        return {
-          ...ctx,
-          ...(life.signal !== undefined ? { signal: life.signal } : {}),
-          ...(life.reportProgress !== undefined
-            ? { reportProgress: life.reportProgress }
-            : {}),
-        };
-      };
+      contextProvider = provider;
     },
   };
 

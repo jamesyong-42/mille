@@ -339,6 +339,9 @@ const registry = createCommandRegistry([...defaultCommands, ...scmHistoryCommand
 const hostHooks: ScmHostHooks = {
   scm: createShellScmClient({ rootPath }),
   history: createShellFileHistoryClient({ rootPath }),
+  // Multi-root: map engine root entries to absolute filesystem roots so
+  // discard/compare never collapse rootA/same.ts with rootB/same.ts.
+  resolveRootPath: (_rootId, _rootName) => rootPath,
   confirm: (msg) => window.confirm(msg),
   onProgress: (e) => console.log(e),
   onCompareResult: (result) => openDiff(result),
@@ -351,6 +354,13 @@ const hostHooks: ScmHostHooks = {
 Commands: `scm.compareWithHead`, `scm.compareWithPrevious`, `scm.showHistory`,
 `scm.revert`. The playground exposes them on the file context menu and
 renders history / side-by-side compare in the editor pane.
+
+**Safety:** shell clients reject path traversal (`../`, absolute paths)
+via `assertPathUnderRoot`. Host IPC must not trust renderer-supplied
+`rootPath` values — only the active workspace (or an allow-list of roots).
+`dispatch` / context menus honor `Command.enablement`; long-running host
+commands should use `dispatchWithLifecycle` (per-dispatch signal, no
+shared mutable lifecycle stash).
 
 ### 5.2b Editor open / dirty / active
 

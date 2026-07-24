@@ -9,7 +9,7 @@ import {
   utilityProcess,
   type UtilityProcess,
 } from 'electron';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve as pathResolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { cwd } from 'node:process';
 import { readFileSync, statSync, writeFileSync } from 'node:fs';
@@ -296,13 +296,34 @@ async function createWindow(): Promise<void> {
     }
   });
 
+  // Security: never trust renderer-supplied rootPath. Only the active
+  // workspace root is allowed; relative paths are containment-checked in
+  // createShell* clients (history/SCM).
+  function trustedWorkspaceRoot(requested: unknown): string {
+    const active = activeWorkspaceRoot;
+    if (typeof requested !== 'string' || requested.length === 0) {
+      return active;
+    }
+    // Allow only exact match (after resolve) to the active workspace —
+    // rejects absolute path escapes and alternate directory targets.
+    if (pathResolve(requested) !== pathResolve(active)) {
+      throw new Error(
+        'scm: rootPath is not the active workspace (renderer roots are not trusted)',
+      );
+    }
+    return active;
+  }
+
   // Phase 5.2 — Changed Files view needs a one-shot status snapshot in the
   // renderer. Shell git stays in main (node:child_process); no watcher.
   ipcMain.handle('get-git-status', async (_evt, rawRoot: unknown) => {
-    const root =
-      typeof rawRoot === 'string' && rawRoot.length > 0
-        ? rawRoot
-        : activeWorkspaceRoot;
+    let root: string;
+    try {
+      root = trustedWorkspaceRoot(rawRoot);
+    } catch (err) {
+      console.warn('[playground-main] get-git-status rejected root:', err);
+      return [];
+    }
     try {
       const { createShellGitClient } = await import('@vibecook/mille-ui/git/node');
       const client = createShellGitClient({
@@ -330,12 +351,16 @@ async function createWindow(): Promise<void> {
   });
 
   // Phase 5.3 — file history + SCM mutations (main process, shell git).
+
   ipcMain.handle('get-file-history', async (_evt, payload: unknown) => {
     const body = payload as { rootPath?: string; path?: string; limit?: number };
-    const root =
-      typeof body?.rootPath === 'string' && body.rootPath.length > 0
-        ? body.rootPath
-        : activeWorkspaceRoot;
+    let root: string;
+    try {
+      root = trustedWorkspaceRoot(body?.rootPath);
+    } catch (err) {
+      console.warn('[playground-main] get-file-history rejected root:', err);
+      return [];
+    }
     const rel = typeof body?.path === 'string' ? body.path : '';
     if (!rel) return [];
     try {
@@ -361,10 +386,7 @@ async function createWindow(): Promise<void> {
       left?: { kind: string; revision?: string };
       right?: { kind: string; revision?: string };
     };
-    const root =
-      typeof body?.rootPath === 'string' && body.rootPath.length > 0
-        ? body.rootPath
-        : activeWorkspaceRoot;
+    const root = trustedWorkspaceRoot(body?.rootPath);
     const rel = typeof body?.path === 'string' ? body.path : '';
     if (!rel) throw new Error('scm-compare: path required');
     const { createShellScmClient } = await import('@vibecook/mille-ui/git/node');
@@ -386,10 +408,7 @@ async function createWindow(): Promise<void> {
 
   ipcMain.handle('scm-revert', async (_evt, payload: unknown) => {
     const body = payload as { rootPath?: string; paths?: string[] };
-    const root =
-      typeof body?.rootPath === 'string' && body.rootPath.length > 0
-        ? body.rootPath
-        : activeWorkspaceRoot;
+    const root = trustedWorkspaceRoot(body?.rootPath);
     const paths = Array.isArray(body?.paths)
       ? body.paths.filter((p): p is string => typeof p === 'string')
       : [];

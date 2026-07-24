@@ -106,6 +106,21 @@ test('projectOpenFilesView preserves entryId and rootPath for multi-root', () =>
   assert.equal(def.seeds[0].rootPath, '/other-root');
 });
 
+test('projectOpenFilesView keeps same relative path across roots', () => {
+  const def = projectOpenFilesView({
+    open: [
+      { path: 'src/index.ts', rootPath: '/a', entryId: 1, active: true },
+      { path: 'src/index.ts', rootPath: '/b', entryId: 2, dirty: true },
+    ],
+  });
+  assert.equal(def.seeds.length, 2);
+  const ids = def.seeds.map((s) => s.id).sort();
+  assert.deepEqual(ids, [1, 2]);
+  assert.ok(def.seeds.every((s) => s.path === 'src/index.ts'));
+  const roots = def.seeds.map((s) => s.rootPath).sort();
+  assert.deepEqual(roots, ['/a', '/b']);
+});
+
 test('projectOpenFilesView dirtyOnly', () => {
   const def = projectOpenFilesView(
     {

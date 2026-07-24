@@ -83,12 +83,68 @@ test('normalizeEditorState merges tabs and activePath override', () => {
     open: true,
     dirty: true,
     active: true,
+    path: 'src/a.ts',
   });
   assert.deepEqual(map.get('src/b.ts'), {
     open: true,
     dirty: false,
     active: false,
+    path: 'src/b.ts',
   });
+});
+
+test('normalizeEditorState keeps multi-root same path as distinct keys', () => {
+  const map = normalizeEditorState({
+    open: [
+      { path: 'src/index.ts', rootPath: '/a', entryId: 1, active: true },
+      { path: 'src/index.ts', rootPath: '/b', entryId: 2, dirty: true },
+    ],
+  });
+  assert.equal(map.size, 2);
+  assert.ok(map.has('entry:1'));
+  assert.ok(map.has('entry:2'));
+  assert.equal(map.get('entry:1')?.path, 'src/index.ts');
+  assert.equal(map.get('entry:2')?.path, 'src/index.ts');
+  assert.equal(map.get('entry:1')?.rootPath, '/a');
+  assert.equal(map.get('entry:2')?.rootPath, '/b');
+});
+
+test('activePath alone does not activate same path across roots', () => {
+  const map = normalizeEditorState({
+    open: [
+      { path: 'src/index.ts', rootPath: '/a', entryId: 1 },
+      { path: 'src/index.ts', rootPath: '/b', entryId: 2 },
+    ],
+    activePath: 'src/index.ts',
+  });
+  assert.equal(map.get('entry:1')?.active, false);
+  assert.equal(map.get('entry:2')?.active, false);
+});
+
+test('activeEntryId selects sole multi-root tab', () => {
+  const map = normalizeEditorState({
+    open: [
+      { path: 'src/index.ts', rootPath: '/a', entryId: 1 },
+      { path: 'src/index.ts', rootPath: '/b', entryId: 2 },
+    ],
+    activePath: 'src/index.ts',
+    activeEntryId: 2,
+  });
+  assert.equal(map.get('entry:1')?.active, false);
+  assert.equal(map.get('entry:2')?.active, true);
+});
+
+test('activeRootPath + activePath disambiguates multi-root', () => {
+  const map = normalizeEditorState({
+    open: [
+      { path: 'src/index.ts', rootPath: '/a', entryId: 1 },
+      { path: 'src/index.ts', rootPath: '/b', entryId: 2 },
+    ],
+    activePath: 'src/index.ts',
+    activeRootPath: '/a',
+  });
+  assert.equal(map.get('entry:1')?.active, true);
+  assert.equal(map.get('entry:2')?.active, false);
 });
 
 test('formatEditorStateBadge and tooltip', () => {
@@ -239,6 +295,7 @@ test('activePath null clears active flags', () => {
     open: true,
     dirty: false,
     active: false,
+    path: 'src/a.ts',
   });
 });
 

@@ -265,15 +265,40 @@ export function registerEditorStateDecorations(
     if (disposed || myGen !== generation) return;
 
     const flagsByPath = normalizeEditorState(snapshot);
-    const entries = [...flagsByPath.entries()].filter(([path]) =>
-      isSafeWorkspaceRelativePath(path),
-    );
+    const entries = [...flagsByPath.entries()]
+      .map(([key, flags]) => {
+        const path =
+          flags.path !== undefined && flags.path.length > 0
+            ? flags.path
+            : key.startsWith('root:')
+              ? key.slice(key.indexOf('\0') + 1)
+              : key.startsWith('entry:')
+                ? ''
+                : key;
+        return [path, flags] as const;
+      })
+      .filter(([path]) => isSafeWorkspaceRelativePath(path));
 
     const resolved = await mapPool(
       entries,
       resolveConcurrency,
       async ([path, flags]) => {
         if (disposed || myGen !== generation) return null;
+        // Prefer known EntryId when hosts supply multi-root tabs.
+        if (flags.entryId !== undefined) {
+          try {
+            const byId = (fx as FileExplorerLike)
+              .getSnapshot()
+              .getById(flags.entryId as EntryId);
+            if (byId !== null) {
+              const decoration = buildDecoration(flags);
+              if (decoration === null) return null;
+              return { id: byId.id, decoration };
+            }
+          } catch {
+            /* fall through to path resolve */
+          }
+        }
         const entry = await resolvePathToEntry(path);
         if (entry === null) return null;
         const decoration = buildDecoration(flags);

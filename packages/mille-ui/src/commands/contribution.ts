@@ -11,7 +11,10 @@ import type {
   CommandRegistry,
   HostHooks,
 } from './types.js';
+import { evaluateEnablement } from './enablement.js';
 import { evaluateWhen } from './when.js';
+
+export { evaluateEnablement } from './enablement.js';
 
 // ─── Lifecycle / telemetry ────────────────────────────────────────────
 
@@ -161,22 +164,6 @@ export function contributeCommands(
   };
 }
 
-// ─── Enablement ───────────────────────────────────────────────────────
-
-/**
- * Whether a visible command is currently enabled. Defaults to `true`.
- * Disabled commands may still appear greyed in menus.
- */
-export function evaluateEnablement(
-  command: Command,
-  ctx: CommandContext,
-): boolean {
-  const e = command.enablement;
-  if (e === undefined) return true;
-  if (typeof e === 'function') return Boolean(e(ctx));
-  return evaluateWhen(e, ctx);
-}
-
 // ─── Dispatch with lifecycle ──────────────────────────────────────────
 
 export interface DispatchWithLifecycleOptions {
@@ -189,12 +176,19 @@ export interface DispatchWithLifecycleOptions {
    * rejects).
    */
   readonly awaitResult?: boolean;
+  /**
+   * Optional base context. When omitted, uses `registry.getContext()`.
+   * Prefer an explicit context for menu invocations that already own a
+   * live selection snapshot.
+   */
+  readonly context?: CommandContext;
 }
 
 /**
  * Dispatch a command with progress, cancellation, failure notification,
- * and telemetry. Augments the context with `signal` and `reportProgress`
- * for long-running host commands.
+ * and telemetry. Builds a **per-dispatch** context with `signal` and
+ * `reportProgress` — concurrent dispatches never share mutable lifecycle
+ * state across awaits.
  */
 export async function dispatchWithLifecycle(
   registry: CommandRegistry,
@@ -221,21 +215,6 @@ export async function dispatchWithLifecycle(
     args: options.args,
   });
 
-  // Capture the registry's context provider by dispatching through a
-  // temporary wrap: we need the context. Use a side channel via host.
-  // Concrete registries expose setContextProvider only; re-run provider
-  // by calling dispatch with a shim is messy. Instead, require that
-  // callers use the registry's dispatch when no lifecycle is needed,
-  // and for lifecycle we install a one-shot provider wrap.
-
-  // Use structural access: registries created by createCommandRegistry
-  // keep contextProvider private. We re-dispatch by temporarily
-  // intercepting run — simpler path: get context via a known API.
-  //
-  // Phase 5.4: CommandRegistry gains `getContext()` optional; for
-  // backwards compat we call dispatch after patching args with lifecycle
-  // on the host object.
-
   const reportProgress = (
     partial: Omit<CommandProgressEvent, 'commandId'>,
   ): void => {
@@ -253,6 +232,28 @@ export async function dispatchWithLifecycle(
       return;
     }
 
+    const baseCtx =
+      options.context ??
+      (typeof registry.getContext === 'function'
+        ? registry.getContext()
+        : null);
+    if (baseCtx === null) {
+      throw new Error(
+        `dispatchWithLifecycle: no context — pass options.context or install setContextProvider()`,
+      );
+    }
+    if (!evaluateEnablement(command, baseCtx)) {
+      lifecycle?.onProgress?.({ commandId, phase: 'cancelled', message: 'disabled' });
+      return;
+    }
+
+    // Per-dispatch context object — never stored on the registry.
+    const ctx: CommandContext = {
+      ...baseCtx,
+      ...(signal !== undefined ? { signal } : {}),
+      reportProgress,
+    };
+
     lifecycle?.onProgress?.({
       commandId,
       phase: 'running',
@@ -260,91 +261,76 @@ export async function dispatchWithLifecycle(
       args: options.args,
     });
 
-    const stash = lifecycleStash.get(registry);
-    const prev = stash?.current;
-    lifecycleStash.set(registry, {
-      current: {
-        ...(signal !== undefined ? { signal } : {}),
-        reportProgress,
-        ...(lifecycle !== undefined ? { lifecycle } : {}),
-      },
-    });
-
-    try {
-      const result = registry.dispatch(commandId, options.args);
-      if (options.awaitResult === false) {
-        if (isPromise(result)) {
-          void result.then(
-            () => {
-              lifecycle?.telemetry?.({
-                type: 'command.success',
-                commandId,
-                durationMs: Date.now() - started,
-              });
-              lifecycle?.onProgress?.({
-                commandId,
-                phase: 'completed',
-                fraction: 1,
-              });
-            },
-            (error: unknown) => {
-              lifecycle?.telemetry?.({
-                type: 'command.failure',
-                commandId,
-                durationMs: Date.now() - started,
-                error,
-              });
-              lifecycle?.onProgress?.({
-                commandId,
-                phase: 'failed',
-                message: error instanceof Error ? error.message : String(error),
-              });
-              lifecycle?.onNotify?.(
-                'error',
-                error instanceof Error ? error.message : String(error),
-                error,
-              );
-            },
-          );
-        } else {
-          lifecycle?.telemetry?.({
-            type: 'command.success',
-            commandId,
-            durationMs: Date.now() - started,
-          });
-          lifecycle?.onProgress?.({
-            commandId,
-            phase: 'completed',
-            fraction: 1,
-          });
-        }
-        return;
-      }
-
-      await result;
-      if (signal?.aborted) {
+    const result = command.run(ctx, options.args);
+    if (options.awaitResult === false) {
+      if (isPromise(result)) {
+        void result.then(
+          () => {
+            lifecycle?.telemetry?.({
+              type: 'command.success',
+              commandId,
+              durationMs: Date.now() - started,
+            });
+            lifecycle?.onProgress?.({
+              commandId,
+              phase: 'completed',
+              fraction: 1,
+            });
+          },
+          (error: unknown) => {
+            lifecycle?.telemetry?.({
+              type: 'command.failure',
+              commandId,
+              durationMs: Date.now() - started,
+              error,
+            });
+            lifecycle?.onProgress?.({
+              commandId,
+              phase: 'failed',
+              message: error instanceof Error ? error.message : String(error),
+            });
+            lifecycle?.onNotify?.(
+              'error',
+              error instanceof Error ? error.message : String(error),
+              error,
+            );
+          },
+        );
+      } else {
         lifecycle?.telemetry?.({
-          type: 'command.cancel',
+          type: 'command.success',
           commandId,
           durationMs: Date.now() - started,
         });
-        lifecycle?.onProgress?.({ commandId, phase: 'cancelled' });
-        return;
+        lifecycle?.onProgress?.({
+          commandId,
+          phase: 'completed',
+          fraction: 1,
+        });
       }
+      return;
+    }
+
+    await result;
+    if (signal?.aborted) {
       lifecycle?.telemetry?.({
-        type: 'command.success',
+        type: 'command.cancel',
         commandId,
         durationMs: Date.now() - started,
       });
-      lifecycle?.onProgress?.({
-        commandId,
-        phase: 'completed',
-        fraction: 1,
-      });
-    } finally {
-      if (prev) lifecycleStash.set(registry, { current: prev });
-      else lifecycleStash.delete(registry);
+      lifecycle?.onProgress?.({ commandId, phase: 'cancelled' });
+      return;
     }
+    lifecycle?.telemetry?.({
+      type: 'command.success',
+      commandId,
+      durationMs: Date.now() - started,
+    });
+    lifecycle?.onProgress?.({
+      commandId,
+      phase: 'completed',
+      fraction: 1,
+    });
   } catch (error) {
     if (signal?.aborted || isCanceledError(error)) {
       lifecycle?.telemetry?.({
@@ -375,25 +361,14 @@ export async function dispatchWithLifecycle(
   }
 }
 
-interface LifecycleStashEntry {
-  signal?: AbortSignal;
-  reportProgress?: (partial: Omit<CommandProgressEvent, 'commandId'>) => void;
-  lifecycle?: CommandLifecycleHooks;
-}
-
-const lifecycleStash = new WeakMap<
-  CommandRegistry,
-  { current: LifecycleStashEntry }
->();
-
 /**
- * Read the active lifecycle injection for a registry (used when building
- * CommandContext so run() can access signal / reportProgress).
+ * @deprecated Lifecycle is no longer stored on the registry. Always returns
+ * `null`. Kept so older hosts that probe for an active lifecycle keep compiling.
  */
 export function getActiveCommandLifecycle(
-  registry: CommandRegistry,
-): LifecycleStashEntry | null {
-  return lifecycleStash.get(registry)?.current ?? null;
+  _registry: CommandRegistry,
+): null {
+  return null;
 }
 
 // ─── Extended context builder ─────────────────────────────────────────

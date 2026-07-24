@@ -13,6 +13,10 @@ import {
   registerTestStatusDecorations,
   type TestStatusDecorationsHandle,
 } from '@vibecook/mille-ui/test-status';
+import {
+  demoDiagnosticsSeed,
+  demoTestStatusSeed,
+} from '../shared/demo-explorer-data';
 
 // Electron's MessagePortMain emits `message` events with a MessageEvent-
 // shaped object ({ data, ports }). The mille library's built-in adapter
@@ -111,48 +115,7 @@ function setDiagnosticsDecorations(enabled: boolean, rootPath: string): void {
   if (diagnosticsDecorations !== null) return;
   try {
     const client = createMapDiagnosticsClient({
-      initial: new Map([
-        [
-          'packages/mille-ui/package.json',
-          [
-            {
-              path: 'packages/mille-ui/package.json',
-              severity: 'warning',
-              message: 'Demo: consider pinning peerDependency ranges',
-              source: 'playground',
-            },
-          ],
-        ],
-        [
-          'packages/mille-ui/src/index.ts',
-          [
-            {
-              path: 'packages/mille-ui/src/index.ts',
-              severity: 'error',
-              message: "Demo: Cannot find name 'example'",
-              source: 'ts',
-              code: 2304,
-            },
-            {
-              path: 'packages/mille-ui/src/index.ts',
-              severity: 'warning',
-              message: 'Demo: unused export surface',
-              source: 'eslint',
-            },
-          ],
-        ],
-        [
-          'planning/IDE_EXPLORER_PARITY_PLAN.md',
-          [
-            {
-              path: 'planning/IDE_EXPLORER_PARITY_PLAN.md',
-              severity: 'info',
-              message: 'Demo: Phase 5.2 views still open',
-              source: 'playground',
-            },
-          ],
-        ],
-      ]),
+      initial: demoDiagnosticsSeed(),
     });
     const currentHost = host;
     diagnosticsDecorations = registerDiagnosticsDecorations({
@@ -182,21 +145,7 @@ function setTestStatusDecorations(enabled: boolean, rootPath: string): void {
   if (testStatusDecorations !== null) return;
   try {
     const client = createMapTestStatusClient({
-      initial: [
-        {
-          path: 'packages/mille-ui/test/diagnostics-decorations.test.mjs',
-          status: 'passed',
-        },
-        {
-          path: 'packages/mille/test/undo-journal.test.mjs',
-          status: 'failed',
-          message: 'Demo: simulated assertion failure',
-        },
-        {
-          path: 'packages/mille-ui/test/editor-state-decorations.test.mjs',
-          status: 'running',
-        },
-      ],
+      initial: [...demoTestStatusSeed()],
     });
     const currentHost = host;
     testStatusDecorations = registerTestStatusDecorations({

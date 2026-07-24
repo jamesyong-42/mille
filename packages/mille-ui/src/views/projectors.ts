@@ -42,39 +42,33 @@ export function projectOpenFilesView(
   options: ProjectOpenFilesOptions = {},
 ): ExplorerViewDefinition {
   const flags = normalizeEditorState(snapshot);
-  // Prefer last-seen tab metadata (entryId, rootPath, title) per path.
-  const metaByPath = new Map<
-    string,
-    { entryId?: number; rootPath?: string; title?: string }
-  >();
-  for (const tab of snapshot.open) {
-    const prev = metaByPath.get(tab.path);
-    const next: { entryId?: number; rootPath?: string; title?: string } = {
-      ...prev,
-    };
-    if (tab.entryId !== undefined) next.entryId = tab.entryId;
-    if (tab.rootPath !== undefined) next.rootPath = tab.rootPath;
-    if (tab.title !== undefined) next.title = tab.title;
-    metaByPath.set(tab.path, next);
-  }
-
+  // Identity-keyed map already preserves multi-root tabs; pull path /
+  // entryId / rootPath from flags (not bare relative path alone).
   const seeds: ExplorerViewSeed[] = [];
-  for (const [path, f] of flags) {
+  for (const [key, f] of flags) {
     if (options.dirtyOnly === true && !f.dirty) continue;
+    const path =
+      f.path !== undefined && f.path.length > 0
+        ? f.path
+        : key.startsWith('root:')
+          ? key.slice(key.indexOf('\0') + 1)
+          : key.startsWith('entry:')
+            ? f.path ?? ''
+            : key;
+    if (path.length === 0) continue;
     let order = 100;
     if (f.active) order = 0;
     else if (f.dirty) order = 10;
     const reasons: string[] = ['open'];
     if (f.dirty) reasons.push('dirty');
     if (f.active) reasons.push('active');
-    const meta = metaByPath.get(path);
     seeds.push({
       path,
       reason: reasons.join('+'),
       order,
-      title: meta?.title ?? f.title ?? basenamePath(path),
-      ...(meta?.entryId !== undefined ? { id: meta.entryId } : {}),
-      ...(meta?.rootPath !== undefined ? { rootPath: meta.rootPath } : {}),
+      title: f.title ?? basenamePath(path),
+      ...(f.entryId !== undefined ? { id: f.entryId } : {}),
+      ...(f.rootPath !== undefined ? { rootPath: f.rootPath } : {}),
       ...(f.dirty
         ? {
             badge: '●',

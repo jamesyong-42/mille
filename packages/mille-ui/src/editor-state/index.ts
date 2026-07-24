@@ -6,7 +6,11 @@ export type {
   EditorStateSnapshot,
   EditorTabState,
 } from './types.js';
-export { normalizeEditorState } from './types.js';
+export {
+  editorPathFromIdentity,
+  editorTabIdentityKey,
+  normalizeEditorState,
+} from './types.js';
 
 export type {
   CreateMapEditorStateClientOptions,

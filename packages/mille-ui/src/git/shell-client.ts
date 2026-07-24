@@ -29,6 +29,8 @@ export interface ChildProcessLike {
   readonly stderr: NodeJS.ReadableStream;
   on(event: 'close', cb: (code: number | null) => void): void;
   on(event: 'error', cb: (err: Error) => void): void;
+  /** Optional — used by SCM history to honor AbortSignal mid-flight. */
+  kill?(signal?: NodeJS.Signals | number): boolean;
 }
 
 export type SpawnLike = (

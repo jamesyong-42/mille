@@ -72,22 +72,40 @@ export function ContextMenuItem(props: ContextMenuItemProps): ReactElement {
         // authoritative live context for both visibility and execution;
         // embedded trees are not required to install a registry provider.
         try {
-          const registeredCommand = registry.get(command.id);
-          if (
-            registeredCommand &&
-            !evaluateEnablement(registeredCommand, context)
-          ) {
-            onClose();
-            return;
-          }
-          const result = registeredCommand?.run(context);
-          if (result && typeof (result as Promise<void>).catch === 'function') {
-            (result as Promise<void>).catch(() => {
-              /* swallow — individual commands own their error paths */
+          // Prefer registry path so enablement + future contract hooks apply.
+          // Menus pass their live selection context (not the provider snapshot).
+          const result =
+            typeof registry.dispatchWithContext === 'function'
+              ? registry.dispatchWithContext(command.id, context)
+              : (() => {
+                  const registeredCommand = registry.get(command.id);
+                  if (
+                    registeredCommand &&
+                    !evaluateEnablement(registeredCommand, context)
+                  ) {
+                    return undefined;
+                  }
+                  return registeredCommand?.run(context);
+                })();
+          if (result && typeof (result as Promise<void>).then === 'function') {
+            void (result as Promise<void>).then(undefined, (error: unknown) => {
+              const message =
+                error instanceof Error ? error.message : String(error);
+              try {
+                context.host?.notify?.('error', message, error);
+              } catch {
+                /* host notify must not throw into menu */
+              }
             });
           }
-        } catch {
-          /* swallow — dispatch throws only for unknown commands */
+        } catch (error) {
+          const message =
+            error instanceof Error ? error.message : String(error);
+          try {
+            context.host?.notify?.('error', message, error);
+          } catch {
+            /* ignore */
+          }
         }
         // Allow Radix to run its default close behavior.
         void event;

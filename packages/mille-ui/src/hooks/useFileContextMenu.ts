@@ -115,18 +115,39 @@ export function useFileContextMenu(
           close();
           return;
         }
-        // The menu already owns the authoritative live context used for its
-        // visibility checks. Invoke the currently registered command with
-        // that same context instead of depending on a separate registry
-        // context provider that embedded trees may not install.
-        const result = command.run(context);
-        if (result && typeof (result as Promise<void>).catch === 'function') {
-          (result as Promise<void>).catch(() => {
-            /* swallow — individual commands own their error paths */
+        // Live menu context is authoritative for selection/enablement.
+        // Prefer dispatchWithContext so enablement is re-checked at invoke.
+        const result =
+          typeof (registry as { dispatchWithContext?: unknown })
+            .dispatchWithContext === 'function'
+            ? (
+                registry as {
+                  dispatchWithContext(
+                    id: string,
+                    ctx: typeof context,
+                  ): void | Promise<void>;
+                }
+              ).dispatchWithContext(commandId, context)
+            : command.run(context);
+        if (result && typeof (result as Promise<void>).then === 'function') {
+          void (result as Promise<void>).then(undefined, (error: unknown) => {
+            const message =
+              error instanceof Error ? error.message : String(error);
+            try {
+              context.host?.notify?.('error', message, error);
+            } catch {
+              /* ignore */
+            }
           });
         }
-      } catch {
-        /* swallow — dispatch throws only for unknown commands */
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : String(error);
+        try {
+          context.host?.notify?.('error', message, error);
+        } catch {
+          /* ignore */
+        }
       }
       close();
     },

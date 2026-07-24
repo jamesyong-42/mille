@@ -13,11 +13,17 @@
   `refresh()` is serialized behind any in-flight walk — so `await writeFile()`
   → `await refresh()` never resolves with a tree read before the write.
   Local `FileExplorer` unchanged; native `registerProvider` still deferred.
-- **Bounded-concurrency provider walk** — a walk overlaps provider calls under
-  a shared cap (`concurrency`, default 8) instead of awaiting each `stat` /
-  `readDirectory` in series. On a 38-call tree behind a 5 ms provider the walk
-  drops from ~222 ms to ~39 ms; `bench:provider` gates it. The walk still
-  rebuilds the whole tree — scoped invalidation is the next step.
+- **Scoped provider invalidation** — a watcher event invalidates the directory
+  whose listing it changed, and the walk re-reads only those directories,
+  returning every subtree with no dirty descendant by reference. Adding one
+  file to a 6-directory tree costs **2 provider calls instead of 38**;
+  `bench:provider` gates the call count. `refresh()` remains a full rebuild
+  (the recovery path for a missed event), as does the first walk or a burst
+  touching more than 64 directories.
+- **Bounded-concurrency provider walk** — a full walk overlaps provider calls
+  under a shared cap (`concurrency`, default 8) instead of awaiting each
+  `stat` / `readDirectory` in series. On a 38-call tree behind a 5 ms provider
+  it drops from ~222 ms to ~39 ms.
 - **Provider copy collisions** — `copy` takes `{ overwrite }` and fails with
   `EEXIST` when the destination exists. Copying a file used to clobber the
   destination silently while copying a directory threw; wrappers now forward

@@ -310,6 +310,108 @@ test('provider tree session single-flight refresh under write burst', async () =
   session.dispose();
 });
 
+/** Wrap a provider so tests can see which directories a walk listed. */
+function countingProvider(inner) {
+  const reads = [];
+  return {
+    reads,
+    provider: {
+      scheme: inner.scheme,
+      capabilities: inner.capabilities,
+      stat: (uri) => inner.stat(uri),
+      readFile: (uri) => inner.readFile(uri),
+      writeFile: (uri, data, opts) => inner.writeFile(uri, data, opts),
+      delete: (uri, opts) => inner.delete(uri, opts),
+      watch: (uri, opts) => inner.watch(uri, opts),
+      readDirectory: (uri) => {
+        reads.push(uri.path);
+        return inner.readDirectory(uri);
+      },
+    },
+  };
+}
+
+async function settle(ms = 60) {
+  await new Promise((r) => setTimeout(r, ms));
+}
+
+test('watcher-driven walk re-reads only the invalidated directory', async () => {
+  const files = {};
+  for (let d = 0; d < 6; d += 1) files[`/d${d}/f.ts`] = 'x';
+  const mem = createMemoryFileSystemProvider({ files });
+  const { provider, reads } = countingProvider(mem);
+  const session = createProviderTreeSession(provider, createUri('memfs', '/'), {
+    debounceMs: 5,
+  });
+
+  const before = await session.refresh();
+  assert.equal(reads.length, 7, 'first walk lists root + 6 directories');
+  reads.length = 0;
+
+  await mem.writeFile(
+    createUri('memfs', '/d3/added.ts'),
+    new TextEncoder().encode('n'),
+  );
+  await settle();
+
+  // /d3's listing changed; nothing else needs re-reading.
+  assert.deepEqual(reads, ['/d3']);
+
+  const after = session.getSnapshot();
+  const named = (snap, name) =>
+    snap.root.children.find((c) => c.entry.name === name);
+  assert.ok(
+    named(after, 'd3').children.some((c) => c.entry.name === 'added.ts'),
+    'new file is present',
+  );
+  // Untouched subtrees are reused by reference, not rebuilt.
+  assert.equal(named(after, 'd0'), named(before, 'd0'));
+  assert.notEqual(named(after, 'd3'), named(before, 'd3'));
+
+  session.dispose();
+});
+
+test('scoped walk handles deletes and newly created directories', async () => {
+  const mem = createMemoryFileSystemProvider({
+    files: { '/a/keep.ts': 'k', '/a/drop.ts': 'd', '/b/x.ts': 'x' },
+  });
+  const { provider, reads } = countingProvider(mem);
+  const session = createProviderTreeSession(provider, createUri('memfs', '/'), {
+    debounceMs: 5,
+  });
+  await session.refresh();
+  reads.length = 0;
+
+  await mem.delete(createUri('memfs', '/a/drop.ts'), {});
+  await settle();
+  const afterDelete = session.getSnapshot();
+  const a = afterDelete.root.children.find((c) => c.entry.name === 'a');
+  assert.deepEqual(
+    a.children.map((c) => c.entry.name),
+    ['keep.ts'],
+  );
+  assert.deepEqual(reads, ['/a'], 'delete re-reads only the parent');
+
+  // A directory that appears later must still be walked in full.
+  reads.length = 0;
+  await mem.createDirectory(createUri('memfs', '/fresh'));
+  await mem.createDirectory(createUri('memfs', '/fresh/deep'));
+  await mem.writeFile(
+    createUri('memfs', '/fresh/deep/new.ts'),
+    new TextEncoder().encode('n'),
+  );
+  await settle();
+  const afterCreate = session.getSnapshot();
+  const fresh = afterCreate.root.children.find((c) => c.entry.name === 'fresh');
+  assert.ok(fresh, 'new directory appears');
+  assert.equal(fresh.children[0].entry.name, 'deep');
+  assert.equal(fresh.children[0].children[0].entry.name, 'new.ts');
+  assert.ok(reads.includes('/'), 'root listing changed, so root is re-read');
+  assert.ok(!reads.includes('/b'), 'unrelated directory is left alone');
+
+  session.dispose();
+});
+
 test('memfs copy refuses to clobber unless overwrite is set', async () => {
   const fs = createMemoryFileSystemProvider({
     files: { '/a.ts': 'A', '/b.ts': 'B', '/dir/x.ts': 'X' },

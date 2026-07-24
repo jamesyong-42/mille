@@ -29,6 +29,10 @@ const BUDGET = {
   watcherConvergenceMs: 200,
   maxWatcherNotifications: 8,
   latencyWalkMs: 120,
+  // One added file invalidates one directory: stat + readDirectory of that
+  // directory. Anything more means the walk stopped being scoped.
+  scopedUpdateCalls: 4,
+  scopedUpdateMs: 60,
 };
 
 const files = {};
@@ -86,16 +90,57 @@ for (let d = 0; d < LAT_DIRS; d += 1) {
     latencyFiles[`/l${d}/f${f}.ts`] = 'x';
   }
 }
+// Count provider calls so the scoped-update gate measures work done rather
+// than wall-clock, which drifts with CI noise.
+let providerCalls = 0;
+const latencyInner = withLatency(
+  createMemoryFileSystemProvider({ files: latencyFiles }),
+  { delayMs: LAT_MS },
+);
+const countedLatency = {
+  scheme: latencyInner.scheme,
+  capabilities: latencyInner.capabilities,
+  readFile: (uri) => latencyInner.readFile(uri),
+  writeFile: (uri, data, opts) => latencyInner.writeFile(uri, data, opts),
+  watch: (uri, opts) => latencyInner.watch(uri, opts),
+  stat: (uri) => {
+    providerCalls += 1;
+    return latencyInner.stat(uri);
+  },
+  readDirectory: (uri) => {
+    providerCalls += 1;
+    return latencyInner.readDirectory(uri);
+  },
+};
 const latencySession = createProviderTreeSession(
-  withLatency(createMemoryFileSystemProvider({ files: latencyFiles }), {
-    delayMs: LAT_MS,
-  }),
+  countedLatency,
   createUri('memfs', '/'),
   { debounceMs: 8 },
 );
 const t7 = performance.now();
 await latencySession.refresh();
 const t8 = performance.now();
+
+// One file added to one directory: a scoped walk must cost a couple of
+// listings, not another full traversal.
+const fullWalkCalls = providerCalls;
+providerCalls = 0;
+const latencyMem = latencySession.provider;
+let scopedNotifications = 0;
+latencySession.onDidChange(() => {
+  scopedNotifications += 1;
+});
+const t9 = performance.now();
+await latencyMem.writeFile(
+  createUri('memfs', '/l0/late.ts'),
+  new TextEncoder().encode('x'),
+);
+const scopedDeadline = t9 + 2_000;
+while (performance.now() < scopedDeadline) {
+  await new Promise((r) => setTimeout(r, 5));
+  if (scopedNotifications >= 1) break;
+}
+const t10 = performance.now();
 latencySession.dispose();
 
 const result = {
@@ -108,8 +153,10 @@ const result = {
   writeBurstMs: +(t5 - t4).toFixed(2),
   watcherNotifications: notifications,
   watcherConvergenceMs: +(t6 - t5).toFixed(2),
-  latencyWalkCalls: LAT_DIRS * (LAT_FILES + 2) + 2,
+  latencyWalkCalls: fullWalkCalls,
   latencyWalkMs: +(t8 - t7).toFixed(2),
+  scopedUpdateCalls: providerCalls,
+  scopedUpdateMs: +(t10 - t9).toFixed(2),
 };
 
 console.log(JSON.stringify(result));
@@ -143,6 +190,16 @@ if (result.watcherNotifications < 1) {
 if (result.latencyWalkMs > BUDGET.latencyWalkMs) {
   failures.push(
     `latencyWalkMs ${result.latencyWalkMs} > ${BUDGET.latencyWalkMs} (walk stopped overlapping provider calls?)`,
+  );
+}
+if (result.scopedUpdateCalls > BUDGET.scopedUpdateCalls) {
+  failures.push(
+    `scopedUpdateCalls ${result.scopedUpdateCalls} > ${BUDGET.scopedUpdateCalls} (one-directory change re-walking the tree?)`,
+  );
+}
+if (result.scopedUpdateMs > BUDGET.scopedUpdateMs) {
+  failures.push(
+    `scopedUpdateMs ${result.scopedUpdateMs} > ${BUDGET.scopedUpdateMs}`,
   );
 }
 

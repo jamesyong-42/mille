@@ -1284,7 +1284,12 @@ the accessibility/platform quality matrix.
   `describeUnsupported` / `withCapabilityGate`; unsupported ops throw
   `FileSystemError(EUNSUPPORTED)` with a human message.
 - Model latency, pagination, reconnect, offline state, and eventual consistency.
-  **Partial** — `withLatency`, `withOfflineGate` (reconnect simulation).
+  **Partial** — `withLatency`, `withOfflineGate` (reconnect simulation, and
+  live watchers stop delivering while offline). Round-trip cost is now a
+  design input rather than an afterthought: watcher walks are scoped to the
+  invalidated directories (one added file = 2 provider calls, not one pair
+  per directory) and a full walk overlaps calls under a shared concurrency
+  cap. Bench gates both (`latencyWalkMs`, `scopedUpdateCalls`).
   Pagination / eventual-consistency models still open.
 - Keep local Rust/native behavior as the optimized default provider.
   **Done** — provider module is additive; native `FileExplorer` unchanged.

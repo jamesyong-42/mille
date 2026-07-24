@@ -9,9 +9,13 @@
 // then `await refresh()` and see its own write. Joining the in-flight walk
 // would resolve with a tree read before that write.
 //
-// A walk still rebuilds the whole tree; only its concurrency is bounded.
-// Scoped invalidation (rebuilding just the subtree named by a watcher event)
-// is the next step and is what a high-latency provider really needs.
+// Watcher-driven walks are scoped: an event invalidates the directory whose
+// listing it changed, and the walk re-reads only those directories, returning
+// every subtree with no dirty descendant by reference. An event deep in one
+// directory therefore costs `depth` listings, not one per directory in the
+// workspace. `refresh()` stays a full rebuild — it is the recovery path for a
+// missed event — as does the first walk, or any burst touching more than
+// MAX_SCOPED_DIRS directories.
 
 import type {
   FileSystemProvider,
@@ -19,11 +23,32 @@ import type {
   ProviderOperation,
   Uri,
 } from './types.js';
-import { createUri, normalizeUriPath } from './uri.js';
+import { createUri, dirnameUriPath, normalizeUriPath } from './uri.js';
 import {
   describeUnsupported,
+  isCaseSensitiveProvider,
   providerSupportsOperation,
 } from './capabilities.js';
+
+/**
+ * `full` re-reads every directory; `dirty` re-reads only the directories a
+ * watcher invalidated and reuses the rest of the previous tree by reference.
+ */
+type WalkScope = 'full' | 'dirty';
+
+/**
+ * Above this many invalidated directories, re-reading the tree in one pass
+ * beats descending to each of them separately.
+ */
+const MAX_SCOPED_DIRS = 64;
+
+/** True when `path` is `ancestor` or sits under it. */
+function pathIsUnder(path: string, ancestor: string): boolean {
+  const p = normalizeUriPath(path);
+  const a = normalizeUriPath(ancestor);
+  if (p === a) return true;
+  return a === '/' ? p.startsWith('/') : p.startsWith(`${a}/`);
+}
 
 export interface ProviderTreeNode {
   readonly entry: ProviderEntry;
@@ -74,9 +99,11 @@ export interface ProviderTreeSession {
   readonly provider: FileSystemProvider;
   readonly rootUri: Uri;
   /**
-   * Rebuild the tree from the provider (stat + recursive readDirectory).
-   * The resolved snapshot always reflects provider state at or after this
-   * call, even when a watcher-driven walk is already running.
+   * Rebuild the whole tree from the provider (stat + recursive
+   * readDirectory), bypassing watcher-scoped invalidation — this is the
+   * recovery path when events may have been missed. The resolved snapshot
+   * always reflects provider state at or after this call, even when a
+   * walk is already running.
    */
   refresh(): Promise<ProviderTreeSnapshot>;
   getSnapshot(): ProviderTreeSnapshot | null;
@@ -171,8 +198,33 @@ export function createProviderTreeSession(
   // its call, so a caller can observe its own mutations.
   let inFlight: Promise<ProviderTreeSnapshot> | null = null;
   let queued: Promise<ProviderTreeSnapshot> | null = null;
+  let queuedScope: WalkScope = 'dirty';
   let pendingAfterFlight = false;
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+
+  // Directories whose listing a watcher event invalidated, as normalized
+  // paths. A walk consumes and clears this; events arriving mid-walk
+  // repopulate it and are picked up by the trailing walk.
+  const dirtyDirs = new Set<string>();
+  const caseSensitive = isCaseSensitiveProvider(provider.capabilities);
+
+  /** Dirty-set key. Case-folded when the provider is case-insensitive. */
+  function dirtyKey(path: string): string {
+    const p = normalizeUriPath(path);
+    return caseSensitive ? p : p.toLowerCase();
+  }
+
+  /**
+   * Mark the directory whose listing an event changed. Creates, deletes and
+   * renames change the *parent's* listing; a content change refreshes the
+   * same listing's entry metadata, so the parent covers every event type
+   * with one rule.
+   */
+  function markDirty(uri: Uri): void {
+    const path = normalizeUriPath(uri.path);
+    if (!pathIsUnder(path, normalizeUriPath(root.path))) return;
+    dirtyDirs.add(dirtyKey(dirnameUriPath(path)));
+  }
 
   if (
     typeof provider.watch === 'function' &&
@@ -180,7 +232,9 @@ export function createProviderTreeSession(
   ) {
     try {
       const w = provider.watch(root, { recursive: true });
-      const sub = w.onDidChange(() => {
+      const sub = w.onDidChange((event) => {
+        markDirty(event.uri);
+        if (event.oldUri) markDirty(event.oldUri);
         scheduleRefresh();
       });
       watcherDispose = () => {
@@ -225,7 +279,7 @@ export function createProviderTreeSession(
       pendingAfterFlight = true;
       return;
     }
-    void startWalk().catch(() => {
+    void startWalk('dirty').catch(() => {
       /* watcher-driven walk failures are non-fatal */
     });
   }
@@ -243,6 +297,16 @@ export function createProviderTreeSession(
     }
   }
 
+  function childUriOf(parent: Uri, name: string): Uri {
+    const parentPath = normalizeUriPath(parent.path);
+    const childPath = parentPath === '/' ? `/${name}` : `${parentPath}/${name}`;
+    return createUri(parent.scheme, childPath, {
+      ...(parent.authority !== undefined
+        ? { authority: parent.authority }
+        : {}),
+    });
+  }
+
   async function loadNode(uri: Uri): Promise<ProviderTreeNode> {
     const entry = await guarded(() => provider.stat(uri));
     if (entry.kind !== 1 /* Directory */) {
@@ -250,18 +314,80 @@ export function createProviderTreeSession(
     }
     const kids = await guarded(() => provider.readDirectory(uri));
     const children = await Promise.all(
-      kids.map((k) => {
-        const childPath =
-          normalizeUriPath(uri.path) === '/'
-            ? `/${k.name}`
-            : `${normalizeUriPath(uri.path)}/${k.name}`;
-        const childUri = createUri(uri.scheme, childPath, {
-          ...(uri.authority !== undefined ? { authority: uri.authority } : {}),
-        });
-        return loadNode(childUri);
+      kids.map((k) => loadNode(childUriOf(uri, k.name))),
+    );
+    return { entry, uri, children };
+  }
+
+  /**
+   * Re-read one directory's listing and rebuild only what it says changed.
+   *
+   * `readDirectory` already returns full entries, so file children need no
+   * extra `stat`. An unchanged child directory keeps its previous `children`
+   * array by reference — it costs nothing and lets consumers compare subtrees
+   * by identity — while still taking the fresh entry from this listing.
+   */
+  async function refreshDirectory(
+    uri: Uri,
+    prev: ProviderTreeNode | null,
+    dirty: ReadonlySet<string>,
+  ): Promise<ProviderTreeNode> {
+    const entry = await guarded(() => provider.stat(uri));
+    if (entry.kind !== 1 /* Directory */) {
+      return { entry, uri, children: [] };
+    }
+    const kids = await guarded(() => provider.readDirectory(uri));
+    const prevByName = new Map(
+      (prev?.children ?? []).map((c) => [c.entry.name, c] as const),
+    );
+    const children = await Promise.all(
+      kids.map(async (k) => {
+        const childUri = childUriOf(uri, k.name);
+        const prevChild = prevByName.get(k.name);
+        if (k.kind !== 1 /* not a directory */) {
+          return { entry: k, uri: childUri, children: [] };
+        }
+        if (prevChild === undefined || prevChild.entry.kind !== 1) {
+          // Newly appeared directory (or replaced a file) — walk it fully.
+          return loadNode(childUri);
+        }
+        return applyDirty(prevChild, childUri, dirty);
       }),
     );
     return { entry, uri, children };
+  }
+
+  /**
+   * Walk the previous tree, re-reading dirty directories and returning every
+   * other node untouched. A subtree with no dirty descendant is returned by
+   * reference, so an event deep in one directory costs `depth` listings
+   * rather than one per directory in the workspace.
+   */
+  async function applyDirty(
+    node: ProviderTreeNode,
+    uri: Uri,
+    dirty: ReadonlySet<string>,
+  ): Promise<ProviderTreeNode> {
+    const path = normalizeUriPath(uri.path);
+    if (dirty.has(dirtyKey(path))) {
+      return refreshDirectory(uri, node, dirty);
+    }
+    let containsDirty = false;
+    for (const d of dirty) {
+      if (pathIsUnder(d, caseSensitive ? path : path.toLowerCase())) {
+        containsDirty = true;
+        break;
+      }
+    }
+    if (!containsDirty) return node;
+    const children = await Promise.all(
+      node.children.map((c) =>
+        c.entry.kind === 1
+          ? applyDirty(c, childUriOf(uri, c.entry.name), dirty)
+          : Promise.resolve(c),
+      ),
+    );
+    return { entry: node.entry, uri: node.uri, children };
   }
 
   /**
@@ -269,11 +395,16 @@ export function createProviderTreeSession(
    * mutations it made before calling. Joining `inFlight` instead would let
    * `refresh()` resolve with a tree that was read before the caller's write.
    */
-  function enqueueWalk(): Promise<ProviderTreeSnapshot> {
-    // A queued walk has not started yet, so it satisfies this caller too.
-    if (queued !== null) return queued;
+  function enqueueWalk(scope: WalkScope): Promise<ProviderTreeSnapshot> {
+    // A queued walk has not started yet, so it satisfies this caller too —
+    // but a caller that needs a full rebuild upgrades the queued scope.
+    if (queued !== null) {
+      if (scope === 'full') queuedScope = 'full';
+      return queued;
+    }
     const prior = inFlight;
-    if (prior === null) return startWalk();
+    if (prior === null) return startWalk(scope);
+    queuedScope = scope;
     // Run after the current walk, whether it settles or fails.
     const next = prior.then(runQueued, runQueued);
     queued = next;
@@ -282,18 +413,33 @@ export function createProviderTreeSession(
 
   function runQueued(): Promise<ProviderTreeSnapshot> {
     queued = null;
+    const scope = queuedScope;
+    queuedScope = 'dirty';
     if (disposed) {
       return Promise.reject(new Error('ProviderTreeSession disposed'));
     }
-    return startWalk();
+    return startWalk(scope);
   }
 
   /** Run one walk now. Callers must ensure no other walk is in flight. */
-  function startWalk(): Promise<ProviderTreeSnapshot> {
+  function startWalk(scope: WalkScope): Promise<ProviderTreeSnapshot> {
     const myGen = ++generation;
+    // Consume the invalidation set now. Events that arrive while this walk
+    // runs repopulate it and are covered by the trailing walk.
+    const dirty = new Set(dirtyDirs);
+    dirtyDirs.clear();
+    const prevRoot = snapshot?.root ?? null;
+    const scoped =
+      scope === 'dirty' &&
+      prevRoot !== null &&
+      dirty.size > 0 &&
+      dirty.size <= MAX_SCOPED_DIRS;
     const work = (async (): Promise<ProviderTreeSnapshot> => {
       try {
-        const treeRoot = await loadNode(root);
+        const treeRoot =
+          scoped && prevRoot !== null
+            ? await applyDirty(prevRoot, root, dirty)
+            : await loadNode(root);
         if (disposed) {
           if (snapshot) return snapshot;
           throw new Error('ProviderTreeSession disposed');
@@ -313,7 +459,7 @@ export function createProviderTreeSession(
           pendingAfterFlight = false;
           // Trailing walk for events that arrived mid-flight. Reuses an
           // already-queued walk when one exists.
-          void enqueueWalk().catch(() => {
+          void enqueueWalk('dirty').catch(() => {
             /* watcher trailing refresh failures are non-fatal */
           });
         }
@@ -388,7 +534,9 @@ export function createProviderTreeSession(
       clearTimeout(debounceTimer);
       debounceTimer = null;
     }
-    return enqueueWalk();
+    // Explicit refresh is the recovery path: rebuild everything, so a caller
+    // can use it to recover from a missed or dropped watcher event.
+    return enqueueWalk('full');
   }
 
   return {
@@ -429,7 +577,9 @@ export function createProviderTreeSession(
       snapshot = null;
       inFlight = null;
       queued = null;
+      queuedScope = 'dirty';
       pendingAfterFlight = false;
+      dirtyDirs.clear();
     },
   };
 }

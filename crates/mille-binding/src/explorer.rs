@@ -1852,6 +1852,13 @@ impl FileExplorer {
                 .map_err(|e| fx_error_to_napi(io_to_fx(e, path.clone())))?;
             self.record_intent(path.clone(), IntentKind::Delete);
             self.record_intent(recycle_path.clone(), IntentKind::Create);
+            // Capture identity of the recycled object so undo can refuse a
+            // replaced payload (e.g. someone swaps the recycle file with an
+            // impostor before undo).
+            let kind_u8 = if was_dir { 1u8 } else { 0u8 };
+            let fs = capture_fs_identity(&recycle_path, kind_u8)
+                .await
+                .map_err(|e| fx_error_to_napi(io_to_fx(e, recycle_path.clone())))?;
             if recursive || was_dir {
                 let _ = self.store.remove_subtree(eid);
             } else {
@@ -1864,10 +1871,9 @@ impl FileExplorer {
                 name,
                 was_dir,
                 recursive,
-                size,
-                mtime_ms,
-                ctime_ms,
+                fs,
             );
+            let _ = (size, mtime_ms, ctime_ms);
             return Ok(());
         }
 
@@ -1958,9 +1964,7 @@ impl FileExplorer {
                 name,
                 was_dir,
                 recursive,
-                size,
-                mtime_ms,
-                ctime_ms,
+                fs,
             } => {
                 self.undo_soft_delete(
                     original_path,
@@ -1969,9 +1973,7 @@ impl FileExplorer {
                     name,
                     *was_dir,
                     *recursive,
-                    *size,
-                    *mtime_ms,
-                    *ctime_ms,
+                    fs,
                     &descriptor,
                 )
                 .await?
@@ -2127,12 +2129,10 @@ impl FileExplorer {
         name: &str,
         was_dir: bool,
         _recursive: bool,
-        size: u64,
-        mtime_ms: i64,
-        ctime_ms: i64,
+        expected_fs: &FsIdentity,
         descriptor: &UndoDescriptorJs,
     ) -> Result<UndoResultJs> {
-        let _ = (was_dir, name, size, mtime_ms, ctime_ms);
+        let _ = name;
         if !recycle_path.exists() {
             return Err(fx_error_to_napi(FxError::InvalidInput(format!(
                 "cannot undo delete: recycle path missing {:?}",
@@ -2144,6 +2144,23 @@ impl FileExplorer {
                 "cannot undo delete: {:?} already exists",
                 original_path
             ))));
+        }
+        // Refuse to restore a replaced recycle payload (e.g. impostor file
+        // written over the soft-deleted object before undo).
+        let kind_u8 = if was_dir { 1u8 } else { 0u8 };
+        let disk = capture_fs_identity(recycle_path, kind_u8)
+            .await
+            .map_err(|e| fx_error_to_napi(io_to_fx(e, recycle_path.to_path_buf())))?;
+        if disk.kind != expected_fs.kind {
+            return Err(fx_error_to_napi(FxError::InvalidInput(
+                "cannot undo delete: recycle payload kind no longer matches".into(),
+            )));
+        }
+        if !expected_fs.matches_disk(&disk) {
+            return Err(fx_error_to_napi(FxError::InvalidInput(
+                "cannot undo delete: recycle payload identity no longer matches the deleted entry"
+                    .into(),
+            )));
         }
         if let Some(parent) = original_path.parent() {
             tokio::fs::create_dir_all(parent)

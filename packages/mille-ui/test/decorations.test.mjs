@@ -56,6 +56,7 @@ const {
   FileTree,
   FileTreeProvider,
   FileDecorations,
+  decorationAccessibleLabel,
   mergeDecorations,
   EMPTY_DECORATION,
 } =
@@ -289,6 +290,92 @@ test('FileDecorations renders nothing for an empty decoration', async () => {
     null,
     'merged empty decoration must render no DOM',
   );
+  await act(async () => { root.unmount(); });
+  container.remove();
+});
+
+// ─── Accessible decoration text ───────────────────────────────────────
+
+test('FileDecorations exposes aria-label, role, sr-only text, and hides glyphs', async () => {
+  const { container, root } = mount();
+  await act(async () => {
+    root.render(
+      createElement(FileDecorations, {
+        decorations: {
+          badge: '2',
+          color: 'var(--mille-decoration-error)',
+          tooltip: '2 errors\nts: detail message',
+        },
+      }),
+    );
+  });
+
+  const wrapper = container.querySelector('[data-mille-decorations]');
+  assert.ok(wrapper, 'wrapper must render');
+  assert.equal(wrapper.getAttribute('role'), 'img');
+  assert.equal(
+    wrapper.getAttribute('aria-label'),
+    '2 errors',
+    'aria-label uses first tooltip line (summary)',
+  );
+  assert.equal(wrapper.getAttribute('title'), '2 errors\nts: detail message');
+
+  const badge = wrapper.querySelector('[data-mille-decoration-badge="2"]');
+  assert.ok(badge);
+  assert.equal(badge.getAttribute('aria-hidden'), 'true');
+
+  const sr = wrapper.querySelector('.mille-decoration-sr-only');
+  assert.ok(sr, 'sr-only accessible text must be present');
+  assert.equal(sr.textContent, '2 errors');
+
+  await act(async () => { root.unmount(); });
+  container.remove();
+});
+
+test('FileDecorations numeric badge without tooltip reads as N problems', async () => {
+  assert.equal(
+    decorationAccessibleLabel({ badge: '1' }),
+    '1 problem',
+  );
+  assert.equal(
+    decorationAccessibleLabel({ badge: '3' }),
+    '3 problems',
+  );
+  assert.equal(
+    decorationAccessibleLabel({ badge: '99+' }),
+    '99+ problems',
+  );
+  assert.equal(
+    decorationAccessibleLabel({ letter: 'M', badge: 'M' }),
+    'status M, badge M',
+  );
+  assert.equal(
+    decorationAccessibleLabel({ tooltip: '1 error', badge: '1' }),
+    '1 error',
+  );
+});
+
+test('FileDecorations letter glyph is aria-hidden when accessible label present', async () => {
+  const { container, root } = mount();
+  await act(async () => {
+    root.render(
+      createElement(FileDecorations, {
+        decorations: {
+          letter: 'M',
+          badge: 'M',
+          tooltip: 'staged modified',
+        },
+      }),
+    );
+  });
+  const wrapper = container.querySelector('[data-mille-decorations]');
+  assert.equal(wrapper.getAttribute('aria-label'), 'staged modified');
+  const letter = wrapper.querySelector('[data-mille-decoration-letter="M"]');
+  assert.ok(letter);
+  assert.equal(letter.getAttribute('aria-hidden'), 'true');
+  const badge = wrapper.querySelector('[data-mille-decoration-badge="M"]');
+  assert.ok(badge);
+  assert.equal(badge.getAttribute('aria-hidden'), 'true');
   await act(async () => { root.unmount(); });
   container.remove();
 });

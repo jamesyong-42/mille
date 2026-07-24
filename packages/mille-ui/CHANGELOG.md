@@ -16,8 +16,10 @@
   `resolvePath` fallback, workspace-relative path validation, bounded
   concurrent path resolve, value-diff notifications, and accessible
   decoration labels (`aria-label` + sr-only text on `FileDecorations`).
-- **Trash default and undo journal** — `delete` soft-trashes into workspace
-  `.mille-trash` by default (undoable); `{ trash: false }` is permanent. Public
+- **Trash default and undo journal** — `delete` soft-trashes into a managed
+  recycle directory outside the workspace (`$TMPDIR/mille-recycle/<hash>/`,
+  undoable); `{ trash: false }` is permanent. Soft-delete undo validates
+  filesystem identity of the recycle payload before restore. Public
   `canUndo` / `peekUndo` / `undo` reverse create, rename, move, and soft-delete.
 - **Transfer progress and cancellation** — recursive copies accept
   `operationId` / `AbortSignal`, emit `OP_PROGRESS` / `OP_COMPLETE` /

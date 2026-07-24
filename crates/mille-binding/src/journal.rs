@@ -120,9 +120,9 @@ pub(crate) enum JournalKind {
         name: String,
         was_dir: bool,
         recursive: bool,
-        size: u64,
-        mtime_ms: i64,
-        ctime_ms: i64,
+        /// Filesystem identity of the payload at `recycle_path` after the
+        /// soft-delete rename. Undo refuses if the recycle object is replaced.
+        fs: FsIdentity,
     },
 }
 
@@ -298,9 +298,7 @@ impl OperationJournal {
         name: String,
         was_dir: bool,
         recursive: bool,
-        size: u64,
-        mtime_ms: i64,
-        ctime_ms: i64,
+        fs: FsIdentity,
     ) -> u64 {
         let label = format!("Delete {name}");
         self.push_undoable(
@@ -311,9 +309,7 @@ impl OperationJournal {
                 name,
                 was_dir,
                 recursive,
-                size,
-                mtime_ms,
-                ctime_ms,
+                fs,
             },
             label,
         )

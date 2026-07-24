@@ -149,6 +149,7 @@ export {
   FileContextMenu,
   ContextMenuItem,
   FileDecorations,
+  decorationAccessibleLabel,
   FileTreeFilter,
   SearchResultList,
   FileTreeDragIndicator,

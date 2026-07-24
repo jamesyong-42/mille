@@ -284,6 +284,55 @@ test('default soft-delete is outside the workspace tree and undo restores', asyn
   }
 });
 
+test('P1: soft-delete undo refuses replaced recycle payload', async () => {
+  const { sandbox, root } = fixture();
+  const fx = new FileExplorer({ roots: [root], settings, watchDebounceMs: 60_000 });
+  try {
+    await fx.populateFromRoots();
+    const noteId = await idAt(fx, join(root, 'note.txt'));
+    await fx.delete(noteId);
+    assert.equal(existsSync(join(root, 'note.txt')), false);
+    assert.equal(fx.peekUndo()?.kind, 'delete');
+
+    // Locate the recycled payload under $TMPDIR/mille-recycle and replace it.
+    const pool = join(tmpdir(), 'mille-recycle');
+    assert.equal(existsSync(pool), true, 'recycle pool should exist after soft-delete');
+    const { statSync } = await import('node:fs');
+    /** @type {string | null} */
+    let recycleFile = null;
+    function walkSync(dir, depth = 0) {
+      if (depth > 4 || recycleFile) return;
+      for (const name of readdirSync(dir)) {
+        const p = join(dir, name);
+        if (name === 'note.txt') {
+          recycleFile = p;
+          return;
+        }
+        try {
+          if (statSync(p).isDirectory()) walkSync(p, depth + 1);
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+    walkSync(pool);
+    assert.ok(recycleFile, 'must find recycled note.txt');
+
+    // Replace the recycled object with an impostor of different identity.
+    rmSync(recycleFile);
+    writeFileSync(recycleFile, 'IMPOSTOR');
+
+    await assert.rejects(fx.undo(), (error) => error?.code === 'EINVAL');
+    // Must not restore the impostor into the workspace.
+    assert.equal(existsSync(join(root, 'note.txt')), false);
+    assert.equal(fx.canUndo(), true, 'failed undo keeps journal entry');
+    assert.equal(fx.peekUndo()?.kind, 'delete');
+  } finally {
+    await fx.dispose();
+    rmSync(sandbox, { recursive: true, force: true });
+  }
+});
+
 test('permanent delete is reported non-undoable via lastMutation', async () => {
   const { sandbox, root } = fixture();
   const fx = new FileExplorer({ roots: [root], settings, watchDebounceMs: 60_000 });

@@ -825,9 +825,15 @@ export declare function connectFileExplorer(
  * Port-backed explorer surface. Mirrors most of `FileExplorer` but several
  * methods are async RPC. Prefer this type over `FileExplorer` when typing
  * `connectFileExplorer` results.
+ *
+ * This is a **draft** surface aligned with the runtime class in
+ * `src/client-port.ts` / generated `dist/client-port.d.ts`. It is not a full
+ * structural duplicate of every method — see the generated declaration for
+ * the complete typed surface.
  */
 export interface PortFileExplorer {
-  readonly ready: Promise<void>;
+  /** Await the handshake + initial snapshot. Matches runtime `ready()`. */
+  ready(): Promise<void>;
   dispose(): Promise<void>;
   getSnapshot(): MirrorSnapshot;
   resolvePath(path: string): Promise<number | null>;
@@ -836,6 +842,5 @@ export interface PortFileExplorer {
   lastMutation(): Promise<UndoDescriptor | null>;
   undo(): Promise<UndoResult | null>;
   // Remaining methods match FileExplorer's async surface; see runtime class
-  // in `src/client-port.ts` for the full list.
-  [key: string]: unknown;
+  // in `src/client-port.ts` / `dist/client-port.d.ts` for the full list.
 }

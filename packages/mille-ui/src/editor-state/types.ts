@@ -9,6 +9,17 @@
  */
 export interface EditorTabState {
   readonly path: string;
+  /**
+   * Absolute workspace root this tab belongs to (multi-root). When set,
+   * view projectors and decorations resolve under this root instead of
+   * a single default.
+   */
+  readonly rootPath?: string;
+  /**
+   * Known engine EntryId. Prefer this for multi-root Open Files views so
+   * same-named files across roots cannot collide.
+   */
+  readonly entryId?: number;
   /** Unsaved buffer. Default false. */
   readonly dirty?: boolean;
   /**

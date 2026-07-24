@@ -1,4 +1,4 @@
-// Phase 5.2 — resolve ExplorerViewSeed paths to EntryIds.
+// Phase 5.2 — resolve ExplorerViewSeed paths / ids to EntryIds.
 
 import type { Entry, EntryId, FileExplorer, Uri } from '@vibecook/mille';
 import type { PortFileExplorer } from '@vibecook/mille/port';
@@ -13,7 +13,7 @@ import type {
   ExplorerViewModel,
   ExplorerViewSeed,
 } from './types.js';
-import { basenamePath } from './types.js';
+import { basenamePath, explorerViewItemKey } from './types.js';
 
 export interface ViewResolverLike {
   getByUri?(uri: Uri): Promise<Entry | null> | Entry | null;
@@ -27,14 +27,18 @@ export interface ViewResolverLike {
 
 export interface ResolveExplorerViewOptions {
   readonly fx: FileExplorer | PortFileExplorer | ViewResolverLike;
+  /**
+   * Default absolute workspace root for seeds that omit `seed.rootPath`.
+   * Multi-root hosts should set `seed.rootPath` (or `seed.id`) per item.
+   */
   readonly rootPath: string;
   readonly definition: ExplorerViewDefinition;
   readonly uriScheme?: string;
   /** Default 16. */
   readonly resolveConcurrency?: number;
   /**
-   * When true (default), drop seeds whose path fails safety validation.
-   * Unsafe paths never reach the engine.
+   * When true (default), drop seeds whose path fails safety validation
+   * *and* have no pre-resolved `id`. Seeds with a known id are kept.
    */
   readonly skipUnsafe?: boolean;
 }
@@ -57,6 +61,7 @@ export async function resolveExplorerView(
   } = options;
 
   const seeds = definition.seeds.filter((s) => {
+    if (s.id != null) return true;
     if (!skipUnsafe) return true;
     return isSafeWorkspaceRelativePath(s.path);
   });
@@ -84,30 +89,68 @@ export async function resolveExplorerView(
 
 async function resolveSeed(
   fx: ViewResolverLike,
-  rootPath: string,
+  defaultRootPath: string,
   uriScheme: string,
   seed: ExplorerViewSeed,
 ): Promise<ExplorerViewItem> {
+  const seedRoot = seed.rootPath ?? defaultRootPath;
   const name = seed.title ?? basenamePath(seed.path);
-  const base: ExplorerViewItem = {
-    id: null,
+  const baseFields = {
     path: seed.path,
     name,
     reason: seed.reason,
     order: seed.order ?? 0,
+    ...(seedRoot !== undefined ? { rootPath: seedRoot } : {}),
     ...(seed.badge !== undefined ? { badge: seed.badge } : {}),
     ...(seed.color !== undefined ? { color: seed.color } : {}),
     ...(seed.tooltip !== undefined ? { tooltip: seed.tooltip } : {}),
   };
 
-  if (!isSafeWorkspaceRelativePath(seed.path)) {
-    return base;
+  // Prefer known EntryId — multi-root safe and avoids wrong same-name hits.
+  if (seed.id != null && typeof fx.getSnapshot === 'function') {
+    const existing = fx.getSnapshot().getById(seed.id);
+    if (existing !== null) {
+      return {
+        ...baseFields,
+        key: explorerViewItemKey({ id: existing.id, path: seed.path, rootPath: seedRoot }),
+        id: existing.id,
+        name: existing.name.length > 0 ? existing.name : name,
+      };
+    }
   }
 
-  const entry = await resolvePathToEntry(fx, rootPath, uriScheme, seed.path);
-  if (entry === null) return base;
+  if (!isSafeWorkspaceRelativePath(seed.path)) {
+    return {
+      ...baseFields,
+      key: explorerViewItemKey({
+        id: seed.id ?? null,
+        path: seed.path,
+        rootPath: seedRoot,
+      }),
+      id: seed.id ?? null,
+    };
+  }
+
+  const entry = await resolvePathToEntry(fx, seedRoot, uriScheme, seed.path);
+  if (entry === null) {
+    return {
+      ...baseFields,
+      key: explorerViewItemKey({
+        id: seed.id ?? null,
+        path: seed.path,
+        rootPath: seedRoot,
+      }),
+      id: seed.id ?? null,
+    };
+  }
+
   return {
-    ...base,
+    ...baseFields,
+    key: explorerViewItemKey({
+      id: entry.id,
+      path: seed.path,
+      rootPath: seedRoot,
+    }),
     id: entry.id,
     name: entry.name.length > 0 ? entry.name : name,
   };
@@ -141,7 +184,6 @@ async function resolvePathToEntry(
       if (typeof fx.getSnapshot === 'function') {
         return fx.getSnapshot().getById(id as EntryId);
       }
-      // Port without snapshot walk — synthesize a minimal entry.
       return {
         id: id as EntryId,
         parentId: null,

@@ -33,12 +33,31 @@ export interface ProjectOpenFilesOptions {
 /**
  * Project editor tabs into an Open Files view.
  * Active first, then dirty, then path order.
+ *
+ * When tabs carry `entryId` / `rootPath`, those are preserved on seeds so
+ * multi-root workspaces resolve to the correct entry.
  */
 export function projectOpenFilesView(
   snapshot: EditorStateSnapshot,
   options: ProjectOpenFilesOptions = {},
 ): ExplorerViewDefinition {
   const flags = normalizeEditorState(snapshot);
+  // Prefer last-seen tab metadata (entryId, rootPath, title) per path.
+  const metaByPath = new Map<
+    string,
+    { entryId?: number; rootPath?: string; title?: string }
+  >();
+  for (const tab of snapshot.open) {
+    const prev = metaByPath.get(tab.path);
+    const next: { entryId?: number; rootPath?: string; title?: string } = {
+      ...prev,
+    };
+    if (tab.entryId !== undefined) next.entryId = tab.entryId;
+    if (tab.rootPath !== undefined) next.rootPath = tab.rootPath;
+    if (tab.title !== undefined) next.title = tab.title;
+    metaByPath.set(tab.path, next);
+  }
+
   const seeds: ExplorerViewSeed[] = [];
   for (const [path, f] of flags) {
     if (options.dirtyOnly === true && !f.dirty) continue;
@@ -48,11 +67,14 @@ export function projectOpenFilesView(
     const reasons: string[] = ['open'];
     if (f.dirty) reasons.push('dirty');
     if (f.active) reasons.push('active');
+    const meta = metaByPath.get(path);
     seeds.push({
       path,
       reason: reasons.join('+'),
       order,
-      title: f.title ?? basenamePath(path),
+      title: meta?.title ?? f.title ?? basenamePath(path),
+      ...(meta?.entryId !== undefined ? { id: meta.entryId } : {}),
+      ...(meta?.rootPath !== undefined ? { rootPath: meta.rootPath } : {}),
       ...(f.dirty
         ? {
             badge: '●',

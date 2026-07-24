@@ -1194,10 +1194,12 @@ Define merge precedence, accessible text, and update cost for every provider.
 - Open Files / Changed Files / Problems / Failed Tests / custom scopes.
   **Done (2026-07-24 first slice)** — `@vibecook/mille-ui/views`:
   pure projectors from editor/git/diagnostics/test-status snapshots,
-  `resolveExplorerView` for EntryId resolution (getByUri / resolvePath),
-  virtualized `ExplorerViewList` sharing EntryId identity with the project
-  tree. Playground sidebar switches Project / Open Files / Problems.
-  Tests: `packages/mille-ui/test/views.test.mjs`.
+  `resolveExplorerView` for EntryId resolution (prefer `seed.id`, else
+  path under `seed.rootPath` / default root), virtualized `ExplorerViewList`
+  with stable keys, key-based selection (unresolved rows work), and
+  listbox a11y. Playground sidebar switches Project / Open Files / Problems
+  and re-resolves on tree change events. Bench: `bench:views`.
+  Tests: `packages/mille-ui/test/views.test.mjs` (projectors + list harness).
 - Host-defined saved scopes. *(via `projectCustomScopeView`)*
 
 Reuse the same identity and virtualization primitives rather than forking the

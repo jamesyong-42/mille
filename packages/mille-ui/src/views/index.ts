@@ -10,6 +10,7 @@ export type {
 export {
   basenamePath,
   dirnamePath,
+  explorerViewItemKey,
   filterExplorerViewItems,
   sortViewSeeds,
 } from './types.js';
@@ -35,4 +36,7 @@ export type {
 export { resolveExplorerView } from './resolve.js';
 
 export type { ExplorerViewListProps } from './ExplorerViewList.js';
-export { ExplorerViewList } from './ExplorerViewList.js';
+export {
+  ExplorerViewList,
+  viewBadgeAccessibleLabel,
+} from './ExplorerViewList.js';

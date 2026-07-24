@@ -110,7 +110,8 @@
     "bench:collapse": "node bench/collapse-descendants.mjs",
     "bench:diagnostics": "node bench/diagnostics-update.mjs",
     "bench:editor-state": "node bench/editor-state-update.mjs",
-    "bench:test-status": "node bench/test-status-update.mjs"
+    "bench:test-status": "node bench/test-status-update.mjs",
+    "bench:views": "node bench/views-update.mjs"
   },
   "size-limit": [
     {

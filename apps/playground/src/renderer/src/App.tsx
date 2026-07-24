@@ -472,68 +472,72 @@ function Explorer({ fx, root }: { fx: PortFileExplorer; root: string }): ReactEl
     };
   }, [fx, root]);
 
-  useEffect(() => {
-    const client = editorStateClientRef.current;
-    if (!client) return;
+  /** Build open-tab seeds with EntryId + rootPath (multi-root safe). */
+  const buildOpenTabs = useCallback((): {
+    open: EditorTabState[];
+    activePath: string | null;
+  } => {
     const snap = fx.getSnapshot();
     const open: EditorTabState[] = [];
     let activePath: string | null = null;
     for (const tab of tabs) {
       if (tab.kind !== 'file' || tab.entryId == null) continue;
       const treePath = fileTreePathForId(snap, tab.entryId);
-      if (treePath === null) continue;
-      // fileTreePathForId is root-qualified (`rootName/rel`); strip root segment.
-      const slash = treePath.indexOf('/');
-      const rel = slash === -1 ? '' : treePath.slice(slash + 1);
-      if (rel.length === 0) continue;
+      // Prefer EntryId even when path projection fails (lazy / multi-root).
+      let rel = '';
+      if (treePath !== null) {
+        const slash = treePath.indexOf('/');
+        rel = slash === -1 ? '' : treePath.slice(slash + 1);
+      }
+      if (rel.length === 0) {
+        // Fall back to tab title as a display path; id still identifies the entry.
+        rel = tab.title || `entry:${tab.entryId}`;
+      }
       open.push({
         path: rel,
-        // Playground has no buffer edit model yet — treat nothing as dirty.
+        rootPath: root,
+        entryId: tab.entryId,
         dirty: false,
         active: tab.id === activeTabId,
+        title: tab.title,
       });
       if (tab.id === activeTabId) activePath = rel;
     }
-    client.setTabs(open, activePath);
-  }, [fx, tabs, activeTabId]);
+    return { open, activePath };
+  }, [fx, tabs, activeTabId, root]);
 
-  // Phase 5.2 — materialize Open Files / Problems view models.
+  useEffect(() => {
+    const client = editorStateClientRef.current;
+    if (!client) return;
+    const { open, activePath } = buildOpenTabs();
+    client.setTabs(open, activePath);
+  }, [buildOpenTabs]);
+
+  // Phase 5.2 — materialize Open Files / Problems; refresh on tree churn.
   useEffect(() => {
     if (sidebarView === 'project') {
       setViewModel(null);
       return;
     }
     let cancelled = false;
-    void (async () => {
+    let generation = 0;
+
+    const materialize = async () => {
+      const gen = ++generation;
       if (sidebarView === 'openFiles') {
-        const snap = fx.getSnapshot();
-        const open: EditorTabState[] = [];
-        let activePath: string | null = null;
-        for (const tab of tabs) {
-          if (tab.kind !== 'file' || tab.entryId == null) continue;
-          const treePath = fileTreePathForId(snap, tab.entryId);
-          if (treePath === null) continue;
-          const slash = treePath.indexOf('/');
-          const rel = slash === -1 ? '' : treePath.slice(slash + 1);
-          if (rel.length === 0) continue;
-          open.push({
-            path: rel,
-            dirty: false,
-            active: tab.id === activeTabId,
-            title: tab.title,
-          });
-          if (tab.id === activeTabId) activePath = rel;
-        }
+        const { open, activePath } = buildOpenTabs();
         const definition = projectOpenFilesView({ open, activePath });
         const model = await resolveExplorerView({
           fx,
           rootPath: root,
           definition,
         });
-        if (!cancelled) setViewModel(model);
+        if (!cancelled && gen === generation) setViewModel(model);
         return;
       }
       if (sidebarView === 'problems') {
+        // Demo seed until a live diagnostics bridge is available; still
+        // re-resolve when the tree snapshot changes so ids refresh.
         const definition = projectProblemsView(demoProblemsMap(), {
           minSeverity: 'info',
         });
@@ -542,13 +546,42 @@ function Explorer({ fx, root }: { fx: PortFileExplorer; root: string }): ReactEl
           rootPath: root,
           definition,
         });
-        if (!cancelled) setViewModel(model);
+        if (!cancelled && gen === generation) setViewModel(model);
       }
-    })();
+    };
+
+    void materialize();
+
+    // Re-resolve when the engine publishes tree/decoration deltas so renames,
+    // deletes, and newly hydrated paths refresh the view.
+    const unsubTree =
+      typeof fx.on === 'function'
+        ? fx.on('change:tree', () => {
+            void materialize();
+          })
+        : null;
+    const unsub =
+      typeof fx.on === 'function'
+        ? fx.on('change', () => {
+            void materialize();
+          })
+        : null;
+
     return () => {
       cancelled = true;
+      generation += 1;
+      try {
+        unsubTree?.dispose?.();
+      } catch {
+        /* ignore */
+      }
+      try {
+        unsub?.dispose?.();
+      } catch {
+        /* ignore */
+      }
     };
-  }, [fx, root, sidebarView, tabs, activeTabId]);
+  }, [fx, root, sidebarView, buildOpenTabs]);
 
   const openEntry = useCallback(
     async (entry: Entry | VisibleRow, event: FileOpenEvent) => {

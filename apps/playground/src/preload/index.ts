@@ -111,6 +111,45 @@ contextBridge.exposeInMainWorld('millePlayground', {
     );
   },
 
+  async getFileHistory(
+    path: string,
+    options?: { rootPath?: string; limit?: number },
+  ): Promise<
+    ReadonlyArray<{
+      id: string;
+      shortId?: string;
+      author?: string;
+      message?: string;
+      timestampMs: number;
+    }>
+  > {
+    const raw: unknown = await ipcRenderer.invoke('get-file-history', {
+      path,
+      rootPath: options?.rootPath,
+      limit: options?.limit,
+    });
+    return Array.isArray(raw) ? (raw as never) : [];
+  },
+
+  async scmCompare(request: {
+    path: string;
+    rootPath?: string;
+    left: { kind: 'working' } | { kind: 'revision'; revision: string };
+    right: { kind: 'working' } | { kind: 'revision'; revision: string };
+  }): Promise<{
+    path: string;
+    leftLabel: string;
+    rightLabel: string;
+    left: string | null;
+    right: string | null;
+  }> {
+    return (await ipcRenderer.invoke('scm-compare', request)) as never;
+  },
+
+  async scmRevert(paths: readonly string[], rootPath?: string): Promise<void> {
+    await ipcRenderer.invoke('scm-revert', { paths: [...paths], rootPath });
+  },
+
   async getWatchBenchConfig(): Promise<WatchBenchConfig | null> {
     return (await ipcRenderer.invoke('watch-bench:get-config')) as WatchBenchConfig | null;
   },

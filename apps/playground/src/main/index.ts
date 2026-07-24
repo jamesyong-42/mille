@@ -328,6 +328,78 @@ async function createWindow(): Promise<void> {
       return [];
     }
   });
+
+  // Phase 5.3 — file history + SCM mutations (main process, shell git).
+  ipcMain.handle('get-file-history', async (_evt, payload: unknown) => {
+    const body = payload as { rootPath?: string; path?: string; limit?: number };
+    const root =
+      typeof body?.rootPath === 'string' && body.rootPath.length > 0
+        ? body.rootPath
+        : activeWorkspaceRoot;
+    const rel = typeof body?.path === 'string' ? body.path : '';
+    if (!rel) return [];
+    try {
+      const { createShellFileHistoryClient } = await import(
+        '@vibecook/mille-ui/git/node'
+      );
+      const client = createShellFileHistoryClient({ rootPath: root });
+      return await client.getHistory({
+        path: rel,
+        rootPath: root,
+        limit: typeof body.limit === 'number' ? body.limit : 50,
+      });
+    } catch (err) {
+      console.warn('[playground-main] get-file-history failed:', err);
+      return [];
+    }
+  });
+
+  ipcMain.handle('scm-compare', async (_evt, payload: unknown) => {
+    const body = payload as {
+      rootPath?: string;
+      path?: string;
+      left?: { kind: string; revision?: string };
+      right?: { kind: string; revision?: string };
+    };
+    const root =
+      typeof body?.rootPath === 'string' && body.rootPath.length > 0
+        ? body.rootPath
+        : activeWorkspaceRoot;
+    const rel = typeof body?.path === 'string' ? body.path : '';
+    if (!rel) throw new Error('scm-compare: path required');
+    const { createShellScmClient } = await import('@vibecook/mille-ui/git/node');
+    const client = createShellScmClient({ rootPath: root });
+    if (!client.compare) throw new Error('scm-compare: unsupported');
+    const side = (s: { kind: string; revision?: string } | undefined) => {
+      if (s?.kind === 'revision' && typeof s.revision === 'string') {
+        return { kind: 'revision' as const, revision: s.revision };
+      }
+      return { kind: 'working' as const };
+    };
+    return client.compare({
+      path: rel,
+      rootPath: root,
+      left: side(body.left),
+      right: side(body.right),
+    });
+  });
+
+  ipcMain.handle('scm-revert', async (_evt, payload: unknown) => {
+    const body = payload as { rootPath?: string; paths?: string[] };
+    const root =
+      typeof body?.rootPath === 'string' && body.rootPath.length > 0
+        ? body.rootPath
+        : activeWorkspaceRoot;
+    const paths = Array.isArray(body?.paths)
+      ? body.paths.filter((p): p is string => typeof p === 'string')
+      : [];
+    if (paths.length === 0) throw new Error('scm-revert: paths required');
+    const { createShellScmClient } = await import('@vibecook/mille-ui/git/node');
+    const client = createShellScmClient({ rootPath: root });
+    if (!client.revert) throw new Error('scm-revert: unsupported');
+    await client.revert(paths, { rootPath: root });
+    return true;
+  });
 }
 
 app.whenReady().then(() => {

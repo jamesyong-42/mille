@@ -285,6 +285,30 @@ Also: `projectChangedFilesView`, `projectFailedTestsView`,
 Changed Files (live `getGitStatus` IPC) → Problems → Failed Tests via the
 sidebar title button.
 
+### 5.2c History / SCM actions
+
+```tsx
+import { createCommandRegistry, defaultCommands } from '@vibecook/mille-ui/commands';
+import { scmHistoryCommands, type ScmHostHooks } from '@vibecook/mille-ui/history';
+import { createShellFileHistoryClient, createShellScmClient } from '@vibecook/mille-ui/git/node';
+
+const registry = createCommandRegistry([...defaultCommands, ...scmHistoryCommands]);
+const hostHooks: ScmHostHooks = {
+  scm: createShellScmClient({ rootPath }),
+  history: createShellFileHistoryClient({ rootPath }),
+  confirm: (msg) => window.confirm(msg),
+  onProgress: (e) => console.log(e),
+  onCompareResult: (result) => openDiff(result),
+  onHistoryResult: (path, revs) => openTimeline(path, revs),
+};
+
+<FileTree fx={fx} hostHooks={hostHooks} /* … */ />
+```
+
+Commands: `scm.compareWithHead`, `scm.compareWithPrevious`, `scm.showHistory`,
+`scm.revert`. The playground exposes them on the file context menu and
+renders history / side-by-side compare in the editor pane.
+
 ### 5.2b Editor open / dirty / active
 
 Phase 5.1 — decorate open editors from the host's tab model:

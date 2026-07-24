@@ -73,6 +73,10 @@
       "types": "./dist/views.d.ts",
       "import": "./dist/views.js"
     },
+    "./history": {
+      "types": "./dist/history.d.ts",
+      "import": "./dist/history.js"
+    },
     "./agent-rules": {
       "types": "./dist/agent-rules.d.ts",
       "import": "./dist/agent-rules.js"

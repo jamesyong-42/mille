@@ -4,6 +4,13 @@
 
 ### Added
 
+- **File history + SCM actions (Phase 5.3)** — `@vibecook/mille-ui/history`
+  exports `FileHistoryClient`, `ScmClient`, `runScmRevert` / `runScmCompare` /
+  `runFileHistory` (confirm + progress + cancel), `scmHistoryCommands`, and
+  map clients for tests. Shell-backed git via
+  `createShellFileHistoryClient` / `createShellScmClient` on
+  `@vibecook/mille-ui/git/node`. `FileTree` accepts `hostHooks` to inject SCM
+  context into the command registry.
 - **Explorer views (Phase 5.2)** — `@vibecook/mille-ui/views` exports pure
   projectors (`projectOpenFilesView`, `projectChangedFilesView`,
   `projectProblemsView`, `projectFailedTestsView`, `projectCustomScopeView`),

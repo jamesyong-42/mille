@@ -40,7 +40,7 @@ import type {
 } from '../active-entry-policy.js';
 import type { FileActionTarget } from '../file-actions.js';
 import type { FileSearchRequest } from '../file-search.js';
-import type { FileRefreshTarget } from '../commands/types.js';
+import type { FileRefreshTarget, HostHooks } from '../commands/types.js';
 
 // Observer signatures mirror virtual-core's. Declared here rather
 // than in the hook to avoid a component → hook → component cycle.
@@ -573,6 +573,12 @@ export interface FileTreeProps {
    * the built-in groups. Ignored when `contextMenuSlot` is set.
    */
   readonly contextMenuExtraItems?: ReactNode;
+  /**
+   * Phase 5.3 — merged into `CommandContext.host` for context-menu /
+   * command dispatch. Use for SCM/history hooks (`scm`, `history`,
+   * `onCompareResult`, …) without forking the tree.
+   */
+  readonly hostHooks?: HostHooks & Record<string, unknown>;
   /**
    * Shown when no command matches the current `when` context. Ignored
    * when `contextMenuSlot` is set.

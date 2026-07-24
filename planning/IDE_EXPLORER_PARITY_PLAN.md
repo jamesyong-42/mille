@@ -1209,9 +1209,17 @@ tree component per view.
 #### 5.3 History and source-control actions
 
 - File timeline/history provider surface.
+  **Done (2026-07-24)** — `@vibecook/mille-ui/history` + shell
+  `createShellFileHistoryClient` (`git log`). Playground shows timeline panel.
 - Compare with previous or selected revision.
+  **Done** — `runScmCompare` + `scm.compareWithHead` /
+  `scm.compareWithPrevious`; playground side-by-side diff panel.
 - Revert/restore hooks with confirmation and progress.
+  **Done** — `runScmRevert` with confirm + progress phases; shell
+  `git restore` / `checkout`.
 - Context-aware SCM commands.
+  **Done** — `scmHistoryCommands` (`scm.*`) registered with playground
+  `hostHooks` on `FileTree`.
 
 #### 5.4 Command contribution contract
 

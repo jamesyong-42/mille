@@ -29,6 +29,31 @@ export interface MillePlaygroundApi {
   getGitStatus(
     rootPath?: string,
   ): Promise<ReadonlyArray<{ path: string; status: string; staged?: boolean }>>;
+  getFileHistory(
+    path: string,
+    options?: { rootPath?: string; limit?: number },
+  ): Promise<
+    ReadonlyArray<{
+      id: string;
+      shortId?: string;
+      author?: string;
+      message?: string;
+      timestampMs: number;
+    }>
+  >;
+  scmCompare(request: {
+    path: string;
+    rootPath?: string;
+    left: { kind: 'working' } | { kind: 'revision'; revision: string };
+    right: { kind: 'working' } | { kind: 'revision'; revision: string };
+  }): Promise<{
+    path: string;
+    leftLabel: string;
+    rightLabel: string;
+    left: string | null;
+    right: string | null;
+  }>;
+  scmRevert(paths: readonly string[], rootPath?: string): Promise<void>;
   getWatchBenchConfig(): Promise<WatchBenchConfig | null>;
   onWatchBenchEvent(listener: (event: WatchBenchEvent) => void): void;
   watchBenchReady(): void;

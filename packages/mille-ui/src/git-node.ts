@@ -13,3 +13,9 @@
 
 export { createShellGitClient } from './git/shell-client.js';
 export { watchDotGit } from './git/watch-dotgit.js';
+export {
+  createShellFileHistoryClient,
+  createShellScmClient,
+  parseGitLogLines,
+} from './git/shell-history.js';
+export type { ShellHistoryOptions } from './git/shell-history.js';

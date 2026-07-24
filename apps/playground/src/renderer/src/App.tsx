@@ -46,6 +46,13 @@ import type { TestResult } from '@vibecook/mille-ui/test-status';
 import type { IconTheme } from '@vibecook/mille-ui/icons';
 import { defaultIconTheme, duotoneIconTheme, minimalIconTheme } from '@vibecook/mille-ui/icons';
 import { createCommandRegistry, defaultCommands } from '@vibecook/mille-ui/commands';
+import {
+  scmHistoryCommands,
+  type FileHistoryRevision,
+  type ScmClient,
+  type ScmCompareResult,
+  type ScmHostHooks,
+} from '@vibecook/mille-ui/history';
 import type { Entry, FileExplorer, VisibleRow } from '@vibecook/mille';
 import { connectFileExplorer, type PortFileExplorer } from '@vibecook/mille/port';
 import { fxPortReady, onFxPort } from './fx-port';
@@ -263,9 +270,17 @@ export function App(): ReactElement {
 }
 
 function Explorer({ fx, root }: { fx: PortFileExplorer; root: string }): ReactElement {
-  const commands = useMemo(() => createCommandRegistry(defaultCommands), []);
+  const commands = useMemo(
+    () => createCommandRegistry([...defaultCommands, ...scmHistoryCommands]),
+    [],
+  );
   const treeRef = useFileTreeRef();
   const [fileActionStatus, setFileActionStatus] = useState<string | null>(null);
+  const [historyPanel, setHistoryPanel] = useState<{
+    path: string;
+    revisions: readonly FileHistoryRevision[];
+  } | null>(null);
+  const [comparePanel, setComparePanel] = useState<ScmCompareResult | null>(null);
   const performFileAction = useCallback(
     async (target: FileActionTarget, action: PlaygroundFileAction): Promise<void> => {
       try {
@@ -438,6 +453,58 @@ function Explorer({ fx, root }: { fx: PortFileExplorer; root: string }): ReactEl
   const [editorOpen, setEditorOpen] = useState(false);
   const [followActiveEditor, setFollowActiveEditor] = useState(true);
   const [singleClickPreview, setSingleClickPreview] = useState(true);
+
+  // Phase 5.3 — SCM/history host hooks (IPC to main-process shell git).
+  // Declared after editorOpen so compare can open the secondary pane.
+  const scmHostHooks = useMemo((): ScmHostHooks => {
+    const scm: ScmClient = {
+      async revert(paths, options) {
+        await window.millePlayground.scmRevert(paths, options?.rootPath ?? root);
+      },
+      async compare(request) {
+        return window.millePlayground.scmCompare({
+          path: request.path,
+          rootPath: request.rootPath ?? root,
+          left: request.left,
+          right: request.right,
+        });
+      },
+    };
+    return {
+      scm,
+      history: {
+        async getHistory(query) {
+          return window.millePlayground.getFileHistory(query.path, {
+            rootPath: query.rootPath ?? root,
+            limit: query.limit,
+          });
+        },
+      },
+      confirm: (message) => window.confirm(message),
+      onProgress: (event) => {
+        if (event.phase === 'completed' || event.phase === 'failed') {
+          setFileActionStatus(`${event.action}: ${event.message ?? event.phase}`);
+        }
+      },
+      onError: (error, ctx) => {
+        setFileActionStatus(
+          `${ctx.action} failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      },
+      onCompareResult: (result) => {
+        setComparePanel(result);
+        setHistoryPanel(null);
+        setEditorOpen(true);
+        setFileActionStatus(`Compare ${result.path}: ${result.leftLabel} ↔ ${result.rightLabel}`);
+      },
+      onHistoryResult: (path, revisions) => {
+        setHistoryPanel({ path, revisions });
+        setComparePanel(null);
+        setEditorOpen(true);
+        setFileActionStatus(`History ${path}: ${revisions.length} revision(s)`);
+      },
+    };
+  }, [root]);
 
   useEffect(() => {
     if (!settingsOpen) return;
@@ -920,6 +987,7 @@ function Explorer({ fx, root }: { fx: PortFileExplorer; root: string }): ReactEl
                   openBehavior={{
                     singleClick: singleClickPreview ? 'preview' : 'select',
                   }}
+                  hostHooks={scmHostHooks as ScmHostHooks & Record<string, unknown>}
                   onOpen={(row, event) => {
                     void openEntry(row, event);
                   }}
@@ -982,9 +1050,74 @@ function Explorer({ fx, root }: { fx: PortFileExplorer; root: string }): ReactEl
                   ) : null}
                 </button>
               ))}
+              {historyPanel ? (
+                <button
+                  type="button"
+                  role="tab"
+                  className="tab is-active"
+                  onClick={() => setHistoryPanel(null)}
+                  title="Close history panel"
+                >
+                  History · {historyPanel.path} ×
+                </button>
+              ) : null}
+              {comparePanel ? (
+                <button
+                  type="button"
+                  role="tab"
+                  className="tab is-active"
+                  onClick={() => setComparePanel(null)}
+                  title="Close compare panel"
+                >
+                  Diff · {comparePanel.path} ×
+                </button>
+              ) : null}
             </div>
             <div className="code-panel">
-              {activeTab.body.startsWith('// failed') ? (
+              {historyPanel ? (
+                <div className="history-panel" aria-label="File history">
+                  <ol className="history-list">
+                    {historyPanel.revisions.map((rev) => (
+                      <li key={rev.id} className="history-item">
+                        <code className="history-sha">{rev.shortId ?? rev.id.slice(0, 7)}</code>
+                        <span className="history-msg">{rev.message ?? '(no message)'}</span>
+                        <span className="history-meta">
+                          {rev.author ?? ''}
+                          {rev.timestampMs
+                            ? ` · ${new Date(rev.timestampMs).toLocaleString()}`
+                            : ''}
+                        </span>
+                      </li>
+                    ))}
+                  </ol>
+                  {historyPanel.revisions.length === 0 ? (
+                    <div className="code-error">No history for {historyPanel.path}</div>
+                  ) : null}
+                </div>
+              ) : comparePanel ? (
+                <div className="compare-panel" aria-label="Compare revisions">
+                  <div className="compare-col">
+                    <div className="compare-label">{comparePanel.leftLabel}</div>
+                    <pre className="code-scroll">
+                      {typeof comparePanel.left === 'string'
+                        ? comparePanel.left
+                        : comparePanel.left === null
+                          ? '(unavailable)'
+                          : '[binary]'}
+                    </pre>
+                  </div>
+                  <div className="compare-col">
+                    <div className="compare-label">{comparePanel.rightLabel}</div>
+                    <pre className="code-scroll">
+                      {typeof comparePanel.right === 'string'
+                        ? comparePanel.right
+                        : comparePanel.right === null
+                          ? '(unavailable)'
+                          : '[binary]'}
+                    </pre>
+                  </div>
+                </div>
+              ) : activeTab.body.startsWith('// failed') ? (
                 <div className="code-error">{activeTab.body}</div>
               ) : (
                 <pre

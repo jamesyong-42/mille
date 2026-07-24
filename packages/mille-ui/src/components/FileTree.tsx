@@ -181,6 +181,7 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
     contextMenuSlot,
     contextMenuExtraItems,
     contextMenuEmptyPlaceholder,
+    hostHooks,
     disableContextMenu = false,
     filter: controlledFilter,
     onFilterChange,
@@ -934,6 +935,7 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
       isMultiSelect: multiSelect && selectedIds.size > 1,
       isRenaming: renameState.renameTargetId !== null,
       host: {
+        ...(hostHooks ?? null),
         ...(onOpen ? { onOpen } : null),
         ...(onCopyPath ? { copyPath: onCopyPath } : null),
         ...(onRevealInFileManager
@@ -992,6 +994,7 @@ function FileTreeInner(props: FileTreeInnerProps): ReactElement {
     onOpenTerminal,
     onRefresh,
     onSearchScope,
+    hostHooks,
     expanded,
     setManyExpanded,
   ]);

@@ -38,6 +38,49 @@ function announceMutation(ctx: CommandContext, message: string): void {
   }
 }
 
+/** Phase 6.3 — surface mutation failure on the same channel. */
+function announceFailure(
+  ctx: CommandContext,
+  message: string,
+  error: unknown,
+): void {
+  const detail = error instanceof Error ? error.message : String(error);
+  try {
+    ctx.host.notify?.('error', `${message}: ${detail}`, error);
+  } catch {
+    /* host notify must not break mutations */
+  }
+}
+
+/**
+ * Run one mutation per id, reporting how far the batch got when it fails.
+ * A batch that dies on item 3 of 10 must not be silent — the user needs to
+ * know that seven entries were left untouched.
+ *
+ * The rejection is re-thrown unchanged: menus and `dispatchWithLifecycle`
+ * own the error path.
+ */
+async function runMutationBatch(
+  ctx: CommandContext,
+  ids: readonly EntryId[],
+  verbPast: string,
+  op: (id: EntryId) => Promise<unknown>,
+): Promise<void> {
+  const total = ids.length;
+  const noun = total === 1 ? 'item' : 'items';
+  let done = 0;
+  try {
+    for (const id of ids) {
+      await op(id);
+      done += 1;
+    }
+  } catch (error) {
+    announceFailure(ctx, `${verbPast} ${done} of ${total} ${noun}`, error);
+    throw error;
+  }
+  announceMutation(ctx, `${verbPast} ${done} ${done === 1 ? 'item' : 'items'}`);
+}
+
 // ─── Tree structure commands ───────────────────────────────────────────────
 
 /**
@@ -184,9 +227,14 @@ const createCommand: Command = {
   async run(ctx, args) {
     const parsed = parseCreateArgs(args, ctx);
     if (parsed === null) return;
-    await ctx.fx.create(parsed.parentId, parsed.name, parsed.kind);
-    const kindLabel = parsed.kind === KIND_DIRECTORY ? 'Folder' : 'File';
-    announceMutation(ctx, `Created ${kindLabel.toLowerCase()} ${parsed.name}`);
+    const kindLabel = parsed.kind === KIND_DIRECTORY ? 'folder' : 'file';
+    try {
+      await ctx.fx.create(parsed.parentId, parsed.name, parsed.kind);
+    } catch (error) {
+      announceFailure(ctx, `Could not create ${kindLabel} ${parsed.name}`, error);
+      throw error;
+    }
+    announceMutation(ctx, `Created ${kindLabel} ${parsed.name}`);
   },
 };
 
@@ -211,7 +259,12 @@ const renameCommand: Command = {
   async run(ctx, args) {
     const parsed = parseRenameArgs(args, ctx);
     if (parsed === null) return;
-    await ctx.fx.rename(parsed.id, parsed.newName);
+    try {
+      await ctx.fx.rename(parsed.id, parsed.newName);
+    } catch (error) {
+      announceFailure(ctx, `Could not rename to ${parsed.newName}`, error);
+      throw error;
+    }
     announceMutation(ctx, `Renamed to ${parsed.newName}`);
   },
 };
@@ -243,13 +296,8 @@ const deleteCommand: Command = {
       const ok = await ctx.host.confirm(message);
       if (!ok) return;
     }
-    for (const id of parsed.ids) {
-      await ctx.fx.delete(id, { trash: parsed.toTrash, recursive: parsed.recursive });
-    }
-    const n = parsed.ids.length;
-    announceMutation(
-      ctx,
-      n === 1 ? 'Deleted 1 item' : `Deleted ${n} items`,
+    await runMutationBatch(ctx, parsed.ids, 'Deleted', (id) =>
+      ctx.fx.delete(id, { trash: parsed.toTrash, recursive: parsed.recursive }),
     );
   },
 };
@@ -264,11 +312,9 @@ const moveCommand: Command = {
   async run(ctx, args) {
     const parsed = parseMoveOrCopyArgs(args, ctx);
     if (parsed === null) return;
-    for (const id of parsed.ids) {
-      await ctx.fx.move(id, parsed.targetParentId, parsed.newName);
-    }
-    const n = parsed.ids.length;
-    announceMutation(ctx, n === 1 ? 'Moved 1 item' : `Moved ${n} items`);
+    await runMutationBatch(ctx, parsed.ids, 'Moved', (id) =>
+      ctx.fx.move(id, parsed.targetParentId, parsed.newName),
+    );
   },
 };
 
@@ -282,11 +328,9 @@ const copyCommand: Command = {
   async run(ctx, args) {
     const parsed = parseMoveOrCopyArgs(args, ctx);
     if (parsed === null) return;
-    for (const id of parsed.ids) {
-      await ctx.fx.copy(id, parsed.targetParentId, parsed.newName);
-    }
-    const n = parsed.ids.length;
-    announceMutation(ctx, n === 1 ? 'Copied 1 item' : `Copied ${n} items`);
+    await runMutationBatch(ctx, parsed.ids, 'Copied', (id) =>
+      ctx.fx.copy(id, parsed.targetParentId, parsed.newName),
+    );
   },
 };
 

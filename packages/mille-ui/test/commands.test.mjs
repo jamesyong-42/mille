@@ -340,6 +340,56 @@ describe('defaultCommands — mutations', () => {
     ]);
   });
 
+  it('file.delete reports how far a partial batch got before failing', async () => {
+    const reg = createCommandRegistry(mutationDefaults);
+    const fx = makeFakeFx();
+    const failAfter = 2;
+    let seen = 0;
+    fx.delete = async (id, options) => {
+      seen += 1;
+      if (seen > failAfter) throw new Error('EACCES: permission denied');
+      fx.calls.push(['delete', { id, options }]);
+    };
+    const notes = [];
+    reg.setContextProvider(() =>
+      makeCtx({
+        fx,
+        selectedIds: new Set([1, 2, 3, 4]),
+        host: {
+          confirm: async () => true,
+          notify: (level, message) => notes.push([level, message]),
+        },
+      }),
+    );
+
+    // The rejection must still reach the caller — menus and
+    // dispatchWithLifecycle own the error path.
+    await assert.rejects(() => reg.dispatch('file.delete'), /EACCES/);
+
+    assert.equal(fx.calls.length, 2, 'stops at the first failure');
+    assert.deepEqual(notes, [
+      ['error', 'Deleted 2 of 4 items: EACCES: permission denied'],
+    ]);
+  });
+
+  it('file.delete announces the completed count on success', async () => {
+    const reg = createCommandRegistry(mutationDefaults);
+    const fx = makeFakeFx();
+    const notes = [];
+    reg.setContextProvider(() =>
+      makeCtx({
+        fx,
+        selectedIds: new Set([1, 2]),
+        host: {
+          confirm: async () => true,
+          notify: (level, message) => notes.push([level, message]),
+        },
+      }),
+    );
+    await reg.dispatch('file.delete');
+    assert.deepEqual(notes, [['info', 'Deleted 2 items']]);
+  });
+
   it('file.move delegates to fx.move per id', async () => {
     const reg = createCommandRegistry(mutationDefaults);
     const fx = makeFakeFx();

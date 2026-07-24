@@ -2,7 +2,14 @@
 //
 // Prevents event storms (bulk delete, rename floods) from flooding
 // screen readers. Coalesces messages within a window and enforces a
-// minimum interval between announcements.
+// minimum interval between announcements. Messages dropped by that
+// throttle are still counted, and the next spoken message carries an
+// "(and N more)" suffix — a storm reports its size instead of leaving
+// the user with one arbitrary filename.
+//
+// Two regions are mounted, one per politeness, because assistive tech
+// latches politeness at insertion time; flipping `aria-live` on a single
+// shared node is unreliable.
 //
 // DOM mount is lazy (first announce), never during React render.
 
@@ -38,7 +45,10 @@ export interface LiveAnnouncerOptions {
 }
 
 export interface LiveAnnouncer {
-  /** Queue a message for announcement. */
+  /**
+   * Queue a message for announcement. When throttling drops earlier queued
+   * messages, the next spoken one is suffixed with `(and N more)`.
+   */
   announce(message: string, politeness?: LivePoliteness): void;
   /**
    * Announce a bulk summary instead of N individual events.
@@ -77,38 +87,55 @@ export function createLiveAnnouncer(
   const schedule = options.setTimeout ?? globalThis.setTimeout.bind(globalThis);
   const cancel = options.clearTimeout ?? globalThis.clearTimeout.bind(globalThis);
 
-  let region: HTMLElement | null = null;
+  // Two regions, each with a politeness fixed at mount. Assistive tech
+  // latches a live region's politeness when it is inserted, so flipping
+  // `aria-live` on one shared node is unreliable — and `role="status"`
+  // (implicitly polite) contradicts `aria-live="assertive"` outright.
+  let politeRegion: HTMLElement | null = null;
+  let assertiveRegion: HTMLElement | null = null;
   let disposed = false;
   let lastAnnounceAt = 0;
   let pending: { message: string; politeness: LivePoliteness } | null = null;
+  /** Messages replaced before they were ever spoken (storm suppression). */
+  let suppressed = 0;
   let coalesceTimer: ReturnType<typeof setTimeout> | null = null;
   let intervalTimer: ReturnType<typeof setTimeout> | null = null;
 
-  function ensureMounted(): HTMLElement | null {
-    if (region || !doc || disposed) return region;
-    region = doc.createElement('div');
-    region.setAttribute('role', 'status');
-    region.setAttribute('aria-live', defaultPoliteness);
-    region.setAttribute('aria-atomic', 'true');
-    region.setAttribute('data-mille-live-announcer', '');
-    region.style.position = 'absolute';
-    region.style.width = '1px';
-    region.style.height = '1px';
-    region.style.padding = '0';
-    region.style.margin = '-1px';
-    region.style.overflow = 'hidden';
-    region.style.clip = 'rect(0, 0, 0, 0)';
-    region.style.whiteSpace = 'nowrap';
-    region.style.border = '0';
-    if (options.mount) options.mount(region);
-    else doc.body?.appendChild(region);
-    return region;
+  function createRegion(politeness: LivePoliteness): HTMLElement | null {
+    if (!doc) return null;
+    const el = doc.createElement('div');
+    // role=status is implicitly polite; role=alert is implicitly assertive.
+    el.setAttribute('role', politeness === 'assertive' ? 'alert' : 'status');
+    el.setAttribute('aria-live', politeness);
+    el.setAttribute('aria-atomic', 'true');
+    el.setAttribute('data-mille-live-announcer', politeness);
+    el.style.position = 'absolute';
+    el.style.width = '1px';
+    el.style.height = '1px';
+    el.style.padding = '0';
+    el.style.margin = '-1px';
+    el.style.overflow = 'hidden';
+    el.style.clip = 'rect(0, 0, 0, 0)';
+    el.style.whiteSpace = 'nowrap';
+    el.style.border = '0';
+    if (options.mount) options.mount(el);
+    else doc.body?.appendChild(el);
+    return el;
+  }
+
+  /** Mount both regions on first use so their order in the DOM is stable. */
+  function ensureMounted(politeness: LivePoliteness): HTMLElement | null {
+    if (!doc || disposed) return null;
+    if (politeRegion === null && assertiveRegion === null) {
+      politeRegion = createRegion('polite');
+      assertiveRegion = createRegion('assertive');
+    }
+    return politeness === 'assertive' ? assertiveRegion : politeRegion;
   }
 
   function speak(message: string, politeness: LivePoliteness): void {
-    const el = ensureMounted();
+    const el = ensureMounted(politeness);
     if (!el || !message) return;
-    el.setAttribute('aria-live', politeness);
     el.textContent = '';
     void el.offsetHeight;
     el.textContent = message;
@@ -137,15 +164,24 @@ export function createLiveAnnouncer(
     }
     const job = pending;
     pending = null;
-    speak(job.message, job.politeness);
+    // Report what the storm swallowed instead of dropping it silently: the
+    // point of a bulk operation is the count, not the last filename.
+    const extra = suppressed;
+    suppressed = 0;
+    speak(
+      extra > 0 ? `${job.message} (and ${extra} more)` : job.message,
+      job.politeness,
+    );
   }
 
   const api: LiveAnnouncer = {
     get mounted() {
-      return region !== null;
+      return politeRegion !== null || assertiveRegion !== null;
     },
     announce(message, politeness = defaultPoliteness) {
       if (disposed || !message.trim()) return;
+      // The message being replaced was never spoken — count it.
+      if (pending !== null) suppressed += 1;
       pending = { message: message.trim(), politeness };
       scheduleFlush();
     },
@@ -182,8 +218,12 @@ export function createLiveAnnouncer(
       coalesceTimer = null;
       intervalTimer = null;
       pending = null;
-      if (region?.parentNode) region.parentNode.removeChild(region);
-      region = null;
+      suppressed = 0;
+      for (const el of [politeRegion, assertiveRegion]) {
+        if (el?.parentNode) el.parentNode.removeChild(el);
+      }
+      politeRegion = null;
+      assertiveRegion = null;
     },
   };
 

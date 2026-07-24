@@ -4,6 +4,16 @@
 
 ### Fixed
 
+- **Live-region politeness (Phase 6.3)** — polite and assertive messages now
+  use two separate pre-mounted regions with matching implicit roles
+  (`status` / `alert`). Assistive tech latches a region's politeness when it
+  is inserted, so flipping `aria-live` on one shared node was unreliable, and
+  `role="status"` + `aria-live="assertive"` contradicted itself.
+- **Storm counts and mutation failures (Phase 6.3)** — messages dropped by the
+  announcer's throttle are counted and reported (`… (and 3 more)`) instead of
+  vanishing. Batch mutations announce partial progress when they fail partway
+  (`Deleted 2 of 4 items: EACCES…`) and single mutations announce failure;
+  previously only whole-batch success was announced.
 - **Multi-root active tab override** — bare `activePath` no longer marks every
   root’s matching file active; use `activeEntryId` or `activeRootPath` +
   `activePath` to disambiguate.

@@ -59,9 +59,11 @@ test('createLiveAnnouncer coalesces within window without flushForce', async () 
     }
   }
 
-  const region = body.querySelector('[data-mille-live-announcer]');
+  const region = body.querySelector('[data-mille-live-announcer="polite"]');
   assert.ok(region);
-  assert.equal(region.textContent, 'Deleted c.ts');
+  // Two messages were dropped by the coalesce window; the storm reports its
+  // size rather than leaving the user with one arbitrary filename.
+  assert.equal(region.textContent, 'Deleted c.ts (and 2 more)');
 
   // Second announce within minInterval should wait.
   announcer.announce('Deleted d.ts');
@@ -74,7 +76,7 @@ test('createLiveAnnouncer coalesces within window without flushForce', async () 
     }
   }
   // Still old message — min interval not elapsed.
-  assert.equal(region.textContent, 'Deleted c.ts');
+  assert.equal(region.textContent, 'Deleted c.ts (and 2 more)');
 
   fakeNow += 200;
   for (const t of [...timers]) {
@@ -87,6 +89,52 @@ test('createLiveAnnouncer coalesces within window without flushForce', async () 
   assert.equal(region.textContent, 'Deleted d.ts');
 
   announcer.dispose();
+});
+
+test('politeness uses separate regions with matching roles', () => {
+  const body = hdDocument.body;
+  const mounted = [];
+  const announcer = createLiveAnnouncer({
+    document: hdDocument,
+    minIntervalMs: 0,
+    coalesceWindowMs: 0,
+    mount: (el) => {
+      mounted.push(el);
+      body.appendChild(el);
+    },
+  });
+
+  announcer.announce('Saved', 'polite');
+  announcer.flushForce();
+  announcer.announce('Delete failed', 'assertive');
+  announcer.flushForce();
+
+  // Assistive tech latches politeness at insert time, so each politeness
+  // needs its own region — never one node with a mutated aria-live.
+  assert.equal(mounted.length, 2);
+  const polite = mounted.find(
+    (el) => el.getAttribute('data-mille-live-announcer') === 'polite',
+  );
+  const assertive = mounted.find(
+    (el) => el.getAttribute('data-mille-live-announcer') === 'assertive',
+  );
+  assert.ok(polite && assertive);
+  // role=status is implicitly polite, role=alert implicitly assertive —
+  // the pairing must not contradict aria-live.
+  assert.equal(polite.getAttribute('role'), 'status');
+  assert.equal(polite.getAttribute('aria-live'), 'polite');
+  assert.equal(assertive.getAttribute('role'), 'alert');
+  assert.equal(assertive.getAttribute('aria-live'), 'assertive');
+
+  assert.equal(polite.textContent, 'Saved');
+  assert.equal(assertive.textContent, 'Delete failed');
+
+  announcer.dispose();
+  assert.equal(
+    body.querySelectorAll('[data-mille-live-announcer]').length,
+    0,
+    'dispose removes both regions',
+  );
 });
 
 test('announceMany singular and plural', () => {

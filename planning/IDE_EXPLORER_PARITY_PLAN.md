@@ -1164,7 +1164,16 @@ Move from a capable filesystem tree to a central IDE navigation surface.
   `pnpm --filter @vibecook/mille-ui bench:diagnostics`.
   Tests: `packages/mille-ui/test/diagnostics-decorations.test.mjs`.
 - Test status and failure decorations. *(open)*
-- Dirty/open/active editor state. *(open — active-entry policy already exists)*
+- Dirty/open/active editor state.
+  **Done (2026-07-23)** — `@vibecook/mille-ui/editor-state` exports
+  `registerEditorStateDecorations` + `EditorStateClient` /
+  `createMapEditorStateClient`. Dirty → `●`, open → `○` (optional via
+  `decorateOpen`), tooltips for active/unsaved/open. Same hardening as
+  diagnostics (generation token, resolvePath fallback, path validation,
+  value-diff, onError). Playground wires open tabs to the port client
+  (`decorateOpen: false` until a dirty buffer model exists). Active row
+  highlight remains `activeEntry` on `FileTree`.
+  Tests: `packages/mille-ui/test/editor-state-decorations.test.mjs`.
 - Excluded, generated, library, and read-only state. *(partial via active-entry /
   ignore flags; decoration overlays still open)*
 

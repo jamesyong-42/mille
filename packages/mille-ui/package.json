@@ -61,6 +61,10 @@
       "types": "./dist/diagnostics.d.ts",
       "import": "./dist/diagnostics.js"
     },
+    "./editor-state": {
+      "types": "./dist/editor-state.d.ts",
+      "import": "./dist/editor-state.js"
+    },
     "./agent-rules": {
       "types": "./dist/agent-rules.d.ts",
       "import": "./dist/agent-rules.js"

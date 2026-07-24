@@ -4,6 +4,13 @@
 
 ### Added
 
+- **Editor-state decorations (Phase 5.1)** — `@vibecook/mille-ui/editor-state`
+  exports `registerEditorStateDecorations`, `EditorStateClient`, and
+  `createMapEditorStateClient`. Dirty tabs show `●`, clean open tabs show
+  `○` (toggle with `decorateOpen`); tooltips cover active / unsaved / open.
+  Shares diagnostics hardening (generation token, port `resolvePath`, path
+  validation, concurrency, value-diff, `onError`). Tokens:
+  `--mille-decoration-dirty|open|active`.
 - **Diagnostics decorations (Phase 5.1)** — `@vibecook/mille-ui/diagnostics`
   exports `registerDiagnosticsDecorations`, a host-supplied
   `DiagnosticsClient`, and `createMapDiagnosticsClient` for demos/tests.

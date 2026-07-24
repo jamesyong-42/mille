@@ -15,6 +15,7 @@ import {
 import {
   FileTreeProvider,
   FileTree,
+  fileTreePathForId,
   serializeFileTreeNavigationState,
   useFileTreeRef,
   type ActiveEntryPolicy,
@@ -24,6 +25,12 @@ import {
   type FileSearchRequest,
   type FileTreeNavigationState,
 } from '@vibecook/mille-ui';
+import {
+  createMapEditorStateClient,
+  registerEditorStateDecorations,
+  type EditorTabState,
+  type MapEditorStateClient,
+} from '@vibecook/mille-ui/editor-state';
 import type { IconTheme } from '@vibecook/mille-ui/icons';
 import { defaultIconTheme, duotoneIconTheme, minimalIconTheme } from '@vibecook/mille-ui/icons';
 import { createCommandRegistry, defaultCommands } from '@vibecook/mille-ui/commands';
@@ -380,8 +387,53 @@ function Explorer({ fx, root }: { fx: PortFileExplorer; root: string }): ReactEl
   const [activeTabId, setActiveTabId] = useState('welcome');
   const tabsRef = useRef<readonly EditorTab[]>(tabs);
   const loadRevisionRef = useRef(new Map<number, number>());
+  const editorStateClientRef = useRef<MapEditorStateClient | null>(null);
 
   const activeTab = tabs.find((t) => t.id === activeTabId) ?? tabs[0]!;
+
+  // Phase 5.1 — open/dirty/active decorations from the playground editor tabs.
+  // Registered against the port client (renderer-side decoration push).
+  useEffect(() => {
+    const client = createMapEditorStateClient();
+    editorStateClientRef.current = client;
+    const handle = registerEditorStateDecorations({
+      fx,
+      client,
+      rootPath: root,
+      // Hollow open circles are noisy next to SCM; only mark dirty for now.
+      // Active still gets a tooltip when dirty or when we later enable open dots.
+      decorateOpen: false,
+    });
+    return () => {
+      handle.dispose();
+      editorStateClientRef.current = null;
+    };
+  }, [fx, root]);
+
+  useEffect(() => {
+    const client = editorStateClientRef.current;
+    if (!client) return;
+    const snap = fx.getSnapshot();
+    const open: EditorTabState[] = [];
+    let activePath: string | null = null;
+    for (const tab of tabs) {
+      if (tab.kind !== 'file' || tab.entryId == null) continue;
+      const treePath = fileTreePathForId(snap, tab.entryId);
+      if (treePath === null) continue;
+      // fileTreePathForId is root-qualified (`rootName/rel`); strip root segment.
+      const slash = treePath.indexOf('/');
+      const rel = slash === -1 ? '' : treePath.slice(slash + 1);
+      if (rel.length === 0) continue;
+      open.push({
+        path: rel,
+        // Playground has no buffer edit model yet — treat nothing as dirty.
+        dirty: false,
+        active: tab.id === activeTabId,
+      });
+      if (tab.id === activeTabId) activePath = rel;
+    }
+    client.setTabs(open, activePath);
+  }, [fx, tabs, activeTabId]);
 
   const openEntry = useCallback(
     async (entry: Entry | VisibleRow, event: FileOpenEvent) => {

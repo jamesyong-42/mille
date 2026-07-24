@@ -49,6 +49,11 @@
   --mille-decoration-info-muted: #3d6fa3;
   --mille-decoration-hint-muted: #6c6c6c;
 
+  /* Editor open / dirty / active (Phase 5.1) */
+  --mille-decoration-dirty: #57606a;
+  --mille-decoration-open: #8b949e;
+  --mille-decoration-active: #0969da;
+
   /* Rename input */
   --mille-rename-input-bg: Canvas;
   --mille-rename-input-ring: var(--mille-accent-bg);
@@ -79,6 +84,10 @@
   --mille-decoration-warning-muted: #a68b64;
   --mille-decoration-info-muted: #3d6fa3;
   --mille-decoration-hint-muted: #6c6c6c;
+
+  --mille-decoration-dirty: #c9d1d9;
+  --mille-decoration-open: #8b949e;
+  --mille-decoration-active: #58a6ff;
 
   --mille-rename-input-bg: #0d1117;
   --mille-rename-input-ring: var(--mille-accent-bg);

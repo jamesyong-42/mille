@@ -259,7 +259,40 @@ const handle = registerGitDecorations({
 handle.dispose();
 ```
 
-### 5.2 Diagnostics / Problems
+### 5.2 Editor open / dirty / active
+
+Phase 5.1 — decorate open editors from the host's tab model:
+
+```tsx
+import {
+  registerEditorStateDecorations,
+  createMapEditorStateClient,
+} from '@vibecook/mille-ui/editor-state';
+
+const client = createMapEditorStateClient({
+  initial: {
+    open: [
+      { path: 'src/App.tsx', dirty: true, active: true },
+      { path: 'src/index.ts' },
+    ],
+  },
+});
+
+const handle = registerEditorStateDecorations({
+  fx, // FileExplorer or PortFileExplorer (resolvePath fallback)
+  client,
+  rootPath: '/Users/you/my-repo',
+  // decorateOpen: true,  // hollow ○ for clean open tabs (default true)
+});
+
+// Later: client.setDirty('src/App.tsx', false); client.setActive('src/index.ts');
+```
+
+Dirty tabs render `●`; clean open tabs render `○` (unless `decorateOpen:
+false`). Tooltips include "Active editor" / "Unsaved changes" /
+"Open in editor". Works on the port client (renderer decoration push).
+
+### 5.3 Diagnostics / Problems
 
 Phase 5.1 — problem badges from a host-supplied diagnostics client
 (LSP, ESLint, tsserver, …). Leaf rows show problem counts colored by
@@ -294,7 +327,7 @@ const handle = registerDiagnosticsDecorations({
 });
 ```
 
-### 5.3 Agent-rules
+### 5.4 Agent-rules
 
 Highlights "files-as-config" entries (`CLAUDE.md`, `.cursor/rules/*`,
 `.kiro/steering/*`, `.clinerules`, `.continue/*`, `AGENTS.md`, `.rules`):
@@ -309,15 +342,13 @@ const handle = registerAgentRulesDecorations({
 });
 ```
 
-### 5.4 Port-client limitation
+### 5.5 Port-client decoration notes
 
-`registerGitDecorations` / `registerDiagnosticsDecorations` /
-`registerAgentRulesDecorations` call `fx.registerDecorationProvider(...)`.
-The **port-backed client** in the playground does not surface that method
-yet — decorations run on the native engine in the UtilityProcess. For v0.1
-the playground registers against a no-op shim so the UI wiring is
-demonstrable; a host-side decoration forwarder (decoration frames across
-the port) lands in v0.2.
+`registerDecorationProvider` exists on both the in-process engine and the
+**port client** (renderer push of decoration frames). Git and demo
+diagnostics typically register in the UtilityProcess against the host store
+so all sessions share them; editor-state is natural to register in the
+renderer (only that window's tabs matter).
 
 If your renderer embeds the native engine directly (e.g. headless
 Node test, non-Electron shell), you get decorations end-to-end out of

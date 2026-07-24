@@ -1,5 +1,19 @@
 # mille changelog
 
+## Unreleased
+
+### Engine (`@vibecook/mille`)
+
+- **Filesystem provider boundary (Phase 6.1)** — new subpath
+  `@vibecook/mille/provider` with `FileSystemProvider` runtime, capability
+  helpers (bits **and** method presence → `EUNSUPPORTED`), memfs with
+  cycle-safe rename/copy + scoped watch, single-flight tree refresh,
+  shadow-safe registry, latency/offline wrappers, and platform path helpers
+  (drive/UNC/Unicode). Watcher-driven refreshes coalesce, while an explicit
+  `refresh()` is serialized behind any in-flight walk — so `await writeFile()`
+  → `await refresh()` never resolves with a tree read before the write.
+  Local `FileExplorer` unchanged; native `registerProvider` still deferred.
+
 ## 0.2.1 — 2026-07-12
 
 Explorer correctness + soft-duotone icons + docs site. No public-API breaks.

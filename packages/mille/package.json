@@ -34,6 +34,10 @@
     "./port": {
       "types": "./dist/client-port.d.ts",
       "import": "./dist/client-port.js"
+    },
+    "./provider": {
+      "types": "./dist/provider.d.ts",
+      "import": "./dist/provider.js"
     }
   },
   "files": [
@@ -70,6 +74,7 @@
     "bench:transfer-progress": "node bench/transfer-progress.mjs",
     "bench:cross-root": "node bench/cross-root-transfer.mjs",
     "bench:watch:soak": "node bench/watch-soak.mjs",
+    "bench:provider": "node bench/provider-memfs.mjs",
     "artifacts": "napi artifacts",
     "prepublishOnly": "napi prepublish -t npm"
   },

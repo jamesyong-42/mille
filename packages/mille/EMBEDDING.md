@@ -801,9 +801,18 @@ fresh traversal.
 The following are explicitly **deferred** for v0.1. Do not build around them
 yet — shape may change.
 
-- **Remote FS providers** — SSH, zip, memfs. The `FileSystemProvider` +
-  `registerProvider` surface in `api.d.ts` is stable for v0.2; the runtime
-  wiring lives behind the scheme dispatch and is not yet implemented.
+- **Remote FS providers (native scheme dispatch)** — SSH, zip, S3, etc.
+  The `FileSystemProvider` + `registerProvider` surface in `api.d.ts` remains
+  the long-term native contract. **Phase 6.1** ships a TypeScript provider
+  runtime at `@vibecook/mille/provider` with:
+  - `createMemoryFileSystemProvider` (non-local test/demo backend)
+  - capability gating (`withCapabilityGate`, `providerSupports`,
+    `describeUnsupported` → `EUNSUPPORTED`)
+  - registry, latency / offline wrappers, and `createProviderTreeSession`
+    for renderable trees without native scheme dispatch
+  - platform path helpers (`parsePlatformPath`, UNC/drive, Unicode NFC)
+  Native `registerProvider` wiring is still deferred; local `file:` trees
+  continue to use `FileExplorer`.
 - **Watchman optional backend** — v0.1 uses notify-rs's per-platform default
   (inotify / FSEvents / ReadDirectoryChangesW). A Watchman adapter is
   tracked for later.

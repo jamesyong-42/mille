@@ -34,6 +34,7 @@
     "bench:collision": "node packages/mille/bench/collision-policy.mjs",
     "bench:transfer-progress": "node packages/mille/bench/transfer-progress.mjs",
     "bench:cross-root": "node packages/mille/bench/cross-root-transfer.mjs",
+    "bench:provider": "node packages/mille/bench/provider-memfs.mjs",
     "bench:open-policy": "node apps/playground/scripts/editor-tab-churn-bench.mjs",
     "bench:active-policy": "node packages/mille-ui/bench/active-entry-policy.mjs",
     "bench:file-actions": "node packages/mille-ui/bench/file-action-path.mjs",

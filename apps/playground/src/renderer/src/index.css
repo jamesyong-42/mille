@@ -124,6 +124,31 @@ body {
   margin-right: 6px;
 }
 
+.tool-header-title-btn {
+  all: unset;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--jb-text-bright);
+  margin-right: 6px;
+  cursor: pointer;
+  border-radius: 3px;
+  padding: 0 4px;
+  height: 22px;
+}
+
+.tool-header-title-btn:hover {
+  background: var(--jb-hover, color-mix(in oklch, currentColor 8%, transparent));
+}
+
+.mille-explorer-view-list {
+  height: 100%;
+  color: var(--jb-text, inherit);
+}
+
 .tool-header-view {
   font-size: 9px;
   color: var(--jb-text-dim);

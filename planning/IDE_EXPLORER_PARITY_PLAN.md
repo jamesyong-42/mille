@@ -1190,12 +1190,15 @@ Define merge precedence, accessible text, and update cost for every provider.
 
 #### 5.2 Views and scopes
 
-- Files/Project view.
-- Open Files.
-- Changed Files.
-- Problems.
-- Tests or failed tests.
-- Host-defined saved scopes.
+- Files/Project view. *(existing FileTree)*
+- Open Files / Changed Files / Problems / Failed Tests / custom scopes.
+  **Done (2026-07-24 first slice)** — `@vibecook/mille-ui/views`:
+  pure projectors from editor/git/diagnostics/test-status snapshots,
+  `resolveExplorerView` for EntryId resolution (getByUri / resolvePath),
+  virtualized `ExplorerViewList` sharing EntryId identity with the project
+  tree. Playground sidebar switches Project / Open Files / Problems.
+  Tests: `packages/mille-ui/test/views.test.mjs`.
+- Host-defined saved scopes. *(via `projectCustomScopeView`)*
 
 Reuse the same identity and virtualization primitives rather than forking the
 tree component per view.

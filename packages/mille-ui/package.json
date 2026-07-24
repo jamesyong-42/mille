@@ -69,6 +69,10 @@
       "types": "./dist/test-status.d.ts",
       "import": "./dist/test-status.js"
     },
+    "./views": {
+      "types": "./dist/views.d.ts",
+      "import": "./dist/views.js"
+    },
     "./agent-rules": {
       "types": "./dist/agent-rules.d.ts",
       "import": "./dist/agent-rules.js"

@@ -4,6 +4,11 @@
 
 ### Added
 
+- **Explorer views (Phase 5.2)** — `@vibecook/mille-ui/views` exports pure
+  projectors (`projectOpenFilesView`, `projectChangedFilesView`,
+  `projectProblemsView`, `projectFailedTestsView`, `projectCustomScopeView`),
+  `resolveExplorerView` (path → EntryId), and virtualized `ExplorerViewList`.
+  Views share EntryId identity with the project tree without forking FileTree.
 - **Browser-safe undo types** — port client imports undo normalizers from a
   Node-free module so the Electron/Vite renderer build no longer pulls the
   native loader via `client.ts`.

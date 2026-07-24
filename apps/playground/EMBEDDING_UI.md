@@ -259,7 +259,32 @@ const handle = registerGitDecorations({
 handle.dispose();
 ```
 
-### 5.2 Editor open / dirty / active
+### 5.2 Explorer views (Open Files, Problems, …)
+
+Phase 5.2 — flat views that share `EntryId` with the project tree:
+
+```tsx
+import {
+  projectOpenFilesView,
+  projectProblemsView,
+  resolveExplorerView,
+  ExplorerViewList,
+} from '@vibecook/mille-ui/views';
+
+const definition = projectOpenFilesView(editorSnapshot);
+const model = await resolveExplorerView({ fx, rootPath, definition });
+
+<ExplorerViewList
+  model={model}
+  onOpen={(item) => item.id != null && reveal(item.id)}
+/>
+```
+
+Also: `projectChangedFilesView`, `projectFailedTestsView`,
+`projectCustomScopeView`. The playground cycles Project → Open Files →
+Problems via the sidebar title button.
+
+### 5.2b Editor open / dirty / active
 
 Phase 5.1 — decorate open editors from the host's tab model:
 

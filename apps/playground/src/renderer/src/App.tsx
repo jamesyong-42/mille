@@ -31,6 +31,14 @@ import {
   type EditorTabState,
   type MapEditorStateClient,
 } from '@vibecook/mille-ui/editor-state';
+import {
+  ExplorerViewList,
+  projectOpenFilesView,
+  projectProblemsView,
+  resolveExplorerView,
+  type ExplorerViewKind,
+  type ExplorerViewModel,
+} from '@vibecook/mille-ui/views';
 import type { IconTheme } from '@vibecook/mille-ui/icons';
 import { defaultIconTheme, duotoneIconTheme, minimalIconTheme } from '@vibecook/mille-ui/icons';
 import { createCommandRegistry, defaultCommands } from '@vibecook/mille-ui/commands';
@@ -47,6 +55,58 @@ import {
   type EditorTab,
 } from '../../../scripts/editor-tabs.mjs';
 import type { PlaygroundFileAction } from '../../../scripts/file-actions.mjs';
+
+type SidebarView = Extract<ExplorerViewKind, 'project' | 'openFiles' | 'problems'>;
+
+const SIDEBAR_VIEWS: ReadonlyArray<{ kind: SidebarView; label: string }> = [
+  { kind: 'project', label: 'Project' },
+  { kind: 'openFiles', label: 'Open Files' },
+  { kind: 'problems', label: 'Problems' },
+];
+
+/** Demo problems mirror of the utility-process diagnostics seed (Phase 5.1). */
+function demoProblemsMap(): Map<
+  string,
+  ReadonlyArray<{ path: string; severity: 'error' | 'warning' | 'info' | 'hint'; message?: string }>
+> {
+  return new Map([
+    [
+      'packages/mille-ui/package.json',
+      [
+        {
+          path: 'packages/mille-ui/package.json',
+          severity: 'warning',
+          message: 'Demo: consider pinning peerDependency ranges',
+        },
+      ],
+    ],
+    [
+      'packages/mille-ui/src/index.ts',
+      [
+        {
+          path: 'packages/mille-ui/src/index.ts',
+          severity: 'error',
+          message: "Demo: Cannot find name 'example'",
+        },
+        {
+          path: 'packages/mille-ui/src/index.ts',
+          severity: 'warning',
+          message: 'Demo: unused export surface',
+        },
+      ],
+    ],
+    [
+      'planning/IDE_EXPLORER_PARITY_PLAN.md',
+      [
+        {
+          path: 'planning/IDE_EXPLORER_PARITY_PLAN.md',
+          severity: 'info',
+          message: 'Demo: Phase 5.2 views',
+        },
+      ],
+    ],
+  ]);
+}
 
 interface ConnectionState {
   fx: PortFileExplorer;
@@ -385,6 +445,8 @@ function Explorer({ fx, root }: { fx: PortFileExplorer; root: string }): ReactEl
     },
   ]);
   const [activeTabId, setActiveTabId] = useState('welcome');
+  const [sidebarView, setSidebarView] = useState<SidebarView>('project');
+  const [viewModel, setViewModel] = useState<ExplorerViewModel | null>(null);
   const tabsRef = useRef<readonly EditorTab[]>(tabs);
   const loadRevisionRef = useRef(new Map<number, number>());
   const editorStateClientRef = useRef<MapEditorStateClient | null>(null);
@@ -434,6 +496,59 @@ function Explorer({ fx, root }: { fx: PortFileExplorer; root: string }): ReactEl
     }
     client.setTabs(open, activePath);
   }, [fx, tabs, activeTabId]);
+
+  // Phase 5.2 — materialize Open Files / Problems view models.
+  useEffect(() => {
+    if (sidebarView === 'project') {
+      setViewModel(null);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      if (sidebarView === 'openFiles') {
+        const snap = fx.getSnapshot();
+        const open: EditorTabState[] = [];
+        let activePath: string | null = null;
+        for (const tab of tabs) {
+          if (tab.kind !== 'file' || tab.entryId == null) continue;
+          const treePath = fileTreePathForId(snap, tab.entryId);
+          if (treePath === null) continue;
+          const slash = treePath.indexOf('/');
+          const rel = slash === -1 ? '' : treePath.slice(slash + 1);
+          if (rel.length === 0) continue;
+          open.push({
+            path: rel,
+            dirty: false,
+            active: tab.id === activeTabId,
+            title: tab.title,
+          });
+          if (tab.id === activeTabId) activePath = rel;
+        }
+        const definition = projectOpenFilesView({ open, activePath });
+        const model = await resolveExplorerView({
+          fx,
+          rootPath: root,
+          definition,
+        });
+        if (!cancelled) setViewModel(model);
+        return;
+      }
+      if (sidebarView === 'problems') {
+        const definition = projectProblemsView(demoProblemsMap(), {
+          minSeverity: 'info',
+        });
+        const model = await resolveExplorerView({
+          fx,
+          rootPath: root,
+          definition,
+        });
+        if (!cancelled) setViewModel(model);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [fx, root, sidebarView, tabs, activeTabId]);
 
   const openEntry = useCallback(
     async (entry: Entry | VisibleRow, event: FileOpenEvent) => {
@@ -513,6 +628,16 @@ function Explorer({ fx, root }: { fx: PortFileExplorer; root: string }): ReactEl
   }, [treeRef]);
 
   const workspaceLabel = useMemo(() => basename(root), [root]);
+  const sidebarTitle =
+    SIDEBAR_VIEWS.find((v) => v.kind === sidebarView)?.label ?? 'Project';
+
+  const cycleSidebarView = useCallback(() => {
+    setSidebarView((current) => {
+      const idx = SIDEBAR_VIEWS.findIndex((v) => v.kind === current);
+      const next = SIDEBAR_VIEWS[(idx + 1) % SIDEBAR_VIEWS.length];
+      return next?.kind ?? 'project';
+    });
+  }, []);
 
   return (
     <FileTreeProvider fx={fx as unknown as FileExplorer} commands={commands}>
@@ -521,57 +646,66 @@ function Explorer({ fx, root }: { fx: PortFileExplorer; root: string }): ReactEl
         {/* ── Project tool window ─────────────────────────────── */}
         <aside className="sidebar">
           <div className="tool-header">
-            <span className="tool-header-title">
-              Project
-              <span className="tool-header-view" title="View mode">
+            <button
+              type="button"
+              className="tool-header-title tool-header-title-btn"
+              title="Cycle view: Project → Open Files → Problems"
+              onClick={cycleSidebarView}
+            >
+              {sidebarTitle}
+              <span className="tool-header-view" aria-hidden="true">
                 ▾
               </span>
-            </span>
+            </button>
             <span className="tool-header-meta" title={root}>
               {workspaceLabel}
             </span>
-            <button
-              type="button"
-              title="Filter (⌘F)"
-              aria-pressed={filterOpen}
-              onClick={() => {
-                setFilterOpen((v) => {
-                  const next = !v;
-                  if (next) {
-                    requestAnimationFrame(() => treeRef.current?.focusFilter());
-                  } else {
-                    treeRef.current?.clearFilter();
-                  }
-                  return next;
-                });
-              }}
-            >
-              ⌕
-            </button>
-            <button type="button" title="Collapse all" onClick={collapseProject}>
-              ⊟
-            </button>
-            <button
-              type="button"
-              title="Refresh workspace from disk"
-              onClick={() => {
-                void refreshFromDisk({ kind: 'workspace' });
-              }}
-            >
-              ↻
-            </button>
-            <button
-              type="button"
-              title="Reveal active file"
-              disabled={activeTab.entryId === undefined}
-              onClick={() => {
-                if (activeTab.entryId !== undefined) {
-                  treeRef.current?.revealId(activeTab.entryId);
-                }
-              }}
-            >
-              ◎
-            </button>
+            {sidebarView === 'project' ? (
+              <>
+                <button
+                  type="button"
+                  title="Filter (⌘F)"
+                  aria-pressed={filterOpen}
+                  onClick={() => {
+                    setFilterOpen((v) => {
+                      const next = !v;
+                      if (next) {
+                        requestAnimationFrame(() => treeRef.current?.focusFilter());
+                      } else {
+                        treeRef.current?.clearFilter();
+                      }
+                      return next;
+                    });
+                  }}
+                >
+                  ⌕
+                </button>
+                <button type="button" title="Collapse all" onClick={collapseProject}>
+                  ⊟
+                </button>
+                <button
+                  type="button"
+                  title="Refresh workspace from disk"
+                  onClick={() => {
+                    void refreshFromDisk({ kind: 'workspace' });
+                  }}
+                >
+                  ↻
+                </button>
+                <button
+                  type="button"
+                  title="Reveal active file"
+                  disabled={activeTab.entryId === undefined}
+                  onClick={() => {
+                    if (activeTab.entryId !== undefined) {
+                      treeRef.current?.revealId(activeTab.entryId);
+                    }
+                  }}
+                >
+                  ◎
+                </button>
+              </>
+            ) : null}
             <button
               type="button"
               title={editorOpen ? 'Hide editor' : 'Show editor'}
@@ -622,6 +756,34 @@ function Explorer({ fx, root }: { fx: PortFileExplorer; root: string }): ReactEl
             className="tree-container"
             data-mille-theme={iconThemeId === 'minimal' ? 'minimal' : undefined}
           >
+            {sidebarView !== 'project' && viewModel ? (
+              <ExplorerViewList
+                model={viewModel}
+                ariaLabel={viewModel.title}
+                rowHeight={iconThemeId === 'minimal' ? 26 : 17}
+                emptyState={
+                  <div className="tree-navigation-loading">
+                    {sidebarView === 'openFiles'
+                      ? 'No open files — open a file from the Project view'
+                      : 'No problems'}
+                  </div>
+                }
+                onOpen={(item) => {
+                  if (item.id === null) return;
+                  const entry = fx.getSnapshot().getById(item.id);
+                  if (entry === null) return;
+                  void openEntry(entry, {
+                    mode: 'permanent',
+                    source: 'command',
+                  });
+                  setSidebarView('project');
+                  requestAnimationFrame(() => {
+                    treeRef.current?.revealId(item.id!);
+                  });
+                }}
+              />
+            ) : null}
+            {sidebarView === 'project' ? (
             <Profiler id="file-tree" onRender={onTreeRender}>
               {initialNavigationState === undefined ? (
                 <div className="tree-navigation-loading" aria-busy="true">
@@ -666,6 +828,7 @@ function Explorer({ fx, root }: { fx: PortFileExplorer; root: string }): ReactEl
                 />
               )}
             </Profiler>
+            ) : null}
           </div>
         </aside>
 

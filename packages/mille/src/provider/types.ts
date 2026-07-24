@@ -112,7 +112,16 @@ export interface FileSystemProvider {
     options?: { recursive?: boolean; trash?: boolean },
   ): Promise<void>;
   rename?(oldUri: Uri, newUri: Uri): Promise<void>;
-  copy?(source: Uri, destination: Uri): Promise<void>;
+  /**
+   * Copy a file or directory. Fails with `EEXIST` when the destination
+   * exists unless `overwrite` is set — a silent clobber is never the
+   * default, and the collision policy belongs to the caller.
+   */
+  copy?(
+    source: Uri,
+    destination: Uri,
+    options?: { overwrite?: boolean },
+  ): Promise<void>;
   watch?(uri: Uri, options?: WatchOptions): Watcher;
   readFileStream?(
     uri: Uri,

@@ -46,10 +46,10 @@ export function parsePlatformPath(
   path: string,
   platform: PathPlatform = guessPlatform(path),
 ): ParsedPlatformPath {
-  if (platform === 'win32' || isUncPath(path) || isWindowsDrivePath(path)) {
-    return parseWin32(path);
-  }
-  return parsePosix(path);
+  // Honor an explicit platform. The default already guesses win32 for UNC and
+  // drive forms, so re-checking them here would override a caller who passes
+  // 'posix' deliberately — POSIX permits `\` and `:` in file names.
+  return platform === 'win32' ? parseWin32(path) : parsePosix(path);
 }
 
 function guessPlatform(path: string): PathPlatform {

@@ -310,6 +310,98 @@ test('provider tree session single-flight refresh under write burst', async () =
   session.dispose();
 });
 
+test('memfs copy refuses to clobber unless overwrite is set', async () => {
+  const fs = createMemoryFileSystemProvider({
+    files: { '/a.ts': 'A', '/b.ts': 'B', '/dir/x.ts': 'X' },
+  });
+  const enc = new TextDecoder();
+
+  // File onto existing file: same rule as directory onto directory.
+  await assert.rejects(
+    () => fs.copy(createUri('memfs', '/a.ts'), createUri('memfs', '/b.ts')),
+    (err) => isFileSystemError(err) && err.code === 'EEXIST',
+  );
+  assert.equal(
+    enc.decode(await fs.readFile(createUri('memfs', '/b.ts'))),
+    'B',
+    'destination untouched by the refused copy',
+  );
+
+  await fs.copy(createUri('memfs', '/a.ts'), createUri('memfs', '/b.ts'), {
+    overwrite: true,
+  });
+  assert.equal(enc.decode(await fs.readFile(createUri('memfs', '/b.ts'))), 'A');
+
+  // Copying onto a directory is still a kind error, not a clobber.
+  await assert.rejects(
+    () =>
+      fs.copy(createUri('memfs', '/a.ts'), createUri('memfs', '/dir'), {
+        overwrite: true,
+      }),
+    (err) => isFileSystemError(err) && err.code === 'EISDIR',
+  );
+
+  // Fresh destinations still work.
+  await fs.copy(createUri('memfs', '/dir'), createUri('memfs', '/dir-copy'));
+  assert.equal(
+    enc.decode(await fs.readFile(createUri('memfs', '/dir-copy/x.ts'))),
+    'X',
+  );
+});
+
+test('wrappers forward copy options instead of dropping them', async () => {
+  const fs = createMemoryFileSystemProvider({
+    files: { '/a.ts': 'A', '/b.ts': 'B' },
+  });
+  const gated = withCapabilityGate(fs);
+  const { provider: offlineGated } = withOfflineGate(gated);
+  await offlineGated.copy(
+    createUri('memfs', '/a.ts'),
+    createUri('memfs', '/b.ts'),
+    { overwrite: true },
+  );
+  assert.equal(
+    new TextDecoder().decode(await fs.readFile(createUri('memfs', '/b.ts'))),
+    'A',
+  );
+});
+
+test('offline gate stops delivery from an already-created watcher', async () => {
+  const fs = createMemoryFileSystemProvider({ files: { '/a.ts': 'A' } });
+  const { provider, offline } = withOfflineGate(fs);
+  const seen = [];
+  const watcher = provider.watch(createUri('memfs', '/'), { recursive: true });
+  watcher.onDidChange((e) => seen.push(e.type));
+
+  await fs.writeFile(createUri('memfs', '/b.ts'), new Uint8Array([1]));
+  assert.equal(seen.length, 1, 'delivers while online');
+
+  offline.setOffline(true);
+  await fs.writeFile(createUri('memfs', '/c.ts'), new Uint8Array([1]));
+  assert.equal(seen.length, 1, 'a disconnected provider stops streaming');
+
+  offline.setOffline(false);
+  await fs.writeFile(createUri('memfs', '/d.ts'), new Uint8Array([1]));
+  assert.equal(seen.length, 2, 'delivery resumes on reconnect');
+  watcher.dispose();
+});
+
+test('parsePlatformPath honors an explicit platform', () => {
+  // POSIX permits `\` and `:` in names; a caller asking for posix must not
+  // get win32 drive parsing.
+  const asPosix = parsePlatformPath('C:\\weird\\name', 'posix');
+  assert.equal(asPosix.platform, 'posix');
+  assert.equal(asPosix.drive, null);
+
+  const asWin = parsePlatformPath('C:\\weird\\name', 'win32');
+  assert.equal(asWin.platform, 'win32');
+  assert.equal(asWin.drive, 'C');
+
+  // Default still guesses from the shape.
+  assert.equal(parsePlatformPath('C:\\x').platform, 'win32');
+  assert.equal(parsePlatformPath('/home/x').platform, 'posix');
+});
+
 test('explicit refresh observes a mutation made during an in-flight walk', async () => {
   // Joining an in-flight walk let refresh() resolve with a tree read *before*
   // the caller's own write. The gate below holds the first walk open at the

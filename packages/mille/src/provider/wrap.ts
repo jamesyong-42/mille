@@ -18,6 +18,11 @@ export interface LatencyOptions {
   readonly jitterMs?: number;
   /** Optional AbortSignal checked after the delay. */
   readonly signal?: AbortSignal;
+  /**
+   * Source of randomness for jitter, in `[0, 1)`. Defaults to `Math.random`.
+   * Pass a seeded generator to keep a benchmark reproducible.
+   */
+  readonly random?: () => number;
 }
 
 async function sleep(ms: number, signal?: AbortSignal): Promise<void> {
@@ -49,9 +54,15 @@ async function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 
 /**
  * Wrap a provider so mutating / optional operations are pre-checked against
- * capabilities **and** method presence. Missing methods throw EUNSUPPORTED
- * (never TypeError). Methods that the inner provider does not implement are
- * omitted from the wrapper surface.
+ * capabilities **and** method presence.
+ *
+ * Exposure follows the inner provider: a method the inner provider does not
+ * implement is omitted here too, so `typeof wrapped.rename === 'function'`
+ * stays an honest probe. Capability *bits* are enforced when the method is
+ * called, not by hiding it — a read-only provider that still implements
+ * `writeFile` keeps the method and rejects with `EUNSUPPORTED`. Use
+ * `providerSupportsOperation` (bits + method) for UI enablement rather than
+ * probing for the method alone.
  */
 export function withCapabilityGate(
   provider: FileSystemProvider,
@@ -105,9 +116,9 @@ export function withCapabilityGate(
   }
 
   if (typeof provider.copy === 'function') {
-    out.copy = async (source, destination) => {
+    out.copy = async (source, destination, opts) => {
       gate('copy');
-      return provider.copy!(source, destination);
+      return provider.copy!(source, destination, opts);
     };
   }
 
@@ -139,9 +150,10 @@ export function withLatency(
   const delayMs = options.delayMs ?? 0;
   const jitterMs = options.jitterMs ?? 0;
 
+  const random = options.random ?? Math.random;
+
   async function before(signal?: AbortSignal): Promise<void> {
-    const jitter =
-      jitterMs > 0 ? Math.floor(Math.random() * (jitterMs + 1)) : 0;
+    const jitter = jitterMs > 0 ? Math.floor(random() * (jitterMs + 1)) : 0;
     await sleep(delayMs + jitter, signal ?? options.signal);
   }
 
@@ -187,9 +199,9 @@ export function withLatency(
     };
   }
   if (typeof provider.copy === 'function') {
-    out.copy = async (source, destination) => {
+    out.copy = async (source, destination, opts) => {
       await before();
-      return provider.copy!(source, destination);
+      return provider.copy!(source, destination, opts);
     };
   }
   if (typeof provider.watch === 'function') {
@@ -269,15 +281,29 @@ export function withOfflineGate(
     };
   }
   if (typeof provider.copy === 'function') {
-    wrapped.copy = async (source, destination) => {
+    wrapped.copy = async (source, destination, opts) => {
       check();
-      return provider.copy!(source, destination);
+      return provider.copy!(source, destination, opts);
     };
   }
   if (typeof provider.watch === 'function') {
     wrapped.watch = (uri, opts) => {
       check();
-      return provider.watch!(uri, opts);
+      const inner = provider.watch!(uri, opts);
+      // A watcher created while online must also stop delivering when the
+      // connection drops — otherwise "offline" only gates new calls and the
+      // tree keeps reconciling against a provider it cannot reach.
+      return {
+        onDidChange(listener) {
+          return inner.onDidChange((event) => {
+            if (offline) return;
+            listener(event);
+          });
+        },
+        dispose() {
+          inner.dispose();
+        },
+      };
     };
   }
   if (typeof provider.readFileStream === 'function') {

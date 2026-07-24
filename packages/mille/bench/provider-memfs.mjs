@@ -7,10 +7,18 @@ const {
   createMemoryFileSystemProvider,
   createProviderTreeSession,
   createUri,
+  withLatency,
 } = await import('../dist/provider.js');
 
 const N = 2_000;
 const WRITE_BURST = 100;
+
+// Remote-like walk probe. 6 directories × 4 files = 38 provider calls; at
+// LAT_MS each, a strictly serial walk costs ~190 ms, so the budget below
+// fails if the walk stops overlapping calls.
+const LAT_DIRS = 6;
+const LAT_FILES = 4;
+const LAT_MS = 5;
 
 // Budgets (ms) — generous enough for CI noise, tight enough to catch regressions.
 const BUDGET = {
@@ -20,6 +28,7 @@ const BUDGET = {
   writeBurstMs: 80,
   watcherConvergenceMs: 200,
   maxWatcherNotifications: 8,
+  latencyWalkMs: 120,
 };
 
 const files = {};
@@ -71,6 +80,24 @@ while (performance.now() < deadline) {
 }
 const t6 = performance.now();
 
+const latencyFiles = {};
+for (let d = 0; d < LAT_DIRS; d += 1) {
+  for (let f = 0; f < LAT_FILES; f += 1) {
+    latencyFiles[`/l${d}/f${f}.ts`] = 'x';
+  }
+}
+const latencySession = createProviderTreeSession(
+  withLatency(createMemoryFileSystemProvider({ files: latencyFiles }), {
+    delayMs: LAT_MS,
+  }),
+  createUri('memfs', '/'),
+  { debounceMs: 8 },
+);
+const t7 = performance.now();
+await latencySession.refresh();
+const t8 = performance.now();
+latencySession.dispose();
+
 const result = {
   seedFiles: N,
   seedMs: +(t1 - t0).toFixed(2),
@@ -81,6 +108,8 @@ const result = {
   writeBurstMs: +(t5 - t4).toFixed(2),
   watcherNotifications: notifications,
   watcherConvergenceMs: +(t6 - t5).toFixed(2),
+  latencyWalkCalls: LAT_DIRS * (LAT_FILES + 2) + 2,
+  latencyWalkMs: +(t8 - t7).toFixed(2),
 };
 
 console.log(JSON.stringify(result));
@@ -110,6 +139,11 @@ if (result.watcherNotifications > BUDGET.maxWatcherNotifications) {
 }
 if (result.watcherNotifications < 1) {
   failures.push('watcherNotifications expected ≥ 1');
+}
+if (result.latencyWalkMs > BUDGET.latencyWalkMs) {
+  failures.push(
+    `latencyWalkMs ${result.latencyWalkMs} > ${BUDGET.latencyWalkMs} (walk stopped overlapping provider calls?)`,
+  );
 }
 
 session.dispose();

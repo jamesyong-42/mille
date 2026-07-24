@@ -13,6 +13,21 @@
   `refresh()` is serialized behind any in-flight walk — so `await writeFile()`
   → `await refresh()` never resolves with a tree read before the write.
   Local `FileExplorer` unchanged; native `registerProvider` still deferred.
+- **Bounded-concurrency provider walk** — a walk overlaps provider calls under
+  a shared cap (`concurrency`, default 8) instead of awaiting each `stat` /
+  `readDirectory` in series. On a 38-call tree behind a 5 ms provider the walk
+  drops from ~222 ms to ~39 ms; `bench:provider` gates it. The walk still
+  rebuilds the whole tree — scoped invalidation is the next step.
+- **Provider copy collisions** — `copy` takes `{ overwrite }` and fails with
+  `EEXIST` when the destination exists. Copying a file used to clobber the
+  destination silently while copying a directory threw; wrappers now forward
+  the option instead of dropping it.
+- **Offline gate covers live watchers** — a watcher created while online stops
+  delivering events once the provider is marked offline, and resumes on
+  reconnect. Previously "offline" only rejected new calls.
+- **`parsePlatformPath` honors its `platform` argument** — passing `'posix'`
+  no longer falls through to Windows drive/UNC parsing (POSIX permits `\` and
+  `:` in names).
 
 ### UI (`@vibecook/mille-ui`)
 

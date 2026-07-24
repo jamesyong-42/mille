@@ -397,7 +397,7 @@ export function createMemoryFileSystemProvider(
       });
     },
 
-    async copy(source, destination) {
+    async copy(source, destination, options) {
       assertWritable();
       assertSameScheme(source);
       assertSameScheme(destination);
@@ -411,18 +411,29 @@ export function createMemoryFileSystemProvider(
         );
       }
       const src = ensureNode(from);
+      const existing = getNode(to);
+      if (existing && options?.overwrite !== true) {
+        throw new FileSystemError('EEXIST', 'File exists', to);
+      }
       if (src.kind === EntryKind.File) {
+        if (existing && existing.kind !== EntryKind.File) {
+          throw new FileSystemError('EISDIR', 'Is a directory', to);
+        }
         await provider.writeFile!(destination, new Uint8Array(src.content));
         return;
       }
-      await provider.createDirectory!(destination);
+      if (!existing) {
+        await provider.createDirectory!(destination);
+      } else if (existing.kind !== EntryKind.Directory) {
+        throw new FileSystemError('ENOTDIR', 'Not a directory', to);
+      }
       for (const childKey of src.children.values()) {
         const child = nodes.get(childKey);
         if (!child) continue;
         const childSrc =
           from === '/' ? `/${child.name}` : `${from}/${child.name}`;
         const childDst = joinUriPath(to, child.name);
-        await provider.copy!(uriFor(childSrc), uriFor(childDst));
+        await provider.copy!(uriFor(childSrc), uriFor(childDst), options);
       }
     },
 

@@ -8,6 +8,10 @@
 // walk that started after the call, so a host can `await provider.writeFile()`
 // then `await refresh()` and see its own write. Joining the in-flight walk
 // would resolve with a tree read before that write.
+//
+// A walk still rebuilds the whole tree; only its concurrency is bounded.
+// Scoped invalidation (rebuilding just the subtree named by a watcher event)
+// is the next step and is what a high-latency provider really needs.
 
 import type {
   FileSystemProvider,
@@ -55,6 +59,15 @@ export interface ProviderTreeSessionOptions {
    * single-flight).
    */
   readonly debounceMs?: number;
+  /**
+   * Maximum provider calls in flight across the whole walk. Default 8.
+   *
+   * A walk costs one `stat` + one `readDirectory` per directory. Issuing
+   * those serially makes a remote provider's walk cost
+   * `directories × round-trip`; the cap keeps the walk parallel without
+   * opening an unbounded number of connections on a deep tree.
+   */
+  readonly concurrency?: number;
 }
 
 export interface ProviderTreeSession {
@@ -126,6 +139,25 @@ export function createProviderTreeSession(
 ): ProviderTreeSession {
   const root = rootUri ?? createUri(provider.scheme, '/');
   const debounceMs = options.debounceMs ?? 16;
+  const concurrency = Math.max(1, options.concurrency ?? 8);
+
+  // Shared walk semaphore: bounds provider calls in flight for the whole
+  // walk, not per directory level (which would allow limit^depth).
+  let activeCalls = 0;
+  const callWaiters: (() => void)[] = [];
+  function acquire(): Promise<void> | void {
+    if (activeCalls < concurrency) {
+      activeCalls += 1;
+      return;
+    }
+    return new Promise<void>((resolve) => callWaiters.push(resolve));
+  }
+  function release(): void {
+    const next = callWaiters.shift();
+    // Hand the token over directly rather than decrementing and racing.
+    if (next) next();
+    else activeCalls -= 1;
+  }
   let snapshot: ProviderTreeSnapshot | null = null;
   let version = 0;
   let generation = 0;
@@ -198,23 +230,37 @@ export function createProviderTreeSession(
     });
   }
 
+  /**
+   * Run `fn` holding one of `concurrency` tokens. A task never holds a token
+   * while waiting on another task, so sibling walks cannot deadlock here.
+   */
+  async function guarded<T>(fn: () => Promise<T>): Promise<T> {
+    await acquire();
+    try {
+      return await fn();
+    } finally {
+      release();
+    }
+  }
+
   async function loadNode(uri: Uri): Promise<ProviderTreeNode> {
-    const entry = await provider.stat(uri);
+    const entry = await guarded(() => provider.stat(uri));
     if (entry.kind !== 1 /* Directory */) {
       return { entry, uri, children: [] };
     }
-    const kids = await provider.readDirectory(uri);
-    const children: ProviderTreeNode[] = [];
-    for (const k of kids) {
-      const childPath =
-        normalizeUriPath(uri.path) === '/'
-          ? `/${k.name}`
-          : `${normalizeUriPath(uri.path)}/${k.name}`;
-      const childUri = createUri(uri.scheme, childPath, {
-        ...(uri.authority !== undefined ? { authority: uri.authority } : {}),
-      });
-      children.push(await loadNode(childUri));
-    }
+    const kids = await guarded(() => provider.readDirectory(uri));
+    const children = await Promise.all(
+      kids.map((k) => {
+        const childPath =
+          normalizeUriPath(uri.path) === '/'
+            ? `/${k.name}`
+            : `${normalizeUriPath(uri.path)}/${k.name}`;
+        const childUri = createUri(uri.scheme, childPath, {
+          ...(uri.authority !== undefined ? { authority: uri.authority } : {}),
+        });
+        return loadNode(childUri);
+      }),
+    );
     return { entry, uri, children };
   }
 

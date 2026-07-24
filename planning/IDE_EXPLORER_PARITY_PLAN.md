@@ -1224,9 +1224,18 @@ tree component per view.
 #### 5.4 Command contribution contract
 
 - Host-contributed commands, submenus, grouping, enablement, and keybindings.
+  **Done (2026-07-24)** — `contributeCommands`, `Command.submenu` /
+  `submenuLabel` / `order` / `enablement`, menu partition + Radix submenus,
+  disabled items. Keybindings remain on `Command.keybinding` + registry
+  `getBinding`.
 - Commands receive stable selection, workspace, editor, SCM, and diagnostic
   context.
+  **Done** — `buildCommandContext` + `CommandContext` fields
+  (`workspaceRoot`, `editor`, `scm`, `diagnostics`, `extensions`, `signal`,
+  `reportProgress`).
 - Async progress, cancellation, failure notification, and telemetry hooks.
+  **Done** — `dispatchWithLifecycle` + `CommandLifecycleHooks`.
+  Tests: `packages/mille-ui/test/command-contribution.test.mjs`.
 
 ### Exit criteria
 

@@ -22,6 +22,7 @@ import {
   type KeyboardEventLike,
   type ParsedKeybinding,
 } from './keybinding.js';
+import { getActiveCommandLifecycle } from './contribution.js';
 
 interface Entry {
   readonly command: Command;
@@ -157,7 +158,20 @@ export function createCommandRegistry(
     },
 
     setContextProvider(provider) {
-      contextProvider = provider;
+      // Wrap so dispatchWithLifecycle can inject signal / reportProgress
+      // without hosts rewriting their provider.
+      contextProvider = () => {
+        const ctx = provider();
+        const life = getActiveCommandLifecycle(registry);
+        if (!life) return ctx;
+        return {
+          ...ctx,
+          ...(life.signal !== undefined ? { signal: life.signal } : {}),
+          ...(life.reportProgress !== undefined
+            ? { reportProgress: life.reportProgress }
+            : {}),
+        };
+      };
     },
   };
 

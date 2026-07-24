@@ -122,6 +122,34 @@ export function FileContextMenu(props: FileContextMenuProps): ReactElement {
                     onClose={close}
                   />
                 ))}
+                {group.submenus?.map((sub) => (
+                  <ContextMenu.Sub key={sub.id}>
+                    <ContextMenu.SubTrigger
+                      className="mille-context-menu-item mille-context-menu-subtrigger"
+                      data-mille-submenu={sub.id}
+                    >
+                      <span className="mille-context-menu-item-label">
+                        {sub.label}
+                      </span>
+                    </ContextMenu.SubTrigger>
+                    <ContextMenu.Portal>
+                      <ContextMenu.SubContent
+                        className="mille-context-menu-content"
+                        data-mille-submenu-content={sub.id}
+                      >
+                        {sub.items.map((command) => (
+                          <ContextMenuItem
+                            key={command.id}
+                            command={command}
+                            context={context}
+                            registry={registry}
+                            onClose={close}
+                          />
+                        ))}
+                      </ContextMenu.SubContent>
+                    </ContextMenu.Portal>
+                  </ContextMenu.Sub>
+                ))}
               </ContextMenu.Group>
             ))}
             {extraItems !== undefined && extraItems !== null ? (

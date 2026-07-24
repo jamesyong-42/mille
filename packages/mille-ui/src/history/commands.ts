@@ -74,6 +74,9 @@ export const scmHistoryCommands: readonly Command[] = Object.freeze([
     id: 'scm.compareWithHead',
     label: 'Compare with HEAD',
     group: '5_scm',
+    submenu: 'compare',
+    submenuLabel: 'Compare',
+    order: 10,
     when: 'focusedIs.file',
     async run(ctx) {
       const path = focusedRelativePath(ctx);
@@ -97,6 +100,9 @@ export const scmHistoryCommands: readonly Command[] = Object.freeze([
     id: 'scm.compareWithPrevious',
     label: 'Compare with Previous Revision',
     group: '5_scm',
+    submenu: 'compare',
+    submenuLabel: 'Compare',
+    order: 20,
     when: 'focusedIs.file',
     async run(ctx) {
       const path = focusedRelativePath(ctx);

@@ -4,6 +4,12 @@
 
 ### Added
 
+- **Command contribution contract (Phase 5.4)** — `@vibecook/mille-ui/commands`
+  adds `contributeCommands`, `dispatchWithLifecycle` (progress / cancel /
+  failure notify / telemetry), `evaluateEnablement`, `partitionCommandsForMenu`
+  (submenus), and `buildCommandContext` for workspace/editor/SCM/diagnostics
+  surfaces. Commands gain `enablement`, `submenu`, `submenuLabel`, and `order`.
+  Context menus render nested Radix submenus and grey disabled items.
 - **File history + SCM actions (Phase 5.3)** — `@vibecook/mille-ui/history`
   exports `FileHistoryClient`, `ScmClient`, `runScmRevert` / `runScmCompare` /
   `runFileHistory` (confirm + progress + cancel), `scmHistoryCommands`, and

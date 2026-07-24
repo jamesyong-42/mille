@@ -13,6 +13,7 @@ import {
   formatKeybinding,
   parseKeybinding,
 } from '../commands/keybinding.js';
+import { evaluateEnablement } from '../commands/contribution.js';
 
 export interface ContextMenuItemProps {
   /** The command this item dispatches. */
@@ -23,6 +24,8 @@ export interface ContextMenuItemProps {
   readonly registry: CommandRegistry;
   /** Close the parent menu after invoke. */
   readonly onClose: () => void;
+  /** Force disabled; defaults to `evaluateEnablement(command, context)`. */
+  readonly disabled?: boolean;
 }
 
 function resolveLabel(command: Command, context: CommandContext): string {
@@ -45,21 +48,38 @@ function resolveShortcut(command: Command): string | null {
 }
 
 export function ContextMenuItem(props: ContextMenuItemProps): ReactElement {
-  const { command, context, registry, onClose } = props;
+  const { command, context, registry, onClose, disabled: disabledProp } = props;
   const label = resolveLabel(command, context);
   const shortcut = resolveShortcut(command);
+  const disabled =
+    disabledProp !== undefined
+      ? disabledProp
+      : !evaluateEnablement(command, context);
 
   return (
     <ContextMenu.Item
       className="mille-context-menu-item"
       data-mille-command-id={command.id}
+      data-mille-command-disabled={disabled ? '' : undefined}
+      disabled={disabled}
       onSelect={(event: Event) => {
+        if (disabled) {
+          event.preventDefault();
+          return;
+        }
         // Radix fires onSelect before it would close; closing ourselves
         // lets hosts observe the command first. The menu context is the
         // authoritative live context for both visibility and execution;
         // embedded trees are not required to install a registry provider.
         try {
           const registeredCommand = registry.get(command.id);
+          if (
+            registeredCommand &&
+            !evaluateEnablement(registeredCommand, context)
+          ) {
+            onClose();
+            return;
+          }
           const result = registeredCommand?.run(context);
           if (result && typeof (result as Promise<void>).catch === 'function') {
             (result as Promise<void>).catch(() => {

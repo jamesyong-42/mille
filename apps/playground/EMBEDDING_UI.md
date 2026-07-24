@@ -285,6 +285,49 @@ Also: `projectChangedFilesView`, `projectFailedTestsView`,
 Changed Files (live `getGitStatus` IPC) → Problems → Failed Tests via the
 sidebar title button.
 
+### 5.2d Command contributions
+
+```tsx
+import {
+  createCommandRegistry,
+  defaultCommands,
+  contributeCommands,
+  dispatchWithLifecycle,
+  buildCommandContext,
+} from '@vibecook/mille-ui/commands';
+
+const registry = createCommandRegistry(defaultCommands);
+
+// Package-style contribution (dispose restores shadowed defaults).
+const contrib = contributeCommands(registry, {
+  id: 'host.demo',
+  commands: [
+    {
+      id: 'host.analyze',
+      label: 'Analyze…',
+      group: '9_custom',
+      submenu: 'tools',
+      submenuLabel: 'Tools',
+      enablement: 'focusedIs.file',
+      async run(ctx) {
+        ctx.reportProgress?.({ phase: 'running', fraction: 0.5 });
+        // …
+      },
+    },
+  ],
+});
+
+// Lifecycle: progress, cancel, failure notify, telemetry.
+await dispatchWithLifecycle(registry, 'host.analyze', {
+  signal: ac.signal,
+  lifecycle: {
+    onProgress: (e) => status(e.message),
+    onNotify: (level, msg) => toast(level, msg),
+    telemetry: (e) => analytics.track(e),
+  },
+});
+```
+
 ### 5.2c History / SCM actions
 
 ```tsx

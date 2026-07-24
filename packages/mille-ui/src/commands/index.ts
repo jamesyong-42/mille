@@ -31,3 +31,22 @@ export type {
   FileSearchRequest,
   FileSearchRequestKind,
 } from '../file-search.js';
+export {
+  buildCommandContext,
+  contributeCommands,
+  dispatchWithLifecycle,
+  evaluateEnablement,
+  getActiveCommandLifecycle,
+  partitionCommandsForMenu,
+  type CommandContribution,
+  type CommandContributionContext,
+  type CommandLifecycleHooks,
+  type CommandMenuContribution,
+  type CommandMenuGroup,
+  type CommandMenuSubmenu,
+  type CommandProgressEvent,
+  type CommandProgressPhase,
+  type CommandTelemetryEvent,
+  type ContributeCommandsResult,
+  type DispatchWithLifecycleOptions,
+} from './contribution.js';

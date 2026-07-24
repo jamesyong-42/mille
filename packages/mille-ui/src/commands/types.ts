@@ -53,12 +53,35 @@ export interface Command {
   /** Group tag for menu grouping (`1_navigation`, `2_modification`, ...). */
   readonly group?: string;
 
+  /**
+   * Phase 5.4 — nest under a submenu within `group` (e.g. `history`).
+   * Context menus render nested items; palettes may flatten with a prefix.
+   */
+  readonly submenu?: string;
+
+  /** Human label for the submenu when this command is first to declare it. */
+  readonly submenuLabel?: string;
+
+  /**
+   * Phase 5.4 — sort order within a group / submenu (lower first).
+   * Defaults to registration order when unset.
+   */
+  readonly order?: number;
+
+  /**
+   * Phase 5.4 — enablement predicate. Distinct from `when` (visibility):
+   * a command may be visible but disabled (greyed). String form uses the
+   * same mini-language as `when`. Defaults to enabled when unset.
+   */
+  readonly enablement?: string | ((ctx: CommandContext) => boolean);
+
   /** Optional icon id (resolved by the host-configured icon resolver). */
   readonly icon?: string;
 
   /**
    * Run the command. `args` is command-specific; see each default command's
    * documentation for its shape. Promise returns are awaited by the dispatcher.
+   * Long-running commands may use `ctx.signal` and `ctx.reportProgress`.
    */
   run(ctx: CommandContext, args?: unknown): void | Promise<void>;
 }
@@ -95,6 +118,15 @@ export interface HostHooks {
   openTerminal?(path: string): void;
   /** Ask the user to confirm an action. Returning `false` aborts. */
   confirm?(message: string): boolean | Promise<boolean>;
+  /**
+   * Phase 5.4 — optional failure/progress notification surface for
+   * commands that do not use `dispatchWithLifecycle` directly.
+   */
+  notify?(
+    level: 'info' | 'warning' | 'error',
+    message: string,
+    detail?: unknown,
+  ): void;
 }
 
 /**
@@ -133,6 +165,34 @@ export interface CommandContext {
   readonly cutIds: ReadonlySet<EntryId>;
   /** Phase 7 — ids currently marked as "copy". Disjoint from `cutIds`. */
   readonly copyIds: ReadonlySet<EntryId>;
+
+  // ─── Phase 5.4 — contribution / IDE surfaces ──────────────────────
+  /** Absolute workspace root when known (multi-root hosts may omit). */
+  readonly workspaceRoot?: string;
+  /** Active editor / open tabs summary for enablement and host commands. */
+  readonly editor?: {
+    readonly activePath?: string | null;
+    readonly openPaths?: readonly string[];
+    readonly dirtyPaths?: readonly string[];
+  };
+  /** SCM changed paths when a status client is available. */
+  readonly scm?: {
+    readonly changedPaths?: readonly string[];
+  };
+  /** Paths with diagnostics when a diagnostics client is available. */
+  readonly diagnostics?: {
+    readonly problemPaths?: readonly string[];
+  };
+  /** Cancellation for long-running dispatches (`dispatchWithLifecycle`). */
+  readonly signal?: AbortSignal;
+  /** Progress reporter injected by `dispatchWithLifecycle`. */
+  reportProgress?(partial: {
+    readonly phase: 'preparing' | 'running' | 'completed' | 'failed' | 'cancelled';
+    readonly message?: string;
+    readonly fraction?: number;
+  }): void;
+  /** Host-defined extension bag for custom `when` / command logic. */
+  readonly extensions?: Readonly<Record<string, unknown>>;
 }
 
 /**

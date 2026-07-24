@@ -15,6 +15,12 @@
 import { useCallback, useMemo } from 'react';
 import type { Command, CommandContext, CommandRegistry } from '../commands/types.js';
 import { evaluateWhen } from '../commands/when.js';
+import {
+  evaluateEnablement,
+  partitionCommandsForMenu,
+  type CommandMenuGroup,
+  type CommandMenuSubmenu,
+} from '../commands/contribution.js';
 
 export interface UseFileContextMenuOptions {
   readonly registry: CommandRegistry;
@@ -28,6 +34,8 @@ export interface UseFileContextMenuGroup {
   /** The raw group key (e.g. `'1_navigation'` or `'9_custom'`). */
   readonly key: string;
   readonly items: readonly Command[];
+  /** Phase 5.4 — nested submenus within this group. */
+  readonly submenus?: readonly CommandMenuSubmenu[];
 }
 
 export interface UseFileContextMenuResult {
@@ -40,6 +48,8 @@ export interface UseFileContextMenuResult {
   readonly groups: readonly UseFileContextMenuGroup[];
   /** `true` when no command matched the current `when` context. */
   readonly isEmpty: boolean;
+  /** Whether a visible command is currently enabled. */
+  readonly isEnabled: (command: Command) => boolean;
   /** Invoke a command by id with the live context; swallows errors. */
   readonly onItemSelect: (commandId: string) => void;
   /** Invoke when the menu visually closes — runs the caller's `onClose`. */
@@ -58,38 +68,6 @@ function isVisibleInContextMenu(command: Command, ctx: CommandContext): boolean 
   return Boolean(v);
 }
 
-/**
- * Group-tag sort: alphabetical. Matches SPEC §9.3. Commands with no
- * `group` sort to an implicit `'9_custom'` bucket so host-added
- * commands-without-a-tag land at the end.
- */
-function groupKey(command: Command): string {
-  return command.group ?? '9_custom';
-}
-
-/** Partition the visible command list into ordered groups. */
-function partitionByGroup(
-  commands: readonly Command[],
-): readonly UseFileContextMenuGroup[] {
-  const buckets = new Map<string, Command[]>();
-  for (const c of commands) {
-    const key = groupKey(c);
-    let list = buckets.get(key);
-    if (!list) {
-      list = [];
-      buckets.set(key, list);
-    }
-    list.push(c);
-  }
-  const keys = Array.from(buckets.keys()).sort((a, b) => a.localeCompare(b));
-  const out: UseFileContextMenuGroup[] = [];
-  for (const k of keys) {
-    const list = buckets.get(k);
-    if (list && list.length > 0) out.push({ key: k, items: list });
-  }
-  return out;
-}
-
 export function useFileContextMenu(
   options: UseFileContextMenuOptions,
 ): UseFileContextMenuResult {
@@ -106,9 +84,19 @@ export function useFileContextMenu(
     return visible;
   }, [registry, context]);
 
-  const groups = useMemo<readonly UseFileContextMenuGroup[]>(
-    () => partitionByGroup(items),
-    [items],
+  const groups = useMemo<readonly UseFileContextMenuGroup[]>(() => {
+    const partitioned: readonly CommandMenuGroup[] =
+      partitionCommandsForMenu(items);
+    return partitioned.map((g) => ({
+      key: g.key,
+      items: g.items,
+      ...(g.submenus.length > 0 ? { submenus: g.submenus } : {}),
+    }));
+  }, [items]);
+
+  const isEnabled = useCallback(
+    (command: Command) => evaluateEnablement(command, context),
+    [context],
   );
 
   const close = useCallback(() => {
@@ -120,6 +108,10 @@ export function useFileContextMenu(
       try {
         const command = registry.get(commandId);
         if (!command) {
+          close();
+          return;
+        }
+        if (!evaluateEnablement(command, context)) {
           close();
           return;
         }
@@ -145,6 +137,7 @@ export function useFileContextMenu(
     items,
     groups,
     isEmpty: items.length === 0,
+    isEnabled,
     onItemSelect,
     onClose: close,
   };

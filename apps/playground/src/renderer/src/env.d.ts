@@ -25,6 +25,10 @@ export interface MillePlaygroundApi {
   performFileAction(request: PlaygroundFileActionRequest): Promise<PlaygroundFileActionResult>;
   /** v0.2 — toggle git decorations (runs in fx utility process). */
   setGitDecorations(enabled: boolean): Promise<void>;
+  /** Phase 5.2 — one-shot git status for Changed Files view. */
+  getGitStatus(
+    rootPath?: string,
+  ): Promise<ReadonlyArray<{ path: string; status: string; staged?: boolean }>>;
   getWatchBenchConfig(): Promise<WatchBenchConfig | null>;
   onWatchBenchEvent(listener: (event: WatchBenchEvent) => void): void;
   watchBenchReady(): void;

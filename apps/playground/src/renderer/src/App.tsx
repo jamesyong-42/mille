@@ -33,12 +33,16 @@ import {
 } from '@vibecook/mille-ui/editor-state';
 import {
   ExplorerViewList,
+  projectChangedFilesView,
+  projectFailedTestsView,
   projectOpenFilesView,
   projectProblemsView,
   resolveExplorerView,
   type ExplorerViewKind,
   type ExplorerViewModel,
 } from '@vibecook/mille-ui/views';
+import type { GitStatusEntry, GitStatusLetter } from '@vibecook/mille-ui/git';
+import type { TestResult } from '@vibecook/mille-ui/test-status';
 import type { IconTheme } from '@vibecook/mille-ui/icons';
 import { defaultIconTheme, duotoneIconTheme, minimalIconTheme } from '@vibecook/mille-ui/icons';
 import { createCommandRegistry, defaultCommands } from '@vibecook/mille-ui/commands';
@@ -56,13 +60,54 @@ import {
 } from '../../../scripts/editor-tabs.mjs';
 import type { PlaygroundFileAction } from '../../../scripts/file-actions.mjs';
 
-type SidebarView = Extract<ExplorerViewKind, 'project' | 'openFiles' | 'problems'>;
+type SidebarView = Extract<
+  ExplorerViewKind,
+  'project' | 'openFiles' | 'changedFiles' | 'problems' | 'failedTests'
+>;
 
 const SIDEBAR_VIEWS: ReadonlyArray<{ kind: SidebarView; label: string }> = [
   { kind: 'project', label: 'Project' },
   { kind: 'openFiles', label: 'Open Files' },
+  { kind: 'changedFiles', label: 'Changed Files' },
   { kind: 'problems', label: 'Problems' },
+  { kind: 'failedTests', label: 'Failed Tests' },
 ];
+
+const GIT_LETTERS = new Set(['M', 'A', 'D', 'U', 'R', 'C', '?', '!']);
+
+function asGitStatusEntries(
+  raw: ReadonlyArray<{ path: string; status: string; staged?: boolean }>,
+): GitStatusEntry[] {
+  const out: GitStatusEntry[] = [];
+  for (const e of raw) {
+    if (!GIT_LETTERS.has(e.status)) continue;
+    out.push({
+      path: e.path,
+      status: e.status as GitStatusLetter,
+      ...(e.staged === true ? { staged: true } : {}),
+    });
+  }
+  return out;
+}
+
+/** Demo failed-tests seed (mirrors utility-process test-status decorations). */
+function demoFailedTests(): TestResult[] {
+  return [
+    {
+      path: 'packages/mille/test/undo-journal.test.mjs',
+      status: 'failed',
+      message: 'Demo: simulated assertion failure',
+    },
+    {
+      path: 'packages/mille-ui/test/editor-state-decorations.test.mjs',
+      status: 'running',
+    },
+    {
+      path: 'packages/mille-ui/test/diagnostics-decorations.test.mjs',
+      status: 'passed',
+    },
+  ];
+}
 
 /** Demo problems mirror of the utility-process diagnostics seed (Phase 5.1). */
 function demoProblemsMap(): Map<
@@ -547,6 +592,37 @@ function Explorer({ fx, root }: { fx: PortFileExplorer; root: string }): ReactEl
           definition,
         });
         if (!cancelled && gen === generation) setViewModel(model);
+        return;
+      }
+      if (sidebarView === 'changedFiles') {
+        let entries: GitStatusEntry[] = [];
+        try {
+          const raw = await window.millePlayground.getGitStatus(root);
+          entries = asGitStatusEntries(raw);
+        } catch (err) {
+          console.warn('[playground] getGitStatus failed:', err);
+        }
+        const definition = projectChangedFilesView(entries);
+        const model = await resolveExplorerView({
+          fx,
+          rootPath: root,
+          definition,
+        });
+        if (!cancelled && gen === generation) setViewModel(model);
+        return;
+      }
+      if (sidebarView === 'failedTests') {
+        // Default projector keeps failed+errored; include running for demo.
+        const definition = projectFailedTestsView(demoFailedTests(), {
+          statuses: ['failed', 'errored', 'running'],
+          title: 'Failed Tests',
+        });
+        const model = await resolveExplorerView({
+          fx,
+          rootPath: root,
+          definition,
+        });
+        if (!cancelled && gen === generation) setViewModel(model);
       }
     };
 
@@ -682,7 +758,7 @@ function Explorer({ fx, root }: { fx: PortFileExplorer; root: string }): ReactEl
             <button
               type="button"
               className="tool-header-title tool-header-title-btn"
-              title="Cycle view: Project → Open Files → Problems"
+              title="Cycle view: Project → Open Files → Changed → Problems → Failed Tests"
               onClick={cycleSidebarView}
             >
               {sidebarTitle}
@@ -798,7 +874,11 @@ function Explorer({ fx, root }: { fx: PortFileExplorer; root: string }): ReactEl
                   <div className="tree-navigation-loading">
                     {sidebarView === 'openFiles'
                       ? 'No open files — open a file from the Project view'
-                      : 'No problems'}
+                      : sidebarView === 'changedFiles'
+                        ? 'Working tree clean'
+                        : sidebarView === 'failedTests'
+                          ? 'No failed tests'
+                          : 'No problems'}
                   </div>
                 }
                 onOpen={(item) => {

@@ -1197,8 +1197,9 @@ Define merge precedence, accessible text, and update cost for every provider.
   `resolveExplorerView` for EntryId resolution (prefer `seed.id`, else
   path under `seed.rootPath` / default root), virtualized `ExplorerViewList`
   with stable keys, key-based selection (unresolved rows work), and
-  listbox a11y. Playground sidebar switches Project / Open Files / Problems
-  and re-resolves on tree change events. Bench: `bench:views`.
+  listbox a11y. Playground sidebar cycles Project / Open Files / Changed
+  Files (live `git status` via main IPC) / Problems / Failed Tests and
+  re-resolves on tree change events. Bench: `bench:views`.
   Tests: `packages/mille-ui/test/views.test.mjs` (projectors + list harness).
 - Host-defined saved scopes. *(via `projectCustomScopeView`)*
 

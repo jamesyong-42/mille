@@ -93,6 +93,24 @@ contextBridge.exposeInMainWorld('millePlayground', {
     await ipcRenderer.invoke('set-git-decorations', enabled);
   },
 
+  /**
+   * Phase 5.2 — one-shot git status for the Changed Files view.
+   * Entries are workspace-relative porcelain paths.
+   */
+  async getGitStatus(
+    rootPath?: string,
+  ): Promise<ReadonlyArray<{ path: string; status: string; staged?: boolean }>> {
+    const raw: unknown = await ipcRenderer.invoke('get-git-status', rootPath);
+    if (!Array.isArray(raw)) return [];
+    return raw.filter(
+      (e): e is { path: string; status: string; staged?: boolean } =>
+        e !== null &&
+        typeof e === 'object' &&
+        typeof (e as { path?: unknown }).path === 'string' &&
+        typeof (e as { status?: unknown }).status === 'string',
+    );
+  },
+
   async getWatchBenchConfig(): Promise<WatchBenchConfig | null> {
     return (await ipcRenderer.invoke('watch-bench:get-config')) as WatchBenchConfig | null;
   },

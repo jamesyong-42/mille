@@ -295,6 +295,39 @@ async function createWindow(): Promise<void> {
       console.warn('[playground-main] failed to forward git-decorations toggle:', err);
     }
   });
+
+  // Phase 5.2 — Changed Files view needs a one-shot status snapshot in the
+  // renderer. Shell git stays in main (node:child_process); no watcher.
+  ipcMain.handle('get-git-status', async (_evt, rawRoot: unknown) => {
+    const root =
+      typeof rawRoot === 'string' && rawRoot.length > 0
+        ? rawRoot
+        : activeWorkspaceRoot;
+    try {
+      const { createShellGitClient } = await import('@vibecook/mille-ui/git/node');
+      const client = createShellGitClient({
+        rootPath: root,
+        disableWatcher: true,
+        warn: (msg) => console.warn('[playground-main] git status:', msg),
+      });
+      try {
+        const map = await client.getStatus(root);
+        // Structured-clone friendly plain objects.
+        return [...map.values()].map((e) => ({
+          path: e.path,
+          status: e.status,
+          ...(e.staged === true ? { staged: true } : {}),
+        }));
+      } finally {
+        // createShellGitClient may leave no-op watchers when disabled; best-effort dispose.
+        const dispose = (client as { dispose?: () => void }).dispose;
+        if (typeof dispose === 'function') dispose.call(client);
+      }
+    } catch (err) {
+      console.warn('[playground-main] get-git-status failed:', err);
+      return [];
+    }
+  });
 }
 
 app.whenReady().then(() => {

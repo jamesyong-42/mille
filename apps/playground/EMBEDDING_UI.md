@@ -282,7 +282,8 @@ const model = await resolveExplorerView({ fx, rootPath, definition });
 
 Also: `projectChangedFilesView`, `projectFailedTestsView`,
 `projectCustomScopeView`. The playground cycles Project → Open Files →
-Problems via the sidebar title button.
+Changed Files (live `getGitStatus` IPC) → Problems → Failed Tests via the
+sidebar title button.
 
 ### 5.2b Editor open / dirty / active
 

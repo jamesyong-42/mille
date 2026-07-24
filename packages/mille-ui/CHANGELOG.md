@@ -9,8 +9,9 @@
   `projectProblemsView`, `projectFailedTestsView`, `projectCustomScopeView`),
   `resolveExplorerView` (path/id → EntryId, multi-root via `seed.rootPath` /
   `seed.id`), and virtualized `ExplorerViewList` with stable `item.key`
-  selection, `aria-activedescendant`, and badge accessible text. Bench:
-  `pnpm --filter @vibecook/mille-ui bench:views`.
+  selection, `aria-activedescendant`, and badge accessible text. Playground
+  demonstrates Open Files, live Changed Files (`git status` IPC), Problems,
+  and Failed Tests. Bench: `pnpm --filter @vibecook/mille-ui bench:views`.
 - **Browser-safe undo types** — port client imports undo normalizers from a
   Node-free module so the Electron/Vite renderer build no longer pulls the
   native loader via `client.ts`.

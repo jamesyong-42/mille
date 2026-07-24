@@ -47,7 +47,7 @@ impl FileNestingRule {
         })
     }
 
-    pub(crate) fn capture<'a>(&self, name: &'a str, case_sensitive: bool) -> Option<String> {
+    pub(crate) fn capture(&self, name: &str, case_sensitive: bool) -> Option<String> {
         let comparable = if case_sensitive {
             name.to_owned()
         } else {

@@ -399,8 +399,8 @@ pub(crate) fn ensure_managed_recycle_base(
     // Canonicalize after creation; fail closed if we cannot.
     let canon_base = std::fs::canonicalize(&base)
         .map_err(|e| format!("cannot canonicalize recycle base: {e}"))?;
-    let canon_temp = std::fs::canonicalize(&temp)
-        .map_err(|e| format!("cannot canonicalize temp dir: {e}"))?;
+    let canon_temp =
+        std::fs::canonicalize(&temp).map_err(|e| format!("cannot canonicalize temp dir: {e}"))?;
 
     if !(canon_base == canon_temp || canon_base.starts_with(&canon_temp)) {
         return Err(format!(
@@ -414,9 +414,7 @@ pub(crate) fn ensure_managed_recycle_base(
         let Ok(canon_root) = std::fs::canonicalize(r) else {
             // Also check lexical containment as a belt-and-suspenders guard.
             if path_is_under_lexical(&canon_base, r) {
-                return Err(
-                    "managed recycle base must not live under a workspace root".into(),
-                );
+                return Err("managed recycle base must not live under a workspace root".into());
             }
             continue;
         };

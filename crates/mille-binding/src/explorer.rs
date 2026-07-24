@@ -6,9 +6,9 @@
 use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use tokio_util::sync::CancellationToken;
 use std::sync::Arc;
 use std::time::Instant;
+use tokio_util::sync::CancellationToken;
 
 use napi::bindgen_prelude::{Buffer, Result, Status, Unknown};
 use napi::threadsafe_function::ThreadsafeFunction;
@@ -239,9 +239,7 @@ impl FileExplorer {
         if operation_id.is_empty() {
             return Ok(None);
         }
-        let report = options
-            .and_then(|o| o.report_progress)
-            .unwrap_or(true);
+        let report = options.and_then(|o| o.report_progress).unwrap_or(true);
         let token = CancellationToken::new();
         {
             let mut map = self.operations.lock();
@@ -1331,7 +1329,11 @@ impl FileExplorer {
         let mut entry = stat_to_entry(&new_path, Some(parent_eid), name)
             .await
             .map_err(fx_error_to_napi)?;
-        let kind_u8 = if kind_enum == EntryKind::Directory { 1 } else { 0 };
+        let kind_u8 = if kind_enum == EntryKind::Directory {
+            1
+        } else {
+            0
+        };
         let fs = capture_fs_identity(&new_path, kind_u8)
             .await
             .map_err(|e| fx_error_to_napi(io_to_fx(e, new_path.clone())))?;
@@ -1430,9 +1432,7 @@ impl FileExplorer {
             .store
             .get_by_id(eid)
             .map(|e| {
-                if e.kind == EntryKind::Directory
-                    || e.symlink_target_is_dir == Some(true)
-                {
+                if e.kind == EntryKind::Directory || e.symlink_target_is_dir == Some(true) {
                     1u8
                 } else {
                     0u8
@@ -1442,9 +1442,7 @@ impl FileExplorer {
         let fs = capture_fs_identity(&new_path, kind_u8)
             .await
             .map_err(|e| fx_error_to_napi(io_to_fx(e, new_path.clone())))?;
-        self.journal
-            .lock()
-            .push_rename(eid, old_path, new_path, fs);
+        self.journal.lock().push_rename(eid, old_path, new_path, fs);
         let arc = self
             .store
             .get_by_id(eid)
@@ -1550,13 +1548,8 @@ impl FileExplorer {
             .await
             .map_err(fx_error_to_napi)?;
         // Re-check containment after collision renaming.
-        join_under_root(
-            &new_parent_path,
-            &contained_parent,
-            &dest.name,
-            &root_canon,
-        )
-        .map_err(fx_error_to_napi)?;
+        join_under_root(&new_parent_path, &contained_parent, &dest.name, &root_canon)
+            .map_err(fx_error_to_napi)?;
         if paths_equal(&dest.path, &old_path) {
             return Ok(EntryJs::from_core(source.as_ref()));
         }
@@ -1578,9 +1571,7 @@ impl FileExplorer {
         }
 
         // Merge for directories preserves destination-only children.
-        if matches!(dest.action, DestAction::Merge)
-            && source.kind == EntryKind::Directory
-        {
+        if matches!(dest.action, DestAction::Merge) && source.kind == EntryKind::Directory {
             let dest_meta = tokio::fs::symlink_metadata(&dest.path)
                 .await
                 .map_err(|e| fx_error_to_napi(io_to_fx(e, dest.path.clone())))?;
@@ -1633,13 +1624,8 @@ impl FileExplorer {
             // Source identity is gone; drop it and reconcile the merged tree.
             let _ = self.store.remove_subtree(eid);
             let config = self.watch_config();
-            crate::watch_runtime::reconcile_directory(
-                &self.store,
-                &config,
-                &dest.path,
-                None,
-            )
-            .map_err(fx_error_to_napi)?;
+            crate::watch_runtime::reconcile_directory(&self.store, &config, &dest.path, None)
+                .map_err(fx_error_to_napi)?;
             self.reclassify_current_excludes()
                 .map_err(fx_error_to_napi)?;
             self.journal.lock().record_non_undoable(
@@ -1794,8 +1780,8 @@ impl FileExplorer {
         }
         let parent_id = entry.parent_id.unwrap();
         let name = entry.name.clone();
-        let was_dir = entry.kind == EntryKind::Directory
-            || entry.symlink_target_is_dir == Some(true);
+        let was_dir =
+            entry.kind == EntryKind::Directory || entry.symlink_target_is_dir == Some(true);
         let size = entry.size;
         let mtime_ms = entry.mtime_ms;
         let ctime_ms = entry.ctime_ms;
@@ -1820,9 +1806,8 @@ impl FileExplorer {
             // ensure_managed_recycle_base refuses symlink-hijacked bases, creates
             // real directories without following links, canonicalizes, and
             // permission-restricts (0o700 on Unix).
-            let base = ensure_managed_recycle_base(&root, &roots).map_err(|msg| {
-                fx_error_to_napi(FxError::InternalBug(msg))
-            })?;
+            let base = ensure_managed_recycle_base(&root, &roots)
+                .map_err(|msg| fx_error_to_napi(FxError::InternalBug(msg)))?;
             let stamp = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_nanos())
@@ -1930,9 +1915,11 @@ impl FileExplorer {
     /// only after a fully successful reverse mutation.
     #[napi]
     pub async fn undo(&self) -> Result<UndoResultJs> {
-        let entry = self.journal.lock().peek_owned().ok_or_else(|| {
-            fx_error_to_napi(FxError::InvalidInput("nothing to undo".into()))
-        })?;
+        let entry = self
+            .journal
+            .lock()
+            .peek_owned()
+            .ok_or_else(|| fx_error_to_napi(FxError::InvalidInput("nothing to undo".into())))?;
         let descriptor = entry.descriptor();
         let result = match &entry.kind {
             JournalKind::Create { identity } => {
@@ -2188,8 +2175,7 @@ impl FileExplorer {
         .await
         .map_err(fx_error_to_napi)?;
         let exclude_matchers = self.current_exclude_matchers().map_err(fx_error_to_napi)?;
-        entry.is_excluded =
-            Self::path_is_excluded(original_path, &entry, &exclude_matchers);
+        entry.is_excluded = Self::path_is_excluded(original_path, &entry, &exclude_matchers);
         let new_id = self
             .store
             .insert(original_path.to_path_buf(), entry)
@@ -2294,13 +2280,8 @@ impl FileExplorer {
         let dest = resolve_transfer_destination(&new_parent_path, &desired_name, collision)
             .await
             .map_err(fx_error_to_napi)?;
-        join_under_root(
-            &new_parent_path,
-            &contained_parent,
-            &dest.name,
-            &root_canon,
-        )
-        .map_err(fx_error_to_napi)?;
+        join_under_root(&new_parent_path, &contained_parent, &dest.name, &root_canon)
+            .map_err(fx_error_to_napi)?;
         let effective_name = dest.name.clone();
         let dst_path = dest.path.clone();
 
@@ -2423,13 +2404,8 @@ impl FileExplorer {
                     .map_err(fx_error_to_napi)?;
             }
             let config = self.watch_config();
-            crate::watch_runtime::reconcile_directory(
-                &self.store,
-                &config,
-                &dst_path,
-                None,
-            )
-            .map_err(fx_error_to_napi)?;
+            crate::watch_runtime::reconcile_directory(&self.store, &config, &dst_path, None)
+                .map_err(fx_error_to_napi)?;
             self.reclassify_current_excludes()
                 .map_err(fx_error_to_napi)?;
             let arc = self.store.get_by_path(&dst_path).ok_or_else(|| {
@@ -2540,11 +2516,12 @@ impl FileExplorer {
         }
 
         let roots = self.roots.read().clone();
-        let destination_root = configured_root_for_path(&roots, &new_parent_path).ok_or_else(|| {
-            fx_error_to_napi(FxError::InvalidInput(
-                "copyFromPath destination is not under a configured root".into(),
-            ))
-        })?;
+        let destination_root =
+            configured_root_for_path(&roots, &new_parent_path).ok_or_else(|| {
+                fx_error_to_napi(FxError::InvalidInput(
+                    "copyFromPath destination is not under a configured root".into(),
+                ))
+            })?;
 
         let src_meta = tokio::fs::symlink_metadata(&src_path)
             .await
@@ -2572,13 +2549,8 @@ impl FileExplorer {
         let dest = resolve_transfer_destination(&new_parent_path, &desired_name, collision)
             .await
             .map_err(fx_error_to_napi)?;
-        join_under_root(
-            &new_parent_path,
-            &contained_parent,
-            &dest.name,
-            &root_canon,
-        )
-        .map_err(fx_error_to_napi)?;
+        join_under_root(&new_parent_path, &contained_parent, &dest.name, &root_canon)
+            .map_err(fx_error_to_napi)?;
         let effective_name = dest.name.clone();
         let dst_path = dest.path.clone();
 
@@ -2727,13 +2699,8 @@ impl FileExplorer {
                 .map_err(fx_error_to_napi)?;
         }
         let config = self.watch_config();
-        crate::watch_runtime::reconcile_directory(
-            &self.store,
-            &config,
-            &dst_path,
-            None,
-        )
-        .map_err(fx_error_to_napi)?;
+        crate::watch_runtime::reconcile_directory(&self.store, &config, &dst_path, None)
+            .map_err(fx_error_to_napi)?;
         self.reclassify_current_excludes()
             .map_err(fx_error_to_napi)?;
         let arc = self.store.get_by_path(&dst_path).ok_or_else(|| {
@@ -3327,7 +3294,9 @@ fn configured_root_for_path(roots: &[PathBuf], path: &Path) -> Option<PathBuf> {
 /// Reject path components that would escape a single directory entry name.
 fn validate_entry_name(name: &str) -> std::result::Result<(), FxError> {
     if name.is_empty() || name == "." || name == ".." {
-        return Err(FxError::InvalidInput(format!("invalid destination name: {name}")));
+        return Err(FxError::InvalidInput(format!(
+            "invalid destination name: {name}"
+        )));
     }
     if name.contains('/') || name.contains('\\') || name.contains('\0') {
         return Err(FxError::InvalidInput(format!(
@@ -3437,7 +3406,10 @@ fn path_is_self_or_descendant(child: &Path, ancestor: &Path) -> bool {
     if child == ancestor || child.starts_with(ancestor) {
         return true;
     }
-    match (std::fs::canonicalize(child), std::fs::canonicalize(ancestor)) {
+    match (
+        std::fs::canonicalize(child),
+        std::fs::canonicalize(ancestor),
+    ) {
         (Ok(c), Ok(a)) => c == a || c.starts_with(&a),
         (Err(_), Ok(a)) => {
             // Destination may not exist yet: canonicalize parent and rejoin.
@@ -3565,7 +3537,10 @@ async fn count_copy_entries_guarded(
         .map_err(|e| io_to_fx(e, src.to_path_buf()))?;
     if meta.file_type().is_symlink() {
         // Directory symlinks are not descended (matches copy_tree).
-        if tokio::fs::metadata(src).await.map(|m| m.is_dir()).unwrap_or(false)
+        if tokio::fs::metadata(src)
+            .await
+            .map(|m| m.is_dir())
+            .unwrap_or(false)
             && meta.file_type().is_symlink()
         {
             // Still count the symlink node itself as one entry when we refuse
@@ -3612,10 +3587,7 @@ async fn count_copy_entries_guarded(
 /// Sibling staging path for safe overwrite: copy into this path, then swap.
 fn staging_path_for(dest: &Path) -> PathBuf {
     let parent = dest.parent().unwrap_or_else(|| Path::new("."));
-    let name = dest
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("entry");
+    let name = dest.file_name().and_then(|n| n.to_str()).unwrap_or("entry");
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
@@ -3625,10 +3597,7 @@ fn staging_path_for(dest: &Path) -> PathBuf {
 
 fn backup_path_for(dest: &Path) -> PathBuf {
     let parent = dest.parent().unwrap_or_else(|| Path::new("."));
-    let name = dest
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("entry");
+    let name = dest.file_name().and_then(|n| n.to_str()).unwrap_or("entry");
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
@@ -3682,10 +3651,7 @@ async fn copy_via_staging(
     Ok(())
 }
 
-async fn copy_tree_on_disk(
-    src: &Path,
-    dst: &Path,
-) -> std::result::Result<(), FxError> {
+async fn copy_tree_on_disk(src: &Path, dst: &Path) -> std::result::Result<(), FxError> {
     copy_tree_on_disk_guarded(src, dst, &mut Vec::new(), None).await
 }
 
@@ -3793,10 +3759,7 @@ async fn copy_tree_on_disk_guarded(
         let child_src = entry.path();
         let child_dst = dst.join(&name);
         Box::pin(copy_tree_on_disk_guarded(
-            &child_src,
-            &child_dst,
-            stack,
-            progress,
+            &child_src, &child_dst, stack, progress,
         ))
         .await?;
     }
@@ -3821,7 +3784,10 @@ async fn create_symlink(target: &Path, dst: &Path) -> std::result::Result<(), Fx
         use std::os::windows::fs::{symlink_dir, symlink_file};
         let target = target.to_path_buf();
         let dst = dst.to_path_buf();
-        let is_dir = tokio::fs::metadata(&target).await.map(|m| m.is_dir()).unwrap_or(false);
+        let is_dir = tokio::fs::metadata(&target)
+            .await
+            .map(|m| m.is_dir())
+            .unwrap_or(false);
         return tokio::task::spawn_blocking(move || {
             if is_dir {
                 symlink_dir(&target, &dst).map_err(|e| io_to_fx(e, dst))
@@ -3835,7 +3801,9 @@ async fn create_symlink(target: &Path, dst: &Path) -> std::result::Result<(), Fx
     #[cfg(not(any(unix, windows)))]
     {
         let _ = (target, dst);
-        Err(FxError::Unsupported("symlink creation is not supported".into()))
+        Err(FxError::Unsupported(
+            "symlink creation is not supported".into(),
+        ))
     }
 }
 
@@ -3843,10 +3811,7 @@ async fn create_symlink(target: &Path, dst: &Path) -> std::result::Result<(), Fx
 /// children are created; nested directories merge recursively. Directory
 /// symlinks are not followed. If `dst` does not exist, falls back to a full
 /// tree copy.
-async fn merge_tree_on_disk(
-    src: &Path,
-    dst: &Path,
-) -> std::result::Result<(), FxError> {
+async fn merge_tree_on_disk(src: &Path, dst: &Path) -> std::result::Result<(), FxError> {
     merge_tree_on_disk_with_progress(src, dst, None).await
 }
 
@@ -3860,7 +3825,11 @@ async fn merge_tree_on_disk_with_progress(
         .map_err(|e| io_to_fx(e, src.to_path_buf()))?;
     if src_meta.file_type().is_symlink() {
         // Never follow dir symlinks during merge either.
-        if tokio::fs::metadata(src).await.map(|m| m.is_dir()).unwrap_or(false) {
+        if tokio::fs::metadata(src)
+            .await
+            .map(|m| m.is_dir())
+            .unwrap_or(false)
+        {
             return Err(FxError::Unsupported(format!(
                 "refusing to recursively follow directory symlink {:?}",
                 src
@@ -3918,10 +3887,7 @@ async fn merge_tree_on_disk_with_progress(
 
 /// Move-merge a directory into an existing directory without deleting
 /// destination-only children. Source directory is removed when empty.
-async fn merge_move_tree_on_disk(
-    src: &Path,
-    dst: &Path,
-) -> std::result::Result<(), FxError> {
+async fn merge_move_tree_on_disk(src: &Path, dst: &Path) -> std::result::Result<(), FxError> {
     merge_move_tree_on_disk_with_progress(src, dst, None).await
 }
 
@@ -3966,9 +3932,7 @@ async fn merge_move_tree_on_disk_with_progress(
                 let dst_is_dir = dst_meta.is_dir() && !dst_meta.file_type().is_symlink();
                 if src_is_dir && dst_is_dir {
                     Box::pin(merge_move_tree_on_disk_with_progress(
-                        &child_src,
-                        &child_dst,
-                        progress,
+                        &child_src, &child_dst, progress,
                     ))
                     .await?;
                     let _ = tokio::fs::remove_dir(&child_src).await;
@@ -4037,10 +4001,7 @@ async fn resolve_transfer_destination(
             let message = if existing != desired {
                 format!(
                     "destination already exists with different case ({})",
-                    existing
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or("?")
+                    existing.file_name().and_then(|n| n.to_str()).unwrap_or("?")
                 )
             } else {
                 "destination already exists".into()
@@ -4125,10 +4086,7 @@ async fn resolve_transfer_destination(
         let candidate = parent.join(&candidate_name);
         match tokio::fs::symlink_metadata(&candidate).await {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                if find_case_conflict(parent, &candidate_name)
-                    .await?
-                    .is_some()
-                {
+                if find_case_conflict(parent, &candidate_name).await?.is_some() {
                     continue;
                 }
                 return Ok(DestResolution {
@@ -4168,7 +4126,6 @@ async fn find_case_conflict(
     }
     Ok(None)
 }
-
 
 /// Mirror of api.d.ts `WriteFileOptions`.
 #[napi(object)]

@@ -3,6 +3,7 @@ import type { FileExplorerHost, MessagePortLike } from '@vibecook/mille/host';
 import type { MessagePortMain } from 'electron';
 import { registerGitDecorations, type GitDecorationsHandle } from '@vibecook/mille-ui/git';
 import { createShellGitClient } from '@vibecook/mille-ui/git/node';
+import { parseWorkspaceRoots } from '../../scripts/workspace-roots.mjs';
 import {
   createMapDiagnosticsClient,
   registerDiagnosticsDecorations,
@@ -50,7 +51,8 @@ function wrapMessagePortMain(port: MessagePortMain): MessagePortLike {
 }
 
 let host: FileExplorerHost | null = null;
-let gitDecorations: GitDecorationsHandle | null = null;
+/** One handle per workspace root — git status is per repository. */
+let gitDecorations: GitDecorationsHandle[] = [];
 let diagnosticsDecorations: DiagnosticsDecorationsHandle | null = null;
 let testStatusDecorations: TestStatusDecorationsHandle | null = null;
 
@@ -59,36 +61,47 @@ let testStatusDecorations: TestStatusDecorationsHandle | null = null;
 // in-process FileExplorer; A1's decoration fan-out carries badges to
 // every attached port session automatically. Controlled via the
 // `set-git-decorations` IPC message from main → utility.
-function setGitDecorations(enabled: boolean, rootPath: string): void {
+function setGitDecorations(enabled: boolean, rootPaths: readonly string[]): void {
   if (!host) return;
   if (!enabled) {
-    gitDecorations?.dispose();
-    gitDecorations = null;
+    for (const handle of gitDecorations) handle.dispose();
+    gitDecorations = [];
     console.log('[fx-host] git decorations disabled');
     return;
   }
-  if (gitDecorations !== null) return; // already on — idempotent
+  if (gitDecorations.length > 0) return; // already on — idempotent
   try {
-    const client = createShellGitClient({ rootPath });
     const currentHost = host;
-    gitDecorations = registerGitDecorations({
-      fx: host.local, // read path (getSnapshot, getByUri)
-      client,
-      rootPath,
-      // Critical: register against the *host's* DecorationStore, not
-      // `host.local`'s. `host.local.registerDecorationProvider` has
-      // its own independent store that never reaches attached port
-      // sessions — decorations would place but never fan out. The
-      // host's store is what the per-session tick observes.
-      registrar: (provider) => currentHost.registerDecorationProvider(provider),
-    });
-    console.log('[fx-host] git decorations enabled');
+    const currentFx = host.local;
+    gitDecorations = rootPaths.map((rootPath) =>
+      registerGitDecorations({
+        fx: currentFx, // read path (getSnapshot, getByUri)
+        client: createShellGitClient({ rootPath }),
+        rootPath,
+        // Each root gets its own provider id: the default 'scm' would make
+        // the second root's provider replace the first in the decoration
+        // store. Entry lookup is by absolute URI, so the two providers
+        // decorate disjoint subtrees.
+        providerId: `scm:${rootPath}`,
+        // Critical: register against the *host's* DecorationStore, not
+        // `host.local`'s. `host.local.registerDecorationProvider` has
+        // its own independent store that never reaches attached port
+        // sessions — decorations would place but never fan out. The
+        // host's store is what the per-session tick observes.
+        registrar: (provider) => currentHost.registerDecorationProvider(provider),
+      }),
+    );
+    console.log(
+      `[fx-host] git decorations enabled for ${rootPaths.length} root(s)`,
+    );
     // Re-register diagnostics after SCM so problem badges win the
     // shared badge slot (later providers win on overlapping fields).
-    if (process.env.MILLE_DEMO_DIAGNOSTICS !== '0') {
+    // Demo diagnostics seed paths are primary-root relative; re-register
+    // against that root only.
+    if (process.env.MILLE_DEMO_DIAGNOSTICS !== '0' && rootPaths[0] !== undefined) {
       diagnosticsDecorations?.dispose();
       diagnosticsDecorations = null;
-      setDiagnosticsDecorations(true, rootPath);
+      setDiagnosticsDecorations(true, rootPaths[0]);
     }
   } catch (err) {
     console.warn('[fx-host] failed to enable git decorations:', err);
@@ -164,10 +177,13 @@ function setTestStatusDecorations(enabled: boolean, rootPath: string): void {
 async function bootstrap(): Promise<void> {
   const root = process.env.WORKSPACE_ROOT;
   if (!root) throw new Error('WORKSPACE_ROOT env var not set');
+  // WORKSPACE_ROOTS carries the whole workspace; WORKSPACE_ROOT stays the
+  // primary root for the single-root paths (watch bench, demo seeds).
+  const roots = parseWorkspaceRoots(process.env.WORKSPACE_ROOTS, root);
 
   const benchmarkDebounce = Number(process.env.MILLE_WATCH_BENCH_DEBOUNCE_MS);
   host = await createFileExplorerHost({
-    roots: [root],
+    roots,
     respectIgnore: true,
     followSymlinks: 'smart',
     watchDebounceMs:
@@ -197,7 +213,7 @@ async function bootstrap(): Promise<void> {
       return;
     }
     if (msg?.type === 'set-git-decorations') {
-      setGitDecorations(!!msg.enabled, root);
+      setGitDecorations(!!msg.enabled, roots);
       return;
     }
     if (msg?.type === 'set-diagnostics-decorations') {

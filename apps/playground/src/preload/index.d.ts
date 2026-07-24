@@ -16,6 +16,14 @@ export interface MillePlaygroundApi {
   pickAndOpenWorkspace(): Promise<string | null>;
   /** v0.2 B7 — open a known path (from recents) without re-prompting. */
   openWorkspace(path: string): Promise<void>;
+  /**
+   * Phase 5.3 multi-root — pick a folder and *append* it to the workspace
+   * instead of replacing it. Resolves with the resulting root list, or null
+   * if the picker was cancelled.
+   */
+  addWorkspaceFolder(): Promise<readonly string[] | null>;
+  /** Phase 5.3 multi-root — currently open workspace roots. */
+  getWorkspaceRoots(): Promise<readonly string[]>;
   /** v0.2 B7 — last ~10 successfully-opened folders, newest first. */
   getRecentFolders(): Promise<string[]>;
   /** Phase 3 — bounded navigation state keyed by absolute workspace root. */

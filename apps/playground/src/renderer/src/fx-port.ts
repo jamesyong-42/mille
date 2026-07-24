@@ -11,7 +11,10 @@
 
 export interface FxPortMessage {
   port: MessagePort;
+  /** Primary (first) root — identity for navigation state and demo seeds. */
   workspaceRoot: string;
+  /** Every open root, in the order the engine received them. */
+  workspaceRoots: readonly string[];
 }
 
 type Listener = (msg: FxPortMessage) => void;
@@ -24,11 +27,18 @@ export const fxPortReady: Promise<FxPortMessage> = new Promise((res) => {
 let initialDelivered = false;
 
 window.addEventListener('message', (evt: MessageEvent) => {
-  const data = evt.data as { type?: string; workspaceRoot?: string } | undefined;
+  const data = evt.data as
+    | { type?: string; workspaceRoot?: string; workspaceRoots?: string[] }
+    | undefined;
   if (data?.type !== 'fx-port' || evt.ports.length === 0) return;
+  const primary = data.workspaceRoot ?? '';
   const msg: FxPortMessage = {
     port: evt.ports[0]!,
-    workspaceRoot: data.workspaceRoot ?? '',
+    workspaceRoot: primary,
+    workspaceRoots:
+      data.workspaceRoots && data.workspaceRoots.length > 0
+        ? data.workspaceRoots
+        : [primary],
   };
   if (!initialDelivered) {
     initialDelivered = true;

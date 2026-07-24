@@ -112,7 +112,10 @@ function asGitStatusEntries(
 
 interface ConnectionState {
   fx: PortFileExplorer;
+  /** Primary root: navigation-state key and demo-seed scope. */
   workspaceRoot: string;
+  /** All open roots, in the order the engine received them. */
+  workspaceRoots: readonly string[];
 }
 
 const WELCOME = `// Project tool window
@@ -157,7 +160,11 @@ export function App(): ReactElement {
     let disposed = false;
     let currentFx: PortFileExplorer | null = null;
 
-    async function attach(port: MessagePort, workspaceRoot: string): Promise<void> {
+    async function attach(
+      port: MessagePort,
+      workspaceRoot: string,
+      workspaceRoots: readonly string[],
+    ): Promise<void> {
       try {
         const fx = await connectFileExplorer(port, {
           mirrorCap: 20_000,
@@ -169,7 +176,7 @@ export function App(): ReactElement {
         }
         const prev = currentFx;
         currentFx = fx;
-        setConn({ fx, workspaceRoot });
+        setConn({ fx, workspaceRoot, workspaceRoots });
         if (prev !== null) void prev.dispose();
       } catch (err) {
         console.error('[renderer] attach failed', err);
@@ -177,11 +184,13 @@ export function App(): ReactElement {
       }
     }
 
-    void fxPortReady.then(({ port, workspaceRoot }) => attach(port, workspaceRoot));
-    const offSwap = onFxPort(({ port, workspaceRoot }) => {
+    void fxPortReady.then(({ port, workspaceRoot, workspaceRoots }) =>
+      attach(port, workspaceRoot, workspaceRoots),
+    );
+    const offSwap = onFxPort(({ port, workspaceRoot, workspaceRoots }) => {
       setError(null);
       setConn(null);
-      void attach(port, workspaceRoot);
+      void attach(port, workspaceRoot, workspaceRoots);
     });
 
     return () => {
@@ -216,10 +225,25 @@ export function App(): ReactElement {
     );
   }
 
-  return <Explorer key={conn.workspaceRoot} fx={conn.fx} root={conn.workspaceRoot} />;
+  return (
+    <Explorer
+      key={conn.workspaceRoots.join('\u0000')}
+      fx={conn.fx}
+      root={conn.workspaceRoot}
+      roots={conn.workspaceRoots}
+    />
+  );
 }
 
-function Explorer({ fx, root }: { fx: PortFileExplorer; root: string }): ReactElement {
+function Explorer({
+  fx,
+  root,
+  roots,
+}: {
+  fx: PortFileExplorer;
+  root: string;
+  roots: readonly string[];
+}): ReactElement {
   const commands = useMemo(
     () => createCommandRegistry([...defaultCommands, ...scmHistoryCommands]),
     [],
@@ -450,6 +474,37 @@ function Explorer({ fx, root }: { fx: PortFileExplorer; root: string }): ReactEl
     };
   }, []);
 
+  /**
+   * Map an engine root entry to its absolute path, so per-root SCM batches
+   * reach the right repository.
+   *
+   * `PortFileExplorer` has no `getByUri`, so the renderer cannot ask the
+   * engine which path a root id came from. `snapshot.roots()` is in *display*
+   * order, which the engine allows a host to reorder, so pairing it with the
+   * configured order is only sound while nothing reorders roots — the
+   * playground never does. The basename check below catches the pairing
+   * going stale; on a mismatch we search by name and, if that is ambiguous,
+   * return undefined rather than guess a repository for a destructive
+   * action. (An engine-side root→path accessor would make this exact.)
+   */
+  const resolveRootPath = useCallback(
+    (rootId: number, rootName: string): string | undefined => {
+      const displayRoots = fx.getSnapshot().roots();
+      const index = displayRoots.findIndex((entry) => entry.id === rootId);
+      const paired = index >= 0 ? roots[index] : undefined;
+      if (paired !== undefined && basename(paired) === rootName) return paired;
+
+      const byName = roots.filter((path) => basename(path) === rootName);
+      if (byName.length === 1) return byName[0];
+      if (byName.length === 0) return paired;
+      console.warn(
+        `[playground] ambiguous workspace root "${rootName}" — refusing to guess`,
+      );
+      return undefined;
+    },
+    [fx, roots],
+  );
+
   // Phase 5.3 — SCM/history host hooks (IPC to main-process shell git).
   // Declared after editorOpen so compare can open the secondary pane.
   const scmHostHooks = useMemo((): ScmHostHooks => {
@@ -476,7 +531,7 @@ function Explorer({ fx, root }: { fx: PortFileExplorer; root: string }): ReactEl
           });
         },
       },
-      resolveRootPath: () => root,
+      resolveRootPath,
       confirm: (message) => window.confirm(message),
       notify: (level, message) => {
         reportStatus(`${level}: ${message}`);
@@ -504,7 +559,7 @@ function Explorer({ fx, root }: { fx: PortFileExplorer; root: string }): ReactEl
         reportStatus(`History ${path}: ${revisions.length} revision(s)`);
       },
     };
-  }, [root, reportStatus]);
+  }, [root, reportStatus, resolveRootPath]);
 
   useEffect(() => {
     if (!settingsOpen) return;
@@ -666,14 +721,35 @@ function Explorer({ fx, root }: { fx: PortFileExplorer; root: string }): ReactEl
         return;
       }
       if (sidebarView === 'changedFiles') {
-        let entries: GitStatusEntry[] = [];
-        try {
-          const raw = await window.millePlayground.getGitStatus(root);
-          entries = asGitStatusEntries(raw);
-        } catch (err) {
-          console.warn('[playground] getGitStatus failed:', err);
-        }
-        const definition = projectChangedFilesView(entries);
+        // One `git status` per workspace root. Every seed carries its owning
+        // root so `rootA/src/index.ts` and `rootB/src/index.ts` resolve to
+        // different entries instead of collapsing onto one.
+        const perRoot = await Promise.all(
+          roots.map(async (rootPath) => {
+            try {
+              const raw = await window.millePlayground.getGitStatus(rootPath);
+              return { rootPath, entries: asGitStatusEntries(raw) };
+            } catch (err) {
+              console.warn(
+                `[playground] getGitStatus failed for ${rootPath}:`,
+                err,
+              );
+              return { rootPath, entries: [] as GitStatusEntry[] };
+            }
+          }),
+        );
+        const seeds = perRoot
+          .flatMap(({ rootPath, entries }) =>
+            projectChangedFilesView(entries).seeds.map((seed) => ({
+              ...seed,
+              rootPath,
+            })),
+          )
+          .sort(
+            (a, b) =>
+              (a.order ?? 50) - (b.order ?? 50) || a.path.localeCompare(b.path),
+          );
+        const definition = { ...projectChangedFilesView([]), seeds };
         const model = await resolveExplorerView({
           fx,
           rootPath: root,

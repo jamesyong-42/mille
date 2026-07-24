@@ -37,6 +37,14 @@
   `:`, so the old colon check missed it). New exported `assertSafeRevision`
   rejects option-like and non-revision characters before any spawn.
   `git log --max-count` is now a coerced positive integer.
+- **Multi-root demonstrated end to end** — the playground workspace is now a
+  root *list*: "Add folder to workspace…" appends a root, git decorations
+  register one provider per root (distinct `providerId`, absolute-URI lookup
+  keeps them disjoint), Changed Files runs `git status` per root and stamps
+  each seed with its owning `rootPath`, and `resolveRootPath` maps an engine
+  root entry back to its absolute path. IPC now trusts any *open* root rather
+  than only the active one. Demo diagnostics / test-status seeds stay on the
+  primary root.
 - **Multi-root SCM revert (P0)** — `scm.revert` groups by owning root via
   `selectedScmTargets` / `groupScmTargetsByRoot` and passes `rootPath` per
   batch so `rootA/same.ts` and `rootB/same.ts` cannot collapse.

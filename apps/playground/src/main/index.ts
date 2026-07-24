@@ -10,6 +10,7 @@ import {
   type UtilityProcess,
 } from 'electron';
 import { dirname, join, resolve as pathResolve } from 'node:path';
+import { resolveTrustedRoot } from '../../scripts/workspace-roots.mjs';
 import { fileURLToPath } from 'node:url';
 import { cwd } from 'node:process';
 import { readFileSync, statSync, writeFileSync } from 'node:fs';
@@ -82,6 +83,10 @@ function recordRecentFolder(path: string): void {
 // looks identical to a stuck handshake; pick-and-open a specific
 // folder via the toolbar to explore anywhere else.
 const DEFAULT_WORKSPACE_ROOT = process.env.WORKSPACE_ROOT ?? cwd();
+// Phase 5.3 multi-root: the workspace is a list. `activeWorkspaceRoot` stays
+// as the primary (first) root for the single-root paths — watch bench, demo
+// diagnostics seeds — while SCM and git status accept any open root.
+let activeWorkspaceRoots: string[] = [DEFAULT_WORKSPACE_ROOT];
 let activeWorkspaceRoot = DEFAULT_WORKSPACE_ROOT;
 
 // The currently-running utility process. Replaced on every workspace
@@ -89,13 +94,16 @@ let activeWorkspaceRoot = DEFAULT_WORKSPACE_ROOT;
 let fxProcess: UtilityProcess | null = null;
 let watchBenchController: WatchBenchController | null = null;
 
-function forkFxProcess(root: string): UtilityProcess {
+function forkFxProcess(roots: readonly string[]): UtilityProcess {
   const proc = utilityProcess.fork(join(__dirname, '../main/fx-host.mjs'), [], {
     serviceName: 'mille-file-explorer',
     stdio: 'pipe',
     env: {
       ...process.env,
-      WORKSPACE_ROOT: root,
+      // WORKSPACE_ROOT stays the primary root so single-root consumers
+      // (watch bench harness) keep working; WORKSPACE_ROOTS carries the set.
+      WORKSPACE_ROOT: roots[0] ?? DEFAULT_WORKSPACE_ROOT,
+      WORKSPACE_ROOTS: JSON.stringify(roots),
     },
   });
   proc.stdout?.on('data', (d) => process.stdout.write(`[fx-host] ${d}`));
@@ -121,8 +129,11 @@ function forkFxProcess(root: string): UtilityProcess {
  * respawns don't have that incidental delay, so an explicit handshake
  * is the fix.
  */
-function openWorkspace(win: BrowserWindow, root: string): void {
-  activeWorkspaceRoot = root;
+function openWorkspace(win: BrowserWindow, roots: readonly string[]): void {
+  const list = roots.length > 0 ? [...roots] : [DEFAULT_WORKSPACE_ROOT];
+  activeWorkspaceRoots = list;
+  activeWorkspaceRoot = list[0]!;
+  const root = activeWorkspaceRoot;
   if (fxProcess !== null) {
     try {
       fxProcess.kill();
@@ -131,9 +142,9 @@ function openWorkspace(win: BrowserWindow, root: string): void {
     }
     fxProcess = null;
   }
-  const proc = forkFxProcess(root);
+  const proc = forkFxProcess(list);
   fxProcess = proc;
-  console.log(`[playground-main] forked fx-host for ${root}`);
+  console.log(`[playground-main] forked fx-host for ${list.join(', ')}`);
 
   // v0.2 B7 — bump the recents list. The fx utility may still fail
   // (e.g. path vanished between the picker close and walker start)
@@ -150,8 +161,14 @@ function openWorkspace(win: BrowserWindow, root: string): void {
     if (proc !== fxProcess) return; // superseded by a newer respawn
     const { port1, port2 } = new MessageChannelMain();
     proc.postMessage({ type: 'attach' }, [port1]);
-    win.webContents.postMessage('fx-port', { workspaceRoot: root }, [port2]);
-    console.log(`[playground-main] attach+port transferred for ${root}`);
+    win.webContents.postMessage(
+      'fx-port',
+      { workspaceRoot: root, workspaceRoots: list },
+      [port2],
+    );
+    console.log(
+      `[playground-main] attach+port transferred for ${list.join(', ')}`,
+    );
   };
   proc.on('message', onMessage);
 }
@@ -192,7 +209,7 @@ async function createWindow(): Promise<void> {
     await win.loadFile(join(__dirname, '../renderer/index.html'));
   }
 
-  openWorkspace(win, DEFAULT_WORKSPACE_ROOT);
+  openWorkspace(win, [DEFAULT_WORKSPACE_ROOT]);
 
   if (watchBenchConfig !== null) {
     watchBenchController = new WatchBenchController(win, watchBenchConfig);
@@ -237,23 +254,44 @@ async function createWindow(): Promise<void> {
     return result.filePaths[0];
   });
 
-  ipcMain.handle('open-workspace', async (_evt, raw: unknown) => {
+  // Light validation: exists + is a directory. Detailed path
+  // canonicalization / workspace-root containment is the engine's
+  // job; here we just reject the obvious mistakes.
+  function assertDirectory(raw: unknown, label: string): string {
     if (typeof raw !== 'string' || raw.length === 0) {
-      throw new Error('open-workspace: path must be a non-empty string');
+      throw new Error(`${label}: path must be a non-empty string`);
     }
-    // Light validation: exists + is a directory. Detailed path
-    // canonicalization / workspace-root containment is the engine's
-    // job; here we just reject the obvious mistakes.
     try {
       const st = statSync(raw);
       if (!st.isDirectory()) throw new Error('not a directory');
     } catch (e) {
       throw new Error(
-        `open-workspace: cannot open "${raw}": ${e instanceof Error ? e.message : String(e)}`,
+        `${label}: cannot open "${raw}": ${e instanceof Error ? e.message : String(e)}`,
       );
     }
-    openWorkspace(win, raw);
+    return raw;
+  }
+
+  ipcMain.handle('open-workspace', async (_evt, raw: unknown) => {
+    openWorkspace(win, [assertDirectory(raw, 'open-workspace')]);
   });
+
+  /**
+   * Phase 5.3 multi-root — append a second (third, …) root instead of
+   * replacing the workspace, so multi-root SCM has something to act on.
+   * Returns the resulting root list.
+   */
+  ipcMain.handle('add-workspace-folder', async (_evt, raw: unknown) => {
+    const added = assertDirectory(raw, 'add-workspace-folder');
+    const resolved = pathResolve(added);
+    if (activeWorkspaceRoots.some((r) => pathResolve(r) === resolved)) {
+      return [...activeWorkspaceRoots]; // already open — no respawn
+    }
+    openWorkspace(win, [...activeWorkspaceRoots, added]);
+    return [...activeWorkspaceRoots];
+  });
+
+  ipcMain.handle('get-workspace-roots', () => [...activeWorkspaceRoots]);
 
   // v0.2 B7 — renderer reads this to populate the toolbar dropdown.
   // Cheap enough to re-read from disk on every call; no cache layer.
@@ -300,18 +338,7 @@ async function createWindow(): Promise<void> {
   // workspace root is allowed; relative paths are containment-checked in
   // createShell* clients (history/SCM).
   function trustedWorkspaceRoot(requested: unknown): string {
-    const active = activeWorkspaceRoot;
-    if (typeof requested !== 'string' || requested.length === 0) {
-      return active;
-    }
-    // Allow only exact match (after resolve) to the active workspace —
-    // rejects absolute path escapes and alternate directory targets.
-    if (pathResolve(requested) !== pathResolve(active)) {
-      throw new Error(
-        'scm: rootPath is not the active workspace (renderer roots are not trusted)',
-      );
-    }
-    return active;
+    return resolveTrustedRoot(requested, activeWorkspaceRoots);
   }
 
   // Phase 5.2 — Changed Files view needs a one-shot status snapshot in the

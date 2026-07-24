@@ -15,13 +15,20 @@ import type {
 // renderer listens on 'message' and reads event.ports[0]. Fires on every
 // arrival — the renderer swaps the connection when a new port lands
 // (triggered by the toolbar's "Open folder…" picker).
-ipcRenderer.on('fx-port', (event, payload: { workspaceRoot: string }) => {
-  window.postMessage(
-    { type: 'fx-port', workspaceRoot: payload.workspaceRoot },
-    '*',
-    event.ports as unknown as Transferable[],
-  );
-});
+ipcRenderer.on(
+  'fx-port',
+  (event, payload: { workspaceRoot: string; workspaceRoots?: string[] }) => {
+    window.postMessage(
+      {
+        type: 'fx-port',
+        workspaceRoot: payload.workspaceRoot,
+        workspaceRoots: payload.workspaceRoots ?? [payload.workspaceRoot],
+      },
+      '*',
+      event.ports as unknown as Transferable[],
+    );
+  },
+);
 
 // Renderer-facing API. Contextually isolated: only the named methods
 // are exposed, not ipcRenderer wholesale.
@@ -53,6 +60,22 @@ contextBridge.exposeInMainWorld('millePlayground', {
    */
   async openWorkspace(path: string): Promise<void> {
     await ipcRenderer.invoke('open-workspace', path);
+  },
+
+  /**
+   * Phase 5.3 multi-root — pick a folder and append it to the workspace
+   * rather than replacing it, so multi-root SCM (per-root discard/compare)
+   * can be exercised end to end. Resolves with the resulting root list, or
+   * null when the picker is cancelled.
+   */
+  async addWorkspaceFolder(): Promise<readonly string[] | null> {
+    const picked: string | null = await ipcRenderer.invoke('pick-workspace');
+    if (picked === null) return null;
+    return ipcRenderer.invoke('add-workspace-folder', picked);
+  },
+
+  async getWorkspaceRoots(): Promise<readonly string[]> {
+    return ipcRenderer.invoke('get-workspace-roots');
   },
 
   /**

@@ -283,6 +283,31 @@ export function Toolbar(props: ToolbarProps): ReactElement {
     }
   }, [pickerBusy]);
 
+  /**
+   * Phase 5.3 multi-root — append a folder instead of replacing the
+   * workspace, so per-root SCM (discard/compare grouped by owning root) has
+   * a second repository to act on.
+   */
+  const handleAddFolder = useCallback(async () => {
+    if (pickerBusy) return;
+    setRecentsOpen(false);
+    setPickerBusy(true);
+    try {
+      const roots = await window.millePlayground.addWorkspaceFolder();
+      if (roots === null) {
+        setToast('Add folder: cancelled.');
+      } else {
+        setToast(`Workspace roots: ${roots.length} — walking…`);
+      }
+    } catch (err) {
+      setToast(
+        `Add folder failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    } finally {
+      setPickerBusy(false);
+    }
+  }, [pickerBusy]);
+
   const handlePickRecent = useCallback(
     async (path: string) => {
       if (pickerBusy) return;
@@ -365,6 +390,15 @@ export function Toolbar(props: ToolbarProps): ReactElement {
               <li role="none">
                 <button type="button" role="menuitem" onClick={() => void handlePickBrowse()}>
                   Browse…
+                </button>
+              </li>
+              <li role="none">
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => void handleAddFolder()}
+                >
+                  Add folder to workspace…
                 </button>
               </li>
             </ul>

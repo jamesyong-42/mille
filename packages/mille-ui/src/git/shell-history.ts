@@ -104,6 +104,27 @@ function safeLimit(limit: unknown, fallback: number): number {
   return Math.min(Math.floor(n), 10_000);
 }
 
+/**
+ * Containment check for paths that have already been resolved on disk.
+ * `assertPathUnderRoot` is lexical, so it cannot see a symlink inside the
+ * workspace that resolves outside it; call this before following one.
+ */
+export function assertRealPathUnderRoot(
+  realRoot: string,
+  realTarget: string,
+  reportedPath: string,
+): void {
+  const contained = path.relative(realRoot, realTarget);
+  if (
+    contained === '' ||
+    contained === '..' ||
+    contained.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(contained)
+  ) {
+    throw new Error(`path escapes workspace root: ${reportedPath}`);
+  }
+}
+
 function assertPathsUnderRoot(
   rootPath: string,
   paths: readonly string[],
@@ -311,10 +332,20 @@ export function createShellScmClient(options: ShellHistoryOptions): ScmClient {
         side: ScmCompareRequest['left'],
       ): Promise<string | null> {
         if (side.kind === 'working') {
-          const { readFileSync } = await import('node:fs');
+          const { readFileSync, realpathSync } = await import('node:fs');
+          const absolute = path.resolve(root, ...rel.split('/'));
+          // `rel` is lexically contained, but a symlink inside the workspace
+          // can still point outside it, and reading follows the link. Resolve
+          // both ends before reading.
+          let realTarget: string;
           try {
-            // rel already containment-checked; join via resolve under root.
-            return readFileSync(path.resolve(root, ...rel.split('/')), 'utf8');
+            realTarget = realpathSync(absolute);
+          } catch {
+            return null; // missing / unreadable working copy is not an error
+          }
+          assertRealPathUnderRoot(realpathSync(root), realTarget, request.path);
+          try {
+            return readFileSync(realTarget, 'utf8');
           } catch {
             return null;
           }

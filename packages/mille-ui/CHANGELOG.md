@@ -25,6 +25,11 @@
   validate every relative path with `assertPathUnderRoot` (rejects `..`,
   absolute, drive paths). Playground IPC no longer trusts renderer-supplied
   `rootPath` (active workspace only).
+- **Symlink escape on compare (P0)** — `assertPathUnderRoot` is lexical, so a
+  symlink inside the workspace pointing outside it passed containment and the
+  working-tree read followed it. `compare` now resolves both the root and the
+  target with `realpathSync` and re-checks containment before reading; new
+  exported `assertRealPathUnderRoot` covers the on-disk case.
 - **Git revision argument injection (P0)** — `getContents` interpolates
   `revision` into the positional `git show <rev>:<path>` argument, so a
   revision beginning with `-` reached git as an *option*

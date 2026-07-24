@@ -231,6 +231,39 @@ test('createShellScmClient.compare rejects path escape', async () => {
   );
 });
 
+test('compare refuses to read through a symlink that escapes the root', async () => {
+  const { mkdirSync, symlinkSync } = await import('node:fs');
+  const dir = mkdtempSync(path.join(tmpdir(), 'mille-scm-link-'));
+  const outsideDir = mkdtempSync(path.join(tmpdir(), 'mille-scm-secret-'));
+  writeFileSync(path.join(outsideDir, 'secret.txt'), 'SECRET\n');
+  mkdirSync(path.join(dir, 'src'));
+
+  let linked = true;
+  try {
+    // A workspace-relative path like `src/out/secret.txt` is lexically
+    // contained, yet reading it follows the link out of the workspace.
+    symlinkSync(outsideDir, path.join(dir, 'src', 'out'), 'dir');
+  } catch {
+    linked = false; // symlink creation needs privileges on some platforms
+  }
+
+  if (linked) {
+    const scm = createShellScmClient({ rootPath: dir });
+    await assert.rejects(
+      () =>
+        scm.compare({
+          path: 'src/out/secret.txt',
+          left: { kind: 'working' },
+          right: { kind: 'working' },
+        }),
+      /escapes workspace root/,
+    );
+  }
+
+  rmSync(dir, { recursive: true, force: true });
+  rmSync(outsideDir, { recursive: true, force: true });
+});
+
 test('assertSafeRevision rejects git option injection', () => {
   // `git show <rev>:<path>` is positional: a leading `-` reaches git as an
   // option. `--output=<file>` is an arbitrary-file-write primitive, and it

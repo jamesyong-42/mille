@@ -292,7 +292,37 @@ Dirty tabs render `●`; clean open tabs render `○` (unless `decorateOpen:
 false`). Tooltips include "Active editor" / "Unsaved changes" /
 "Open in editor". Works on the port client (renderer decoration push).
 
-### 5.3 Diagnostics / Problems
+### 5.3 Test status
+
+Phase 5.1 — test-runner outcomes on file rows:
+
+```tsx
+import {
+  registerTestStatusDecorations,
+  createMapTestStatusClient,
+} from '@vibecook/mille-ui/test-status';
+
+const client = createMapTestStatusClient({
+  initial: [
+    { path: 'src/a.test.ts', status: 'failed', message: 'expect(1).toBe(2)' },
+    { path: 'src/b.test.ts', status: 'passed' },
+  ],
+});
+
+const handle = registerTestStatusDecorations({
+  fx,
+  client,
+  rootPath: '/Users/you/my-repo',
+  // showPassed: false,     // default — hide green checks (less noise)
+  // propagateToParent: true, // folder failure-count badges
+});
+```
+
+Leaf glyphs: `✗` failed, `!` errored, `…` running, `○` skipped, `✓` passed
+(opt-in). Folders aggregate failure counts with muted colors. Distinct from
+`@vibecook/mille-ui/testing` (fake-engine test helpers).
+
+### 5.4 Diagnostics / Problems
 
 Phase 5.1 — problem badges from a host-supplied diagnostics client
 (LSP, ESLint, tsserver, …). Leaf rows show problem counts colored by
@@ -327,7 +357,7 @@ const handle = registerDiagnosticsDecorations({
 });
 ```
 
-### 5.4 Agent-rules
+### 5.5 Agent-rules
 
 Highlights "files-as-config" entries (`CLAUDE.md`, `.cursor/rules/*`,
 `.kiro/steering/*`, `.clinerules`, `.continue/*`, `AGENTS.md`, `.rules`):
@@ -342,7 +372,7 @@ const handle = registerAgentRulesDecorations({
 });
 ```
 
-### 5.5 Port-client decoration notes
+### 5.6 Port-client decoration notes
 
 `registerDecorationProvider` exists on both the in-process engine and the
 **port client** (renderer push of decoration frames). Git and demo

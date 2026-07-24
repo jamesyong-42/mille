@@ -54,6 +54,18 @@
   --mille-decoration-open: #8b949e;
   --mille-decoration-active: #0969da;
 
+  /* Test status (Phase 5.1) */
+  --mille-decoration-test-passed: #1a7f37;
+  --mille-decoration-test-failed: #cf222e;
+  --mille-decoration-test-errored: #9a6700;
+  --mille-decoration-test-running: #0969da;
+  --mille-decoration-test-skipped: #656d76;
+  --mille-decoration-test-passed-muted: #2d6a3a;
+  --mille-decoration-test-failed-muted: #b53a34;
+  --mille-decoration-test-errored-muted: #a68b64;
+  --mille-decoration-test-running-muted: #3d6fa3;
+  --mille-decoration-test-skipped-muted: #6c6c6c;
+
   /* Rename input */
   --mille-rename-input-bg: Canvas;
   --mille-rename-input-ring: var(--mille-accent-bg);
@@ -88,6 +100,17 @@
   --mille-decoration-dirty: #c9d1d9;
   --mille-decoration-open: #8b949e;
   --mille-decoration-active: #58a6ff;
+
+  --mille-decoration-test-passed: #3fb950;
+  --mille-decoration-test-failed: #f85149;
+  --mille-decoration-test-errored: #d29922;
+  --mille-decoration-test-running: #58a6ff;
+  --mille-decoration-test-skipped: #8b949e;
+  --mille-decoration-test-passed-muted: #2d6a3a;
+  --mille-decoration-test-failed-muted: #b53a34;
+  --mille-decoration-test-errored-muted: #a68b64;
+  --mille-decoration-test-running-muted: #3d6fa3;
+  --mille-decoration-test-skipped-muted: #6c6c6c;
 
   --mille-rename-input-bg: #0d1117;
   --mille-rename-input-ring: var(--mille-accent-bg);

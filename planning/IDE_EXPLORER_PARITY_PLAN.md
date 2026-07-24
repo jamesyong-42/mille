@@ -1163,7 +1163,14 @@ Move from a capable filesystem tree to a central IDE navigation surface.
   decoration text (`aria-label` + sr-only). Bench:
   `pnpm --filter @vibecook/mille-ui bench:diagnostics`.
   Tests: `packages/mille-ui/test/diagnostics-decorations.test.mjs`.
-- Test status and failure decorations. *(open)*
+- Test status and failure decorations.
+  **Done (2026-07-24)** — `@vibecook/mille-ui/test-status` exports
+  `registerTestStatusDecorations` + `TestStatusClient` /
+  `createMapTestStatusClient`. Status order:
+  `failed > errored > running > skipped > passed`. Leaf glyphs `✗ ! … ○ ✓`
+  (passed off by default via `showPassed: false`); folder aggregates show
+  failure counts. Hardening matches diagnostics. Tests:
+  `packages/mille-ui/test/test-status-decorations.test.mjs`.
 - Dirty/open/active editor state.
   **Done (2026-07-23)** — `@vibecook/mille-ui/editor-state` exports
   `registerEditorStateDecorations` + `EditorStateClient` /

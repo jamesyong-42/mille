@@ -8,6 +8,11 @@ import {
   registerDiagnosticsDecorations,
   type DiagnosticsDecorationsHandle,
 } from '@vibecook/mille-ui/diagnostics';
+import {
+  createMapTestStatusClient,
+  registerTestStatusDecorations,
+  type TestStatusDecorationsHandle,
+} from '@vibecook/mille-ui/test-status';
 
 // Electron's MessagePortMain emits `message` events with a MessageEvent-
 // shaped object ({ data, ports }). The mille library's built-in adapter
@@ -43,6 +48,7 @@ function wrapMessagePortMain(port: MessagePortMain): MessagePortLike {
 let host: FileExplorerHost | null = null;
 let gitDecorations: GitDecorationsHandle | null = null;
 let diagnosticsDecorations: DiagnosticsDecorationsHandle | null = null;
+let testStatusDecorations: TestStatusDecorationsHandle | null = null;
 
 // v0.2 — the shell git client needs `node:child_process`, so it
 // cannot live in the renderer. Register it here against the
@@ -161,6 +167,51 @@ function setDiagnosticsDecorations(enabled: boolean, rootPath: string): void {
   }
 }
 
+/**
+ * Phase 5.1 — demo test-status decorations. Seeds a few suite outcomes
+ * on well-known test paths. Opt out with MILLE_DEMO_TEST_STATUS=0.
+ */
+function setTestStatusDecorations(enabled: boolean, rootPath: string): void {
+  if (!host) return;
+  if (!enabled) {
+    testStatusDecorations?.dispose();
+    testStatusDecorations = null;
+    console.log('[fx-host] test-status decorations disabled');
+    return;
+  }
+  if (testStatusDecorations !== null) return;
+  try {
+    const client = createMapTestStatusClient({
+      initial: [
+        {
+          path: 'packages/mille-ui/test/diagnostics-decorations.test.mjs',
+          status: 'passed',
+        },
+        {
+          path: 'packages/mille/test/undo-journal.test.mjs',
+          status: 'failed',
+          message: 'Demo: simulated assertion failure',
+        },
+        {
+          path: 'packages/mille-ui/test/editor-state-decorations.test.mjs',
+          status: 'running',
+        },
+      ],
+    });
+    const currentHost = host;
+    testStatusDecorations = registerTestStatusDecorations({
+      fx: host.local,
+      client,
+      rootPath,
+      showPassed: true, // demo should show green checks too
+      registrar: (provider) => currentHost.registerDecorationProvider(provider),
+    });
+    console.log('[fx-host] test-status decorations enabled (demo seed)');
+  } catch (err) {
+    console.warn('[fx-host] failed to enable test-status decorations:', err);
+  }
+}
+
 async function bootstrap(): Promise<void> {
   const root = process.env.WORKSPACE_ROOT;
   if (!root) throw new Error('WORKSPACE_ROOT env var not set');
@@ -212,6 +263,9 @@ async function bootstrap(): Promise<void> {
   // re-register diagnostics after SCM so problem badges win the merge.
   if (process.env.MILLE_DEMO_DIAGNOSTICS !== '0') {
     setDiagnosticsDecorations(true, root);
+  }
+  if (process.env.MILLE_DEMO_TEST_STATUS !== '0') {
+    setTestStatusDecorations(true, root);
   }
 
   // Fixed in v0.2 B1 — roots now ship in deltas so the handshake can

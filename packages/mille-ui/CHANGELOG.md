@@ -4,6 +4,13 @@
 
 ### Added
 
+- **Test-status decorations (Phase 5.1)** — `@vibecook/mille-ui/test-status`
+  exports `registerTestStatusDecorations`, `TestStatusClient`, and
+  `createMapTestStatusClient`. Leaf glyphs: `✗` failed, `!` errored, `…`
+  running, `○` skipped, `✓` passed (opt-in via `showPassed`). Folders
+  aggregate failure counts with muted colors. Same hardening as diagnostics.
+  Tokens: `--mille-decoration-test-{passed,failed,errored,running,skipped}`
+  (+ muted). Distinct from `@vibecook/mille-ui/testing` (fake engine helpers).
 - **Editor-state decorations (Phase 5.1)** — `@vibecook/mille-ui/editor-state`
   exports `registerEditorStateDecorations`, `EditorStateClient`, and
   `createMapEditorStateClient`. Dirty tabs show `●`, clean open tabs show

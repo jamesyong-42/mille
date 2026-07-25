@@ -67,7 +67,6 @@ jobs:
     name: ${{ matrix.target }}
     needs: resolve
     runs-on: ${{ matrix.host }}
-    container: ${{ matrix.container }}
     strategy:
       # One broken platform must not hide the state of the other seven.
       fail-fast: false
@@ -97,32 +96,36 @@ jobs:
           # musl resolution is the interesting part on Alpine: the loader
           # picks the -musl package off the absence of glibcVersionRuntime.
           #
-          # `shell: sh` is not incidental — Alpine ships busybox ash and no
-          # bash, so the default `shell: bash` fails with a bare "executable
-          # file not found" before any step runs. Both musl jobs are POSIX sh.
+          # Run through `docker run` rather than a job-level `container:`.
+          # Alpine ships busybox ash and no bash, and a container job runs
+          # every step with the runner default of bash — which dies as
+          # `exec: "bash": executable file not found` before the step body is
+          # reached. Setting `shell` per matrix entry is not an option either:
+          # the `shell` key does not accept the matrix context, and the
+          # workflow is rejected at parse time. Driving docker from a normal
+          # bash step keeps sh confined to the container interior.
           - target: linux-x64-musl
             host: ubuntu-latest
-            container: node:20-alpine
-            shell: sh
+            image: node:20-alpine
 
           - target: linux-arm64-musl
             host: ubuntu-24.04-arm
-            container: node:20-alpine
-            shell: sh
+            image: node:20-alpine
 
     steps:
       - uses: actions/checkout@v4
 
-      # The Alpine images already ship Node 20; setup-node would replace it
-      # with a glibc build and defeat the point of the musl jobs.
+      # The Alpine image already ships Node 20; setup-node here would install a
+      # glibc build on the host and defeat the point of the musl jobs.
       - name: Setup Node
-        if: ${{ !matrix.container }}
+        if: ${{ !matrix.image }}
         uses: actions/setup-node@v4
         with:
           node-version: 20
 
-      - name: Install the published package
-        shell: ${{ matrix.shell || 'bash' }}
+      - name: Install and smoke test (host)
+        if: ${{ !matrix.image }}
+        shell: bash
         run: |
           set -eu
           mkdir -p "${RUNNER_TEMP}/smoke"
@@ -131,10 +134,23 @@ jobs:
           npm install "@vibecook/mille@${{ needs.resolve.outputs.version }}"
           echo "--- installed @vibecook packages ---"
           ls node_modules/@vibecook
+          node "${GITHUB_WORKSPACE}/scripts/smoke-published.mjs" \
+            "${RUNNER_TEMP}/smoke" "${{ needs.resolve.outputs.version }}"
 
-      - name: Smoke test
-        shell: ${{ matrix.shell || 'bash' }}
-        run: >-
-          node "${GITHUB_WORKSPACE}/scripts/smoke-published.mjs"
-          "${RUNNER_TEMP}/smoke"
-          "${{ needs.resolve.outputs.version }}"
+      - name: Install and smoke test (musl container)
+        if: ${{ matrix.image }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -v "${GITHUB_WORKSPACE}:/repo:ro" \
+            -w /smoke \
+            "${{ matrix.image }}" \
+            sh -eu -c '
+              mkdir -p /smoke && cd /smoke
+              npm init -y >/dev/null
+              npm install "@vibecook/mille@${{ needs.resolve.outputs.version }}"
+              echo "--- installed @vibecook packages ---"
+              ls node_modules/@vibecook
+              node /repo/scripts/smoke-published.mjs /smoke "${{ needs.resolve.outputs.version }}"
+            '

@@ -571,10 +571,16 @@ fn file_id_from_metadata(meta: &std::fs::Metadata) -> (u64, u64) {
     }
     #[cfg(windows)]
     {
-        use std::os::windows::fs::MetadataExt;
-        let dev = meta.volume_serial_number().unwrap_or(0) as u64;
-        let ino = meta.file_index().unwrap_or(0);
-        return (dev, ino);
+        // `volume_serial_number` / `file_index` are still unstable
+        // (rust-lang/rust#63010, feature `windows_by_handle`), so reading the
+        // file index from Metadata does not compile on the pinned stable
+        // toolchain — it is why the msvc targets stopped building. Report no
+        // id and let callers fall back to size + both timestamps, which on
+        // Windows includes a real creation time. Getting a true id back means
+        // GetFileInformationByHandle through windows-sys, which needs a live
+        // handle rather than Metadata.
+        let _ = meta;
+        (0, 0)
     }
     #[cfg(not(any(unix, windows)))]
     {

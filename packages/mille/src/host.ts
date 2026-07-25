@@ -97,6 +97,14 @@ interface Session {
    * handshook after a root was added.
    */
   lastRootIds: number[];
+  /**
+   * Highest `treeVersion` this session has confirmed it applied, via an
+   * `ack` frame. Only advanced for deltas the host marked `ackRequested`,
+   * so it lags during ordinary churn and is meaningful only at explicit
+   * synchronization points. `-1` means "has never acked", which is also the
+   * state of a client too old to send them.
+   */
+  ackedVersion: number;
   /** Teardown for the message listener + port. Replaced during attach. */
   detach: () => void;
 }
@@ -152,6 +160,10 @@ const TICK_MS = 16;
 class FileExplorerHostImpl implements FileExplorerHost {
   private readonly explorer: FileExplorer;
   private readonly sessions = new Map<number, Session>();
+  /** Callbacks waiting for sessions to catch up; see `flushTickAcked`. */
+  private readonly ackWaiters = new Set<() => void>();
+  /** Marks the next tick's deltas as needing an ack from every session. */
+  private ackRequestedForNextTick = false;
   private nextSessionId = 1;
   private disposed = false;
   /**
@@ -329,6 +341,7 @@ class FileExplorerHostImpl implements FileExplorerHost {
       nextReqId: 1,
       handshook: false,
       lastRootIds: [],
+      ackedVersion: -1,
       detach: () => {
         /* replaced below */
       },
@@ -641,6 +654,7 @@ class FileExplorerHostImpl implements FileExplorerHost {
           coarseSubtrees: coarse,
           subtreeDirty,
           subtreeResynced,
+          ...(this.ackRequestedForNextTick ? { ackRequested: true } : {}),
           ...(cs.projectionChanged
             ? {
                 visibility: {
@@ -698,6 +712,14 @@ class FileExplorerHostImpl implements FileExplorerHost {
       case 'call':
         void this.handleCall(session, f.body as { reqId: number; method: string; args: unknown[] });
         return;
+      case 'ack': {
+        const version = (f.body as { version?: unknown })?.version;
+        if (typeof version === 'number' && version > session.ackedVersion) {
+          session.ackedVersion = version;
+          this.notifyAckWaiters();
+        }
+        return;
+      }
       case 'dispose':
         this.detachSession(session.id);
         return;
@@ -1079,6 +1101,67 @@ class FileExplorerHostImpl implements FileExplorerHost {
     });
   }
 
+  /** Wake anything waiting in `flushTickAcked`. */
+  private notifyAckWaiters(): void {
+    const waiters = [...this.ackWaiters];
+    for (const waiter of waiters) waiter();
+  }
+
+  /**
+   * Flush a tick and wait until every handshaked session confirms it applied
+   * it — the guarantee `resync` advertises.
+   *
+   * Posting to a MessagePort tells the host nothing about when the peer runs,
+   * so the previous "tick, wait one setImmediate" was a guess that held on an
+   * idle machine and lost under load. Deltas flushed here ask for an ack and
+   * this waits for them.
+   *
+   * Falls back to resolving on `timeoutMs` so one wedged or outdated client
+   * cannot hang a mutation: the caller then gets the old best-effort
+   * behaviour rather than a hung promise.
+   */
+  private async flushTickAcked(timeoutMs = 1_000): Promise<void> {
+    const sessions = [...this.sessions.values()].filter((s) => s.handshook);
+    if (sessions.length === 0) {
+      await this.flushTickNow();
+      return;
+    }
+
+    this.ackRequestedForNextTick = true;
+    this.tick();
+    this.ackRequestedForNextTick = false;
+
+    const target = this.explorer.getSnapshot().treeVersion;
+    const satisfied = (): boolean =>
+      sessions.every(
+        (s) => !this.sessions.has(s.id) || s.ackedVersion >= target,
+      );
+    if (satisfied()) {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      return;
+    }
+
+    await new Promise<void>((resolve) => {
+      let done = false;
+      const finish = (): void => {
+        if (done) return;
+        done = true;
+        this.ackWaiters.delete(check);
+        clearTimeout(timer);
+        resolve();
+      };
+      const check = (): void => {
+        if (satisfied()) finish();
+      };
+      const timer = setTimeout(finish, timeoutMs);
+      // Node keeps the process alive for pending timers; a host waiting on a
+      // detached client should not.
+      (timer as unknown as { unref?: () => void }).unref?.();
+      this.ackWaiters.add(check);
+      check();
+    });
+  }
+
   private async dispatchMutation(op: string, args: Record<string, unknown>): Promise<unknown> {
     switch (op) {
       case 'create':
@@ -1245,7 +1328,7 @@ class FileExplorerHostImpl implements FileExplorerHost {
         const version = await this.explorer.resync(id, { recursive });
         this.prefetched.delete(markerId);
         this.markSubtreeResynced(markerId);
-        await this.flushTickNow();
+        await this.flushTickAcked();
         return version;
       }
       case 'resyncWorkspace': {
@@ -1258,7 +1341,7 @@ class FileExplorerHostImpl implements FileExplorerHost {
           this.prefetched.delete(rootId);
           this.markSubtreeResynced(rootId);
         }
-        await this.flushTickNow();
+        await this.flushTickAcked();
         return version;
       }
       case 'resolvePath': {

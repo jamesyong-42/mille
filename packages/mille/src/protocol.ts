@@ -89,6 +89,21 @@ export interface DisposeMsg {
 }
 
 /**
+ * Client → host: "I have applied every frame up to `version`."
+ *
+ * Sent only in response to a delta carrying `ackRequested`. Hosts that never
+ * request one never see this frame, and clients predating it simply do not
+ * send it — the host's wait falls back to its timeout.
+ */
+export interface AckMsg {
+  type: 'ack';
+  body: {
+    /** `treeVersion` of the most recent delta this client has applied. */
+    version: number;
+  };
+}
+
+/**
  * Minimal decoration shape on the wire. Matches the public `Decoration`
  * interface in `api.d.ts`; re-declared here so `protocol.ts` stays a
  * runtime-agnostic schema module. Keep these two in sync.
@@ -145,6 +160,7 @@ export type ClientToHostMessage =
   | SetViewportMsg
   | MutateMsg
   | CallMsg
+  | AckMsg
   | DisposeMsg
   | DecorationsMsg;
 
@@ -224,6 +240,17 @@ export interface DeltaMsg {
      * yet, the client's `roots` stayed empty forever.
      */
     roots?: number[];
+    /**
+     * Ask the client to reply with an `ack` once this frame is applied.
+     *
+     * Set only for frames flushed by an explicit synchronization point
+     * (`resync` / `resyncWorkspace`), whose contract is that every attached
+     * mirror reflects the change before the call resolves. Delivery to a
+     * MessagePort is not observable from the host, so without a reply the
+     * host can only wait a tick and hope — which is a race, not a guarantee.
+     * Ordinary churn leaves this unset and stays one-way.
+     */
+    ackRequested?: boolean;
   };
 }
 

@@ -174,3 +174,128 @@ test('port subtree resync is a synchronization point for every attached mirror',
     rmSync(sandbox, { recursive: true, force: true });
   }
 });
+
+/**
+ * Wrap a host-side port so frames reach the client `delayMs` late.
+ *
+ * The synchronization point is only interesting when a mirror is *behind*.
+ * On an idle machine every client applies its delta within the tick the host
+ * waits out, which is why the race only ever surfaced under CI load. Delaying
+ * one client reproduces that state deterministically.
+ */
+function slowPort(port, delayMs) {
+  return {
+    postMessage: (message, transfer) => {
+      setTimeout(() => {
+        try {
+          port.postMessage(message, transfer);
+        } catch {
+          /* channel closed mid-flight */
+        }
+      }, delayMs);
+    },
+    addEventListener: (_type, listener) => {
+      port.on('message', (data) => listener({ data }));
+    },
+    removeEventListener: () => {},
+    start: () => port.start?.(),
+    close: () => port.close?.(),
+  };
+}
+
+test('port resync waits for a lagging mirror, not just a tick', async () => {
+  const { sandbox, root } = fixture();
+  const host = await createFileExplorerHost({ roots: [root], settings });
+  await host.local.populateFromRoots();
+
+  const fast = new MessageChannel();
+  const slow = new MessageChannel();
+  host.attachPort(fast.port1);
+  // 60 ms is far longer than the setImmediate the host used to settle for.
+  host.attachPort(slowPort(slow.port1, 60));
+  const fastClient = await connectFileExplorer(fast.port2);
+  const slowClient = await connectFileExplorer(slow.port2);
+
+  try {
+    const rootId = fastClient.getSnapshot().roots()[0]?.id;
+    assert.ok(rootId !== undefined);
+    fastClient.setExpanded({ add: [rootId] });
+    slowClient.setExpanded({ add: [rootId] });
+    await waitFor(
+      () => fastClient.getSnapshot().directChildCount(rootId) ?? 0,
+      (count) => count > 0,
+      'fast client did not hydrate',
+    );
+    await waitFor(
+      () => slowClient.getSnapshot().directChildCount(rootId) ?? 0,
+      (count) => count > 0,
+      'slow client did not hydrate',
+    );
+
+    writeFileSync(join(root, 'late.txt'), 'late');
+    const version = await fastClient.resync(rootId, { recursive: true });
+
+    // No polling: resolving is supposed to mean every mirror is caught up.
+    assert.equal(
+      slowClient.getSnapshot().treeVersion,
+      version,
+      'lagging mirror was still behind when resync resolved',
+    );
+    assert.ok(childByName(slowClient.getSnapshot(), rootId, 'late.txt'));
+  } finally {
+    await fastClient.dispose();
+    await slowClient.dispose();
+    await host.dispose();
+    rmSync(sandbox, { recursive: true, force: true });
+  }
+});
+
+test('resync still resolves when a client never acknowledges', async () => {
+  const { frame, PROTOCOL_VERSION } = await import('../dist/protocol.js');
+  const { sandbox, root } = fixture();
+  const host = await createFileExplorerHost({ roots: [root], settings });
+  await host.local.populateFromRoots();
+
+  const live = new MessageChannel();
+  const mute = new MessageChannel();
+  host.attachPort(live.port1);
+  host.attachPort(mute.port1);
+  const client = await connectFileExplorer(live.port2);
+
+  // A client predating the ack frame: it handshakes, receives deltas, and
+  // never replies. The host must not wait on it forever.
+  mute.port2.on('message', () => {});
+  mute.port2.postMessage(
+    frame('handshake', {
+      version: PROTOCOL_VERSION,
+      clientId: 'silent',
+      options: {},
+    }),
+  );
+
+  try {
+    const rootId = client.getSnapshot().roots()[0]?.id;
+    assert.ok(rootId !== undefined);
+    client.setExpanded({ add: [rootId] });
+    await waitFor(
+      () => client.getSnapshot().directChildCount(rootId) ?? 0,
+      (count) => count > 0,
+      'client did not hydrate',
+    );
+
+    writeFileSync(join(root, 'quiet.txt'), 'quiet');
+    const started = Date.now();
+    const version = await client.resync(rootId, { recursive: true });
+    const elapsed = Date.now() - started;
+
+    // Bounded by the fallback, and the acking client is still correct.
+    assert.ok(elapsed < 4_000, `resync took ${elapsed} ms — fallback did not fire`);
+    assert.equal(client.getSnapshot().treeVersion, version);
+    assert.ok(childByName(client.getSnapshot(), rootId, 'quiet.txt'));
+  } finally {
+    await client.dispose();
+    mute.port2.close();
+    await host.dispose();
+    rmSync(sandbox, { recursive: true, force: true });
+  }
+});

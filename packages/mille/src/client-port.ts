@@ -685,9 +685,27 @@ export class PortFileExplorer {
       case 'snapshot':
         this.handleSnapshot(f.body as InboundSnapshot);
         return;
-      case 'delta':
-        this.handleDelta(f.body as InboundDelta);
+      case 'delta': {
+        const body = f.body as InboundDelta & {
+          ackRequested?: boolean;
+          version?: number;
+        };
+        this.handleDelta(body);
+        // Reply only when asked. The host requests this for explicit
+        // synchronization points, where it must know the mirror is caught up
+        // rather than assume it after a tick. Sent after handleDelta so the
+        // ack means "applied", not "received".
+        if (body?.ackRequested === true) {
+          try {
+            this.port.postMessage(
+              frame('ack', { version: this.working.treeVersion }),
+            );
+          } catch {
+            /* a dead port fails the host's wait by timeout, not by throw */
+          }
+        }
         return;
+      }
       case 'mutateResult':
       case 'callResult':
         this.handleResult(

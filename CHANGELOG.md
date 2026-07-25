@@ -13,6 +13,16 @@
   `refresh()` is serialized behind any in-flight walk — so `await writeFile()`
   → `await refresh()` never resolves with a tree read before the write.
   Local `FileExplorer` unchanged; native `registerProvider` still deferred.
+- **`resync` is an acknowledged synchronization point** — the host used to
+  flush deltas and wait one `setImmediate`, which is not observable evidence
+  that a peer applied anything; the guarantee held on an idle machine and lost
+  under load. Deltas flushed by `resync` / `resyncWorkspace` now carry
+  `ackRequested`, clients reply with an `ack` frame once applied, and the call
+  resolves when every attached session has confirmed. Additive and
+  version-compatible: a client that never acks (or predates the frame) is
+  covered by a 1 s fallback, which degrades to the old behaviour rather than
+  hanging. Ordinary churn is unchanged — no acks are requested, so the hot
+  path stays one-way.
 - **Scoped provider invalidation** — a watcher event invalidates the directory
   whose listing it changed, and the walk re-reads only those directories,
   returning every subtree with no dirty descendant by reference. Adding one

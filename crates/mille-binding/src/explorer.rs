@@ -118,6 +118,23 @@ pub struct FileExplorer {
     pub(crate) exclude_globs: Arc<parking_lot::RwLock<Vec<String>>>,
     /// Serializes classification against settings changes so a watcher batch
     /// using an old matcher cannot overwrite freshly reclassified entries.
+    ///
+    /// Mutation paths hold this across their filesystem `await`s on purpose:
+    /// what must be atomic against a watcher batch is "touch the disk, then
+    /// update the store", so releasing it in between would reopen the race
+    /// this gate exists to close. Those sites therefore carry
+    /// `#[allow(clippy::await_holding_lock)]`.
+    ///
+    /// It stays a `parking_lot::Mutex` rather than `tokio::sync::Mutex`
+    /// because `watch_runtime` and `update_projection_settings` take it from
+    /// synchronous contexts, where an async mutex would need `blocking_lock`
+    /// and panic inside the runtime.
+    ///
+    /// The cost is that a worker thread blocks while another mutation
+    /// finishes, rather than yielding. Mutations are serialized by design, so
+    /// this bounds throughput rather than risking a deadlock on the
+    /// multi-threaded runtime — but it is why the lint fires, and splitting
+    /// the gate into a store-side and a disk-side lock would remove it.
     pub(crate) policy_gate: Arc<parking_lot::Mutex<()>>,
     /// Event fan-out for on('change' | 'event' | 'batch' | ...). Shared
     /// via Arc so background-thread emitters can clone one reference per
@@ -445,6 +462,9 @@ impl FileExplorer {
     /// The watcher starts before the walk, and path-idempotent insertion
     /// closes the race between initial scan results and live events.
     #[napi(js_name = "populateFromRoots")]
+    // Holds `policy_gate` across filesystem awaits by design; see the
+    // field's documentation on `FileExplorer`.
+    #[allow(clippy::await_holding_lock)]
     pub async fn populate_from_roots(&self) -> Result<u32> {
         use mille_core::{
             populate_store_with_provenance, walk, walk_with_ignore, IgnoreMatcher, WalkOptions,
@@ -788,6 +808,9 @@ impl FileExplorer {
     /// mode in commit B2.2 relies on this to seed each root with a real
     /// Entry record before any children are walked.
     #[napi(js_name = "populateFromPath")]
+    // Holds `policy_gate` across filesystem awaits by design; see the
+    // field's documentation on `FileExplorer`.
+    #[allow(clippy::await_holding_lock)]
     pub async fn populate_from_path(
         &self,
         path: String,
@@ -1375,6 +1398,9 @@ impl FileExplorer {
     /// Rename an entry in place while preserving its identity and any known
     /// descendant identities.
     #[napi]
+    // Holds `policy_gate` across filesystem awaits by design; see the
+    // field's documentation on `FileExplorer`.
+    #[allow(clippy::await_holding_lock)]
     pub async fn rename(&self, id: i64, new_name: String) -> Result<EntryJs> {
         let eid = EntryId(id as u64);
         let old_path = resolve_entry_path(&self.store, eid).ok_or_else(|| {
@@ -1463,6 +1489,9 @@ impl FileExplorer {
 
     /// Move an entry under a new parent, optionally renaming in flight.
     #[napi(js_name = "move")]
+    // Holds `policy_gate` across filesystem awaits by design; see the
+    // field's documentation on `FileExplorer`.
+    #[allow(clippy::await_holding_lock)]
     pub async fn move_entry(
         &self,
         id: i64,
@@ -2120,6 +2149,9 @@ impl FileExplorer {
     // Restoring a soft-delete needs the whole journaled tuple; bundling it
     // into a struct would just move the same fields behind another name.
     #[allow(clippy::too_many_arguments)]
+    // Holds `policy_gate` across filesystem awaits by design; see the
+    // field's documentation on `FileExplorer`.
+    #[allow(clippy::await_holding_lock)]
     async fn undo_soft_delete(
         &self,
         original_path: &std::path::Path,
@@ -2218,6 +2250,9 @@ impl FileExplorer {
     /// Copy a file or directory under a new parent. Directories copy
     /// recursively with content preserved.
     #[napi]
+    // Holds `policy_gate` across filesystem awaits by design; see the
+    // field's documentation on `FileExplorer`.
+    #[allow(clippy::await_holding_lock)]
     pub async fn copy(
         &self,
         id: i64,
@@ -2492,6 +2527,9 @@ impl FileExplorer {
     /// surface as structured `FileSystemError`s without creating empty
     /// placeholder files.
     #[napi(js_name = "copyFromPath")]
+    // Holds `policy_gate` across filesystem awaits by design; see the
+    // field's documentation on `FileExplorer`.
+    #[allow(clippy::await_holding_lock)]
     pub async fn copy_from_path(
         &self,
         source_path: String,

@@ -104,8 +104,10 @@ mod tests {
 
     #[test]
     fn projection_change_is_non_empty_and_survives_merge() {
-        let mut projection = ChangeSet::default();
-        projection.projection_changed = true;
+        let projection = ChangeSet {
+            projection_changed: true,
+            ..Default::default()
+        };
         assert!(!projection.is_empty());
 
         let mut accumulated = ChangeSet::default();

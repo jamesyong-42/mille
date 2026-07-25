@@ -1342,10 +1342,21 @@ the accessibility/platform quality matrix.
 - Symlink/junction policies and permission boundaries.
   **Partial** — `SymlinkPolicy` exists with `Never` / `Always` / `Smart`, and
   the walker deliberately stops at a symlinked `node_modules` rather than
-  descending its target (pnpm layouts). But `Smart`, which is the default, is
+  descending its target (pnpm layouts). `Smart`, which is the default, is
   documented as *behaviorally equivalent to `Never`*: the `(dev, inode)` dedup
-  and ancestor-cycle detection that would make it correct are unimplemented, so
-  there is no cycle protection under `Always`. Permission boundaries untouched.
+  and ancestor-cycle detection that would make it correct are unimplemented.
+
+  That reads like there is no cycle protection under `Always` — which is
+  reachable from JS as `followSymlinks: "true"`. Measured, and there is:
+  jwalk terminates on both an ancestor cycle and a mutual one, so the missing
+  work is a `Smart` that follows *safely*, not a hang waiting to happen. Now
+  pinned by tests in `walker.rs`, because the protection is inherited from the
+  walk crate rather than owned here and a version bump could remove it
+  silently. The pair of cycle tests ships with a control that follows a
+  non-cyclic symlink: without it, a walker that stopped following links
+  entirely would satisfy both cycle tests vacuously — verified by injecting
+  exactly that, which leaves the cycle tests green and fails the control.
+  Permission boundaries untouched.
 - Network and remote-like latency/failure simulation.
   **Partial** — `withLatency` + offline gate on providers.
 

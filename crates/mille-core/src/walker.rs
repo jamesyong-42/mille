@@ -926,6 +926,106 @@ mod tests {
             names
         );
     }
+    // A symlink cycle under `SymlinkPolicy::Always` must terminate.
+    //
+    // `Always` is reachable from JS (`followSymlinks: "true"` maps to it in
+    // the binding), and `SymlinkPolicy::Smart` still carries a TODO for
+    // (dev, inode) dedup and ancestor-cycle detection. That reads like the
+    // walker has no loop protection at all — measured, it does: jwalk stops
+    // both an ancestor cycle and a mutual one. These tests pin that, because
+    // the protection is inherited from the walk crate rather than owned here,
+    // so a swap or a major-version bump could remove it silently and turn an
+    // opt-in flag into a hang.
+    //
+    // Both cases carry a control that follows a *non*-cyclic symlink, so a
+    // regression that simply stopped following links could not satisfy them.
+    #[test]
+    fn always_policy_terminates_on_ancestor_symlink_cycle() {
+        let td = tempfile::tempdir().unwrap();
+        let root = td.path();
+        std::fs::create_dir_all(root.join("a/b")).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(root, root.join("a/b/loop")).unwrap();
+
+        let opts = WalkOptions {
+            follow_symlinks: super::SymlinkPolicy::Always,
+            ..Default::default()
+        };
+        // The assertion is that this returns at all.
+        let walked = super::walk(root, opts).unwrap();
+        assert!(
+            walked.len() < 1_000,
+            "cycle produced {} entries — loop protection is gone",
+            walked.len()
+        );
+    }
+
+    #[test]
+    fn always_policy_terminates_on_mutual_symlink_cycle() {
+        let td = tempfile::tempdir().unwrap();
+        let root = td.path();
+        std::fs::create_dir_all(root.join("x")).unwrap();
+        std::fs::create_dir_all(root.join("y")).unwrap();
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(root.join("y"), root.join("x/to_y")).unwrap();
+            std::os::unix::fs::symlink(root.join("x"), root.join("y/to_x")).unwrap();
+        }
+
+        let opts = WalkOptions {
+            follow_symlinks: super::SymlinkPolicy::Always,
+            ..Default::default()
+        };
+        let walked = super::walk(root, opts).unwrap();
+        assert!(
+            walked.len() < 1_000,
+            "mutual cycle produced {} entries — loop protection is gone",
+            walked.len()
+        );
+    }
+
+    #[test]
+    fn always_policy_actually_follows_a_non_cyclic_symlink() {
+        // Control for both cycle tests: without this, a walker that had
+        // stopped following symlinks entirely would pass them vacuously.
+        let td = tempfile::tempdir().unwrap();
+        let root = td.path();
+        std::fs::create_dir_all(root.join("real/deep")).unwrap();
+        std::fs::write(root.join("real/deep/file.txt"), b"x").unwrap();
+        std::fs::create_dir_all(root.join("start")).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(root.join("real"), root.join("start/link")).unwrap();
+
+        let follow = super::walk(
+            &root.join("start"),
+            WalkOptions {
+                follow_symlinks: super::SymlinkPolicy::Always,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let never = super::walk(
+            &root.join("start"),
+            WalkOptions {
+                follow_symlinks: super::SymlinkPolicy::Never,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        assert!(
+            follow.len() > never.len(),
+            "Always must descend further than Never (got {} vs {}); \
+             if these are equal the cycle tests above prove nothing",
+            follow.len(),
+            never.len()
+        );
+        assert!(
+            follow.iter().any(|w| w.name == "file.txt"),
+            "expected to reach the symlink target's content, got {:?}",
+            follow.iter().map(|w| w.name.as_str()).collect::<Vec<_>>()
+        );
+    }
 }
 
 #[cfg(test)]

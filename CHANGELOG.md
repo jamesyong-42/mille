@@ -4,6 +4,20 @@
 
 ### Engine (`@vibecook/mille`)
 
+- **A native panic no longer kills the host process** — mille loads into
+  someone else's Electron main process, and until now any Rust panic took that
+  process down with it via SIGABRT: no catchable error, no crash handler,
+  nothing flushed. Two independent causes, both measured before being fixed.
+  `[profile.release]` carried `panic = "abort"`, so a release build exited 134
+  for both a sync and an async entry point; abort also defeats tokio's own
+  task-level capture, which is why async calls recovered in a debug build and
+  died in release. And none of the 67 callable `#[napi]` entry points opted
+  into `catch_unwind` (napi-rs makes it per-function opt-in), so panics unwound
+  out of the generated `extern "C"` shim — an abort by definition, measured at
+  134 even in debug. The release profile now unwinds and every entry point
+  carries the attribute; a panic arrives in JS as a normal catchable error.
+  `buildIdentity()` gains `nativePanicStrategy` so an embedder can assert this
+  about the binary it actually loaded.
 - **Filesystem provider boundary (Phase 6.1)** — new subpath
   `@vibecook/mille/provider` with `FileSystemProvider` runtime, capability
   helpers (bits **and** method presence → `EUNSUPPORTED`), memfs with

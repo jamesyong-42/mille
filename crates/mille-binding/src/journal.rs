@@ -126,6 +126,13 @@ impl CreateIdentity {
             return false;
         };
         let pinned = FsIdentity::from_metadata(&meta, self.fs.kind);
+        if pinned.dev == 0 && pinned.ino == 0 {
+            // Platform gave us no file id, so the pin proves nothing about
+            // which object the path names. Comparing the ids here would
+            // reduce to "same size" — fall back to the recorded metadata,
+            // which at least also requires both timestamps to match.
+            return self.fs.matches_disk(disk);
+        }
         // The pinned inode cannot have been reused, so equal ids here mean
         // the path still resolves to the very object we created.
         pinned.dev == disk.dev && pinned.ino == disk.ino && pinned.size == disk.size

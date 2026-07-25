@@ -52,7 +52,10 @@ test('version() returns a non-empty string', () => {
 
 test('buildInfo() identifies the native artifact profile and target', () => {
   const info = buildInfo();
-  const rustArch = process.arch === 'arm64' ? 'aarch64' : process.arch;
+  // Node's arch names are not Rust's target triples: x64 → x86_64, arm64 →
+  // aarch64. Without the x64 mapping this assertion fails on every x64 host.
+  const NODE_ARCH_TO_RUST = { arm64: 'aarch64', x64: 'x86_64', ia32: 'i686' };
+  const rustArch = NODE_ARCH_TO_RUST[process.arch] ?? process.arch;
   assert.equal(info.crateVersion, version());
   assert.match(info.profile, /^(debug|release)$/);
   assert.equal(typeof info.target, 'string');

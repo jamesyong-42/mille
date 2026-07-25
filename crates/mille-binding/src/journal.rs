@@ -12,6 +12,7 @@
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use mille_core::EntryId;
@@ -91,6 +92,44 @@ pub(crate) struct CreateIdentity {
     pub entry_id: EntryId,
     pub path: PathBuf,
     pub fs: FsIdentity,
+    /// Open handle to the created file, held for the life of the journal
+    /// entry.
+    ///
+    /// `(dev, ino)` is only an identity if the number cannot be handed to a
+    /// different object: POSIX lets an inode be reused the moment its last
+    /// link goes away, and ext4 gives the just-freed inode to the next create
+    /// in that directory. An open descriptor keeps the inode allocated, so
+    /// while this handle lives no other file can present the same number —
+    /// which is what makes the comparison in `pinned_matches_disk` sound.
+    ///
+    /// `None` when the handle could not be opened; undo then refuses rather
+    /// than trusting a number that may have been recycled. Directories are
+    /// not pinned: their safety comes from the emptiness check.
+    pub pin: Option<Arc<std::fs::File>>,
+}
+
+impl CreateIdentity {
+    /// Whether `disk` is the object this entry created.
+    ///
+    /// With a pin, identity is exact. Without one we cannot distinguish a
+    /// recycled inode from the original, so the answer is "no" — undo may
+    /// delete a file, and deleting the wrong file is unrecoverable.
+    pub fn pinned_matches_disk(&self, disk: &FsIdentity) -> bool {
+        if self.fs.kind == 1 {
+            // Directory: emptiness is the real guard, keep the metadata check.
+            return self.fs.matches_disk(disk);
+        }
+        let Some(pin) = self.pin.as_ref() else {
+            return false;
+        };
+        let Ok(meta) = pin.metadata() else {
+            return false;
+        };
+        let pinned = FsIdentity::from_metadata(&meta, self.fs.kind);
+        // The pinned inode cannot have been reused, so equal ids here mean
+        // the path still resolves to the very object we created.
+        pinned.dev == disk.dev && pinned.ino == disk.ino && pinned.size == disk.size
+    }
 }
 
 #[derive(Clone, Debug)]

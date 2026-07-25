@@ -1337,10 +1337,23 @@ impl FileExplorer {
         let fs = capture_fs_identity(&new_path, kind_u8)
             .await
             .map_err(|e| fx_error_to_napi(io_to_fx(e, new_path.clone())))?;
+        // Pin the created file so its inode cannot be recycled while the undo
+        // entry lives; see `CreateIdentity::pin`. Directories rely on the
+        // emptiness check instead, and a failure to open leaves `None`, which
+        // makes undo refuse rather than trust a possibly-reused inode.
+        let pin = if kind_u8 == 0 {
+            match tokio::fs::File::open(&new_path).await {
+                Ok(file) => Some(std::sync::Arc::new(file.into_std().await)),
+                Err(_) => None,
+            }
+        } else {
+            None
+        };
         let identity = CreateIdentity {
             entry_id: EntryId(0), // filled after insert
             path: new_path.clone(),
             fs,
+            pin,
         };
         let _policy_guard = self.policy_gate.lock();
         let exclude_matchers = self.current_exclude_matchers().map_err(fx_error_to_napi)?;
@@ -2012,7 +2025,7 @@ impl FileExplorer {
         let disk = capture_fs_identity(path, identity.fs.kind)
             .await
             .map_err(|e| fx_error_to_napi(io_to_fx(e, path.clone())))?;
-        if !identity.fs.matches_disk(&disk) {
+        if !identity.pinned_matches_disk(&disk) {
             return Err(fx_error_to_napi(FxError::InvalidInput(
                 "cannot undo create: on-disk identity no longer matches the original entry".into(),
             )));

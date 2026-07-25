@@ -1,0 +1,134 @@
+name: Published package smoke test
+
+# Install @vibecook/mille from npm on every supported platform and prove the
+# published artifact loads and works.
+#
+# CI tests the artifact it just built. Until now nothing tested the artifact
+# npm serves, and they are not the same object — the registry copy went through
+# `napi pre-publish` stamping, the per-platform package split, an
+# optionalDependencies resolution and a tarball round-trip. When 0.3.0 shipped,
+# exactly one of the eight platform packages had been verified to load, by hand,
+# on the maintainer's laptop. The other seven were assumed.
+#
+# Runs after a successful Release, and on demand for any published version.
+# `workflow_dispatch` also makes this the way to re-verify an old release
+# against a new Node.
+
+on:
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Published version to smoke test (npm dist-tag or exact)'
+        type: string
+        default: latest
+
+concurrency:
+  group: smoke-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # Resolve the dist-tag to a concrete version once, so every matrix job
+  # asserts against the same number. Asserting against "latest" would be
+  # circular — it would pass whatever the registry happens to serve.
+  resolve:
+    name: Resolve published version
+    # Skip when the triggering Release failed; there is nothing new to test.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.pick.outputs.version }}
+    steps:
+      - name: Resolve version
+        id: pick
+        shell: bash
+        run: |
+          set -euo pipefail
+          want="${{ inputs.version || 'latest' }}"
+          # A publish can land before the registry serves it everywhere.
+          for attempt in $(seq 1 10); do
+            resolved=$(npm view "@vibecook/mille@${want}" version 2>/dev/null || true)
+            if [ -n "$resolved" ]; then
+              echo "resolved ${want} -> ${resolved}"
+              echo "version=${resolved}" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "registry has not served ${want} yet (attempt ${attempt}/10)"
+            sleep 15
+          done
+          echo "::error::could not resolve @vibecook/mille@${want} from npm"
+          exit 1
+
+  smoke:
+    name: ${{ matrix.target }}
+    needs: resolve
+    runs-on: ${{ matrix.host }}
+    container: ${{ matrix.container }}
+    strategy:
+      # One broken platform must not hide the state of the other seven.
+      fail-fast: false
+      matrix:
+        include:
+          - target: darwin-arm64
+            host: macos-14
+
+          # Intel macOS runners are scarce; a slow queue is fine for a
+          # post-release job. If the label is retired, the fallback is
+          # macos-14 with an x64 Node under Rosetta.
+          - target: darwin-x64
+            host: macos-13
+
+          - target: win32-x64-msvc
+            host: windows-latest
+
+          - target: win32-arm64-msvc
+            host: windows-11-arm
+
+          - target: linux-x64-gnu
+            host: ubuntu-latest
+
+          - target: linux-arm64-gnu
+            host: ubuntu-24.04-arm
+
+          # musl resolution is the interesting part on Alpine: the loader
+          # picks the -musl package off the absence of glibcVersionRuntime.
+          - target: linux-x64-musl
+            host: ubuntu-latest
+            container: node:20-alpine
+
+          - target: linux-arm64-musl
+            host: ubuntu-24.04-arm
+            container: node:20-alpine
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # The Alpine images already ship Node 20; setup-node would replace it
+      # with a glibc build and defeat the point of the musl jobs.
+      - name: Setup Node
+        if: ${{ !matrix.container }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install the published package
+        shell: bash
+        run: |
+          set -eu
+          mkdir -p "${RUNNER_TEMP}/smoke"
+          cd "${RUNNER_TEMP}/smoke"
+          npm init -y >/dev/null
+          npm install "@vibecook/mille@${{ needs.resolve.outputs.version }}"
+          echo "--- installed @vibecook packages ---"
+          ls node_modules/@vibecook
+
+      - name: Smoke test
+        shell: bash
+        run: >-
+          node "${GITHUB_WORKSPACE}/scripts/smoke-published.mjs"
+          "${RUNNER_TEMP}/smoke"
+          "${{ needs.resolve.outputs.version }}"

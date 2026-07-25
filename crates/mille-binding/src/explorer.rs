@@ -20,6 +20,31 @@ use mille_core::{
 };
 
 use crate::error::{fx_error_to_napi, io_to_fx};
+
+/// Build a store entry from a walked entry.
+///
+/// The walker already stat'd the path, so re-reading it with `stat_to_entry`
+/// costs a second syscall for data we hold — and, because that helper is
+/// async, doing so forces the caller to await while holding `policy_gate`.
+/// This is the synchronous equivalent; `is_ignored` / `is_excluded` are left
+/// to the caller, which classifies under the gate.
+fn entry_from_walked(walked: &mille_core::WalkedEntry, parent_id: Option<EntryId>) -> Entry {
+    Entry {
+        id: EntryId(0),
+        parent_id,
+        name: walked.name.clone(),
+        kind: walked.kind,
+        size: walked.size,
+        mtime_ms: walked.mtime_ms,
+        ctime_ms: walked.ctime_ms,
+        symlink_target_is_dir: walked.symlink_target_is_dir,
+        path_segments: None,
+        is_ignored: false,
+        is_excluded: false,
+        is_readonly: walked.is_readonly,
+        is_hidden: walked.is_hidden,
+    }
+}
 use crate::events::{Channel, EventBus};
 use crate::journal::{
     capture_fs_identity, directory_is_empty, ensure_managed_recycle_base, path_is_under,
@@ -462,9 +487,6 @@ impl FileExplorer {
     /// The watcher starts before the walk, and path-idempotent insertion
     /// closes the race between initial scan results and live events.
     #[napi(js_name = "populateFromRoots")]
-    // Holds `policy_gate` across filesystem awaits by design; see the
-    // field's documentation on `FileExplorer`.
-    #[allow(clippy::await_holding_lock)]
     pub async fn populate_from_roots(&self) -> Result<u32> {
         use mille_core::{
             populate_store_with_provenance, walk, walk_with_ignore, IgnoreMatcher, WalkOptions,
@@ -539,9 +561,7 @@ impl FileExplorer {
             if let Some(walked_root) = walked.iter().find(|entry| entry.path == *root) {
                 if let Some(existing) = self.store.get_by_path(root) {
                     if existing.kind == EntryKind::Unavailable {
-                        let mut restored = stat_to_entry(root, None, walked_root.name.clone())
-                            .await
-                            .map_err(fx_error_to_napi)?;
+                        let mut restored = entry_from_walked(walked_root, None);
                         restored.is_ignored = repository_ignore
                             .as_ref()
                             .is_some_and(|matcher| matcher.is_ignored(root, true));
@@ -808,9 +828,6 @@ impl FileExplorer {
     /// mode in commit B2.2 relies on this to seed each root with a real
     /// Entry record before any children are walked.
     #[napi(js_name = "populateFromPath")]
-    // Holds `policy_gate` across filesystem awaits by design; see the
-    // field's documentation on `FileExplorer`.
-    #[allow(clippy::await_holding_lock)]
     pub async fn populate_from_path(
         &self,
         path: String,
@@ -925,9 +942,7 @@ impl FileExplorer {
             if let Some(walked_root) = walked.iter().find(|entry| entry.path == root) {
                 if let Some(existing) = self.store.get_by_path(&root) {
                     if existing.kind == EntryKind::Unavailable {
-                        let mut restored = stat_to_entry(&root, None, walked_root.name.clone())
-                            .await
-                            .map_err(fx_error_to_napi)?;
+                        let mut restored = entry_from_walked(walked_root, None);
                         restored.is_ignored = repository_ignore
                             .as_ref()
                             .is_some_and(|matcher| matcher.is_ignored(&root, true));
@@ -1398,9 +1413,6 @@ impl FileExplorer {
     /// Rename an entry in place while preserving its identity and any known
     /// descendant identities.
     #[napi]
-    // Holds `policy_gate` across filesystem awaits by design; see the
-    // field's documentation on `FileExplorer`.
-    #[allow(clippy::await_holding_lock)]
     pub async fn rename(&self, id: i64, new_name: String) -> Result<EntryJs> {
         let eid = EntryId(id as u64);
         let old_path = resolve_entry_path(&self.store, eid).ok_or_else(|| {
@@ -1458,12 +1470,16 @@ impl FileExplorer {
         self.record_intent(old_path.clone(), IntentKind::Rename);
         self.record_intent(new_path.clone(), IntentKind::Rename);
 
-        let _policy_guard = self.policy_gate.lock();
-        self.store
-            .rename(eid, new_path.clone())
-            .map_err(fx_error_to_napi)?;
-        self.reclassify_current_excludes()
-            .map_err(fx_error_to_napi)?;
+        // Only the store move and reclassification need the gate; the journal
+        // capture below is filesystem I/O that no matcher looks at.
+        {
+            let _policy_guard = self.policy_gate.lock();
+            self.store
+                .rename(eid, new_path.clone())
+                .map_err(fx_error_to_napi)?;
+            self.reclassify_current_excludes()
+                .map_err(fx_error_to_napi)?;
+        }
 
         let kind_u8 = self
             .store
@@ -1489,9 +1505,6 @@ impl FileExplorer {
 
     /// Move an entry under a new parent, optionally renaming in flight.
     #[napi(js_name = "move")]
-    // Holds `policy_gate` across filesystem awaits by design; see the
-    // field's documentation on `FileExplorer`.
-    #[allow(clippy::await_holding_lock)]
     pub async fn move_entry(
         &self,
         id: i64,
@@ -1726,8 +1739,13 @@ impl FileExplorer {
         self.record_intent(old_path.clone(), IntentKind::Rename);
         self.record_intent(new_path.clone(), IntentKind::Rename);
 
-        let _policy_guard = self.policy_gate.lock();
-        if let Err(error) = self.store.rename(eid, new_path.clone()) {
+        // The gate covers the store move; the rollback below is filesystem
+        // I/O and must not run while holding it.
+        let moved = {
+            let _policy_guard = self.policy_gate.lock();
+            self.store.rename(eid, new_path.clone())
+        };
+        if let Err(error) = moved {
             let _ = tokio::fs::rename(&new_path, &old_path).await;
             self.end_copy_progress(progress.as_ref(), "failed");
             return Err(fx_error_to_napi(error));
@@ -1736,49 +1754,61 @@ impl FileExplorer {
             prog.bump(&new_path);
         }
         self.end_copy_progress(progress.as_ref(), "completed");
-        self.reclassify_current_excludes()
-            .map_err(fx_error_to_napi)?;
+        {
+            let _policy_guard = self.policy_gate.lock();
+            self.reclassify_current_excludes()
+                .map_err(fx_error_to_napi)?;
+        }
 
+        // Capture identity before taking the journal lock: the stat is I/O and
+        // nothing else may be blocked on the journal while it runs.
+        let moved_identity = if destroyed_destination {
+            None
+        } else {
+            let kind_u8 = if source.kind == EntryKind::Directory
+                || source.symlink_target_is_dir == Some(true)
+            {
+                1u8
+            } else {
+                0u8
+            };
+            // Capture after rename so identity matches the object at new_path.
+            Some(match capture_fs_identity(&new_path, kind_u8).await {
+                Ok(fs) => fs,
+                Err(e) => {
+                    // Journal still records a best-effort identity from store.
+                    let _ = e;
+                    FsIdentity {
+                        size: source.size,
+                        mtime_ms: source.mtime_ms,
+                        ctime_ms: source.ctime_ms,
+                        kind: kind_u8,
+                        dev: 0,
+                        ino: 0,
+                    }
+                }
+            })
+        };
         {
             let mut journal = self.journal.lock();
-            if destroyed_destination {
-                // Destination content was permanently removed — not reverseable.
-                journal.record_non_undoable(
-                    "move",
-                    format!(
-                        "Move {} (overwrite)",
-                        old_path
-                            .file_name()
-                            .map(|n| n.to_string_lossy().into_owned())
-                            .unwrap_or_default()
-                    ),
-                    "destination was permanently overwritten and cannot be restored",
-                );
-            } else {
-                let kind_u8 = if source.kind == EntryKind::Directory
-                    || source.symlink_target_is_dir == Some(true)
-                {
-                    1u8
-                } else {
-                    0u8
-                };
-                // Capture after rename so identity matches the object at new_path.
-                let fs = match capture_fs_identity(&new_path, kind_u8).await {
-                    Ok(fs) => fs,
-                    Err(e) => {
-                        // Journal still records a best-effort identity from store.
-                        let _ = e;
-                        FsIdentity {
-                            size: source.size,
-                            mtime_ms: source.mtime_ms,
-                            ctime_ms: source.ctime_ms,
-                            kind: kind_u8,
-                            dev: 0,
-                            ino: 0,
-                        }
-                    }
-                };
-                journal.push_move(eid, old_path, new_path.clone(), fs);
+            match moved_identity {
+                None => {
+                    // Destination content was permanently removed — not reverseable.
+                    journal.record_non_undoable(
+                        "move",
+                        format!(
+                            "Move {} (overwrite)",
+                            old_path
+                                .file_name()
+                                .map(|n| n.to_string_lossy().into_owned())
+                                .unwrap_or_default()
+                        ),
+                        "destination was permanently overwritten and cannot be restored",
+                    );
+                }
+                Some(fs) => {
+                    journal.push_move(eid, old_path, new_path.clone(), fs);
+                }
             }
         }
         let arc = self
@@ -2149,9 +2179,6 @@ impl FileExplorer {
     // Restoring a soft-delete needs the whole journaled tuple; bundling it
     // into a struct would just move the same fields behind another name.
     #[allow(clippy::too_many_arguments)]
-    // Holds `policy_gate` across filesystem awaits by design; see the
-    // field's documentation on `FileExplorer`.
-    #[allow(clippy::await_holding_lock)]
     async fn undo_soft_delete(
         &self,
         original_path: &std::path::Path,
@@ -2206,7 +2233,6 @@ impl FileExplorer {
         if let Some(bucket) = recycle_path.parent() {
             let _ = tokio::fs::remove_dir(bucket).await;
         }
-        let _policy_guard = self.policy_gate.lock();
         let mut entry = stat_to_entry(
             original_path,
             Some(parent_id),
@@ -2218,12 +2244,17 @@ impl FileExplorer {
         )
         .await
         .map_err(fx_error_to_napi)?;
-        let exclude_matchers = self.current_exclude_matchers().map_err(fx_error_to_napi)?;
-        entry.is_excluded = Self::path_is_excluded(original_path, &entry, &exclude_matchers);
-        let new_id = self
-            .store
-            .insert(original_path.to_path_buf(), entry)
-            .map_err(fx_error_to_napi)?;
+        // Classify and insert under the gate, as `create` does: the stat above
+        // is I/O, and only the matcher read plus the insert must be atomic
+        // against a settings change.
+        let new_id = {
+            let _policy_guard = self.policy_gate.lock();
+            let exclude_matchers = self.current_exclude_matchers().map_err(fx_error_to_napi)?;
+            entry.is_excluded = Self::path_is_excluded(original_path, &entry, &exclude_matchers);
+            self.store
+                .insert(original_path.to_path_buf(), entry)
+                .map_err(fx_error_to_napi)?
+        };
         if tokio::fs::metadata(original_path)
             .await
             .map(|m| m.is_dir())
@@ -2250,9 +2281,6 @@ impl FileExplorer {
     /// Copy a file or directory under a new parent. Directories copy
     /// recursively with content preserved.
     #[napi]
-    // Holds `policy_gate` across filesystem awaits by design; see the
-    // field's documentation on `FileExplorer`.
-    #[allow(clippy::await_holding_lock)]
     pub async fn copy(
         &self,
         id: i64,
@@ -2437,18 +2465,28 @@ impl FileExplorer {
             self.record_intent(dst_path.clone(), IntentKind::Create);
             // Authoritatively reconcile the destination subtree so merge
             // updates existing entries (size/mtime/kind) and drops stale ones.
-            let _policy_guard = self.policy_gate.lock();
-            if self.store.get_by_path(&dst_path).is_none() {
-                let mut root_entry =
+            // Stat before taking the gate; the insert re-checks under it, so a
+            // concurrent insert of the same path still cannot be clobbered.
+            let fresh_root = if self.store.get_by_path(&dst_path).is_none() {
+                Some(
                     stat_to_entry(&dst_path, Some(new_parent_eid), effective_name.clone())
                         .await
+                        .map_err(fx_error_to_napi)?,
+                )
+            } else {
+                None
+            };
+            let _policy_guard = self.policy_gate.lock();
+            if let Some(mut root_entry) = fresh_root {
+                if self.store.get_by_path(&dst_path).is_none() {
+                    let exclude_matchers =
+                        self.current_exclude_matchers().map_err(fx_error_to_napi)?;
+                    root_entry.is_excluded =
+                        Self::path_is_excluded(&dst_path, &root_entry, &exclude_matchers);
+                    self.store
+                        .insert(dst_path.clone(), root_entry)
                         .map_err(fx_error_to_napi)?;
-                let exclude_matchers = self.current_exclude_matchers().map_err(fx_error_to_napi)?;
-                root_entry.is_excluded =
-                    Self::path_is_excluded(&dst_path, &root_entry, &exclude_matchers);
-                self.store
-                    .insert(dst_path.clone(), root_entry)
-                    .map_err(fx_error_to_napi)?;
+                }
             }
             let config = self.watch_config();
             crate::watch_runtime::reconcile_directory(&self.store, &config, &dst_path, None)
@@ -2527,9 +2565,6 @@ impl FileExplorer {
     /// surface as structured `FileSystemError`s without creating empty
     /// placeholder files.
     #[napi(js_name = "copyFromPath")]
-    // Holds `policy_gate` across filesystem awaits by design; see the
-    // field's documentation on `FileExplorer`.
-    #[allow(clippy::await_holding_lock)]
     pub async fn copy_from_path(
         &self,
         source_path: String,
@@ -2736,17 +2771,27 @@ impl FileExplorer {
 
         // Directory: ensure root is indexed, then authoritatively reconcile
         // so merge updates existing metadata and drops stale descendants.
+        // Stat before taking the gate; the insert re-checks under it, so a
+        // concurrent insert of the same path still cannot be clobbered.
+        let fresh_root = if self.store.get_by_path(&dst_path).is_none() {
+            Some(
+                stat_to_entry(&dst_path, Some(new_parent_eid), effective_name)
+                    .await
+                    .map_err(fx_error_to_napi)?,
+            )
+        } else {
+            None
+        };
         let _policy_guard = self.policy_gate.lock();
-        if self.store.get_by_path(&dst_path).is_none() {
-            let mut root_entry = stat_to_entry(&dst_path, Some(new_parent_eid), effective_name)
-                .await
-                .map_err(fx_error_to_napi)?;
-            let exclude_matchers = self.current_exclude_matchers().map_err(fx_error_to_napi)?;
-            root_entry.is_excluded =
-                Self::path_is_excluded(&dst_path, &root_entry, &exclude_matchers);
-            self.store
-                .insert(dst_path.clone(), root_entry)
-                .map_err(fx_error_to_napi)?;
+        if let Some(mut root_entry) = fresh_root {
+            if self.store.get_by_path(&dst_path).is_none() {
+                let exclude_matchers = self.current_exclude_matchers().map_err(fx_error_to_napi)?;
+                root_entry.is_excluded =
+                    Self::path_is_excluded(&dst_path, &root_entry, &exclude_matchers);
+                self.store
+                    .insert(dst_path.clone(), root_entry)
+                    .map_err(fx_error_to_napi)?;
+            }
         }
         let config = self.watch_config();
         crate::watch_runtime::reconcile_directory(&self.store, &config, &dst_path, None)

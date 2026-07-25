@@ -1,5 +1,14 @@
 [toolchain]
-channel = "stable"
+# Pinned deliberately. Clippy's lint set grows with every stable release and
+# CI runs it with `-D warnings`, so an unpinned channel means a Rust release
+# can redden the build with no code change — and a contributor's local clippy
+# silently disagrees with CI's (that is how the 1.95-vs-1.97 gap hid lints
+# until CI reported them). Phase 0 wants a reproducible baseline; this is it.
+#
+# Upgrading is a deliberate change: bump this, run `cargo clippy --workspace
+# --all-targets -- -D warnings`, fix the new lints, and bump the
+# `dtolnay/rust-toolchain@` refs in .github/workflows/*.yml to match.
+channel = "1.97.1"
 components = ["rustfmt", "clippy"]
 targets = [
     "aarch64-apple-darwin",

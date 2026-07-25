@@ -10,7 +10,10 @@
   --jb-border-soft: rgba(255, 255, 255, 0.06);
   --jb-text: #bcbec4;
   --jb-text-bright: #dfdfdf;
-  --jb-text-dim: #6f737a;
+  /* 4.74:1 on --jb-bg-panel (#2b2d30). The previous #6f737a measured 2.90:1,
+     which axe-core flagged as a serious WCAG AA contrast failure on every
+     surface using this token. Keep any replacement above 4.5:1. */
+  --jb-text-dim: #9198a1;
   --jb-sel: #2e436e;
   --jb-hover: rgba(255, 255, 255, 0.045);
   --jb-accent: #3574f0;
@@ -34,7 +37,10 @@ html[data-theme='light'] {
   --jb-border-soft: rgba(0, 0, 0, 0.08);
   --jb-text: #000000;
   --jb-text-bright: #000000;
-  --jb-text-dim: #808080;
+  /* 4.51:1 at worst across --jb-bg / --jb-panel / --jb-panel-2. #808080
+     measured 3.34-3.95:1 depending on the surface. Note #717171 clears white
+     but fails on #f2f2f2 — check every surface, not just the panel. */
+  --jb-text-dim: #6b6b6b;
   --jb-sel: #d4e2ff;
   --jb-hover: rgba(0, 0, 0, 0.04);
   --jb-accent: #3574f0;

@@ -151,6 +151,25 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+      # Phase 6.3 — real axe-core against a real renderer. The unit suite
+      # hand-rolls the ARIA tree pattern because happy-dom has no layout, so
+      # contrast and visibility rules cannot mean anything there. Audits both
+      # themes: the light palette shipped a failing dim colour that a
+      # dark-only run could not see.
+      - name: Accessibility audit (axe-core, Electron)
+        run: >-
+          xvfb-run --auto-servernum node scripts/axe-check.mjs
+          --report axe-report.json
+
+      - name: Upload axe report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: axe-${{ github.sha }}
+          path: axe-report.json
+          if-no-files-found: warn
+          retention-days: 14
+
       # v0.2 B8 — mille-ui bundle size assertion. Fails CI on regression.
       # Budgets live in `packages/mille-ui/package.json` under
       # `size-limit`; see SPEC §12 for targets.

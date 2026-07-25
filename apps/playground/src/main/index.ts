@@ -12,6 +12,7 @@ import {
 import { dirname, join, resolve as pathResolve } from 'node:path';
 import { resolveTrustedRoot } from '../../scripts/workspace-roots.mjs';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 import { cwd } from 'node:process';
 import { readFileSync, statSync, writeFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
@@ -190,6 +191,96 @@ async function openTerminal(directory: string): Promise<void> {
   });
 }
 
+/**
+ * Phase 6.3 — run axe-core against the live renderer and exit on violations.
+ *
+ * happy-dom cannot host axe (it has no layout, so contrast and visibility
+ * rules are meaningless there), which is why the unit suite hand-rolls the
+ * ARIA tree pattern instead. This is the other half: a real Chromium, real
+ * styles, real computed colours. Enabled by `MILLE_AXE_REPORT`; see
+ * `scripts/axe-check.mjs`.
+ */
+async function runAxeAudit(win: BrowserWindow, reportPath: string): Promise<void> {
+  const exit = (code: number): void => {
+    setTimeout(() => app.exit(code), 50);
+  };
+  try {
+    const require = createRequire(import.meta.url);
+    const axeSource = readFileSync(require.resolve('axe-core/axe.min.js'), 'utf8');
+    await win.webContents.executeJavaScript(axeSource);
+
+    const results = (await win.webContents.executeJavaScript(`(async () => {
+      // Audit the painted tree, not the boot card: wait for real rows.
+      const deadline = Date.now() + 60000;
+      while (Date.now() < deadline) {
+        if (document.querySelector('[role="treeitem"]')) break;
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      // Expand the root so chevrons, badges and nested rows are all audited.
+      const first = document.querySelector('[role="treeitem"]');
+      if (first) {
+        first.click();
+        first.dispatchEvent(
+          new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }),
+        );
+      }
+      await new Promise((r) => setTimeout(r, 500));
+
+      const options = {
+        resultTypes: ['violations'],
+        runOnly: {
+          type: 'tag',
+          values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa'],
+        },
+      };
+      // Both themes: contrast is a property of the palette in force, and the
+      // light palette shipped a failing --jb-text-dim that a dark-only audit
+      // could never see.
+      const previous = document.documentElement.dataset.theme;
+      const all = [];
+      for (const theme of ['dark', 'light']) {
+        document.documentElement.dataset.theme = theme;
+        await new Promise((r) => setTimeout(r, 250));
+        const run = await axe.run(document, options);
+        for (const violation of run.violations) {
+          all.push({ ...violation, theme });
+        }
+      }
+      if (previous === undefined) delete document.documentElement.dataset.theme;
+      else document.documentElement.dataset.theme = previous;
+      return { violations: all };
+    })()`)) as {
+      violations: {
+        id: string;
+        impact: string;
+        help: string;
+        theme: string;
+        nodes: unknown[];
+      }[];
+    };
+
+    writeFileSync(reportPath, `${JSON.stringify(results, null, 2)}\n`);
+    const { violations } = results;
+    if (violations.length === 0) {
+      console.log('[playground-axe] no WCAG A/AA violations');
+      exit(0);
+      return;
+    }
+    console.error(`[playground-axe] ${violations.length} violation(s):`);
+    for (const violation of violations) {
+      console.error(
+        `  [${violation.impact}] ${violation.theme}: ${violation.id} — ` +
+          `${violation.help} (${violation.nodes.length} node(s))`,
+      );
+    }
+    console.error(`[playground-axe] report ${reportPath}`);
+    exit(1);
+  } catch (error) {
+    console.error('[playground-axe] audit failed:', error);
+    exit(1);
+  }
+}
+
 async function createWindow(): Promise<void> {
   const watchBenchConfig = watchBenchConfigFromEnvironment();
   const win = new BrowserWindow({
@@ -213,6 +304,10 @@ async function createWindow(): Promise<void> {
 
   if (watchBenchConfig !== null) {
     watchBenchController = new WatchBenchController(win, watchBenchConfig);
+  }
+
+  if (process.env.MILLE_AXE_REPORT) {
+    void runAxeAudit(win, process.env.MILLE_AXE_REPORT);
   }
 
   ipcMain.handle('watch-bench:get-config', () => watchBenchConfig);

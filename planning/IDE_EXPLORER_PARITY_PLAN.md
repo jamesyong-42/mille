@@ -1321,11 +1321,18 @@ the accessibility/platform quality matrix.
 #### 6.3 Accessibility validation
 
 - Automated axe checks in the Electron/browser suite.
-  **Partial** — existing axe-lite ARIA tree tests; full axe-core still open.
+  **Done** — `pnpm axe` (`scripts/axe-check.mjs`) runs axe-core against the
+  live Electron renderer for WCAG 2.0/2.1 A + AA and fails on any violation;
+  CI runs it under xvfb and retains the report. Audits **both themes**, since
+  contrast depends on the palette in force. The happy-dom suite keeps its
+  hand-rolled ARIA tree assertions — axe needs real layout.
+  Found and fixed: `--jb-text-dim` failed AA in both palettes (2.90:1 dark,
+  3.34-3.95:1 light).
 - VoiceOver on macOS and NVDA on Windows scripted acceptance scenarios.
   **Open**.
 - High contrast, zoom, reduced motion, and keyboard-only operation.
-  **Partial** — reduced-motion already covered; high-contrast matrix open.
+  **Partial** — reduced-motion covered; contrast now gated by the axe run in
+  both themes. Zoom levels and a forced-colors/high-contrast pass are open.
 - Announce create, rename, delete, move, errors, loading, and result counts
   without flooding live regions during event storms.
   **Done (first slice)** — `@vibecook/mille-ui/a11y` `createLiveAnnouncer`

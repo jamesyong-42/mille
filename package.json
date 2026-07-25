@@ -40,6 +40,7 @@
     "bench:file-actions": "node packages/mille-ui/bench/file-action-path.mjs",
     "bench:search-scope": "node packages/mille-ui/bench/file-search-scope.mjs",
     "bench:collapse": "node packages/mille-ui/bench/collapse-descendants.mjs",
+    "axe": "node scripts/axe-check.mjs",
     "bench:watch": "node scripts/watch-bench.mjs",
     "bench:watch:soak": "node scripts/watch-soak.mjs",
     "lint": "pnpm -r --if-present lint",

@@ -182,6 +182,95 @@ jobs:
         run: pnpm --filter @vibecook/mille-ui run size
 
   # ------------------------------------------------------------------
+  # The same suite against the profile that actually ships.
+  #
+  # `test-js` above builds `build:napi:probe` — a *debug* binary. That is the
+  # cheap, fast signal, but it is not what users install, and the difference
+  # has hidden real defects:
+  #
+  #   - `[profile.release]` carried `panic = "abort"`, so a native panic
+  #     SIGABRT'd the host process. Debug unwinds, so the debug suite could
+  #     never see it. Worse, tokio catches panics in its own task machinery,
+  #     which meant the *async* entry points recovered cleanly in debug and
+  #     died in release — the suite proved a property the artifact lacked.
+  #
+  # Release also changes optimisation and therefore timing, which is exactly
+  # what the watcher and ack/resync paths are sensitive to. So this job runs
+  # the full suite, plus extra watcher repetitions, against a real release
+  # build. It is slower (`lto = "fat"`, `codegen-units = 1`), so it runs as
+  # its own job rather than lengthening the critical path.
+  #
+  # Deliberately NOT lto="thin" or a bespoke fast profile: a profile that is
+  # merely close to the shipped one reintroduces the exact class of gap this
+  # job exists to close.
+  #
+  # Benches and the axe/Electron gates stay debug-only — their budgets are
+  # calibrated against the debug binary, and re-basing them is separate work.
+  test-release-profile:
+    name: Release-profile tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile=false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.97.1
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: release-profile
+
+      # `:probe:release` is the shipped profile plus the panic-probe feature,
+      # so the behavioural panic assertions run here rather than skipping.
+      # The feature is off by default and never enters a published artifact.
+      - name: Build native (release) + TS packages
+        run: |
+          pnpm --filter @vibecook/mille run build:napi:probe:release
+          pnpm --filter @vibecook/mille run build:ts
+          pnpm --filter @vibecook/mille-ui run build
+
+      # Without this the job could silently degrade into a second debug run —
+      # a green tick proving nothing, which is the failure mode this whole job
+      # exists to prevent.
+      - name: Confirm the binary under test is a release build
+        run: node scripts/assert-release-binary.mjs
+
+      - name: Test
+        run: pnpm -r --if-present test
+
+      # Optimised builds reorder and inline enough to shift these timings;
+      # the debug job repeats them 20x for the same reason.
+      - name: Repeat live watcher regressions
+        shell: bash
+        run: |
+          for run in $(seq 1 10); do
+            echo "watcher repetition ${run}/10 (release)"
+            node --test packages/mille/test/watcher-host.test.mjs packages/mille/test/watcher-live.test.mjs
+          done
+
+      # The resync ack race reproduced ~1 in 20 and only under real timing.
+      - name: Repeat resync synchronization regressions
+        shell: bash
+        run: |
+          for run in $(seq 1 20); do
+            node --test packages/mille/test/resync.test.mjs >/dev/null \
+              || { echo "::error::resync regression on repetition ${run}"; exit 1; }
+          done
+          echo "20 clean resync repetitions"
+
+  # ------------------------------------------------------------------
   # Native build matrix — 8 triples per SPEC §6.2.
   # Each job produces a .node artifact for the corresponding platform.
   # ------------------------------------------------------------------

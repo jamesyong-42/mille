@@ -638,12 +638,18 @@ class FileExplorerHostImpl implements FileExplorerHost {
       this.send(
         session,
         frame('delta', {
-          // `delta.version` is the ChangeSet's `toVersion`, which is stale (0)
-          // when this tick is emitting markers rather than entry changes — the
-          // periodic tick may already have drained the real ChangeSet. Report
-          // the version the host is actually at, so a client that applies this
-          // delta can truthfully ack having caught up to it.
-          version: Math.max(delta.version, snap.treeVersion),
+          // Deliberately the ChangeSet's version, not the host's current one.
+          // A marker-only delta understates — it reports a version older than
+          // the host is at — and that is the safe direction: the mirror keeps
+          // its own version monotonic, so an understated delta cannot drag it
+          // backwards, and an ack simply stays truthful. Reporting
+          // `snap.treeVersion` here instead would overstate whenever native
+          // changes land between `takePendingChanges()` above and the snapshot
+          // read, shipping a version whose entries are not in this delta. A
+          // client would then ack content it does not have and `resync` would
+          // resolve early — a silent false success, which is worse than the
+          // timeout this replaced.
+          version: delta.version,
           changedIds: liveChangedIds,
           ...(outEntries.length > 0 ? { viewportPatch: encodeClientEntries(outEntries) } : {}),
           childSetChanged: [...childSetChanged],

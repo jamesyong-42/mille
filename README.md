@@ -83,7 +83,7 @@ For Electron UtilityProcess host/client wiring, packaging, and performance notes
 
 ## Status
 
-**v0.2.1** is on npm. Soft-duotone icons, Project-view explorer fixes (expand ignored roots + directory symlinks), and the static docs site. Earlier v0.2: roots-in-deltas, lazy list-on-expand, decorations over the port, shell Git client, Material icons, `FileTreeRef`.
+**v0.3.0** is on npm. A native panic now surfaces as a catchable JS error instead of aborting the host process — the shipped binary previously took your editor down with it. Plus soft-delete/undo with real file identity on every platform, IDE workflow integration (Phase 5), and the `@vibecook/mille/provider` filesystem boundary. Earlier v0.2: soft-duotone icons, roots-in-deltas, lazy list-on-expand, decorations over the port, shell Git client, Material icons, `FileTreeRef`.
 
 ## Supported platforms
 

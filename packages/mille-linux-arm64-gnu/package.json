@@ -1,6 +1,6 @@
 {
   "name": "@vibecook/mille-linux-arm64-gnu",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Prebuilt native binary for @vibecook/mille on linux-arm64-gnu.",
   "license": "MIT",
   "repository": {

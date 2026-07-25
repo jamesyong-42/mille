@@ -6,7 +6,7 @@ import { buildIdentity, version } from '../dist/index.js';
 test('buildIdentity reports the exact public package and native load', () => {
   const identity = buildIdentity();
 
-  assert.equal(identity.packageVersion, '0.2.1');
+  assert.equal(identity.packageVersion, '0.3.0');
   assert.equal(identity.nativeVersion, version());
   assert.match(identity.nativeProfile, /^(debug|release)$/);
   assert.equal(identity.platform, process.platform);

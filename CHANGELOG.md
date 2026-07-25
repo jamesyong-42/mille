@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.3.0 — 2026-07-25
+
+Ships Phases 4.4, 5 and 6.1–6.3, and closes a defect that made every prior
+release unsafe to embed: a Rust panic aborted the host process outright. If you
+are on 0.2.x inside an Electron app, this is the upgrade that stops an
+unexpected filesystem edge case from taking the whole editor with it.
+
 ### Engine (`@vibecook/mille`)
 
 - **A native panic no longer kills the host process** — mille loads into
@@ -63,6 +70,16 @@
 
 - **Live announcer (Phase 6.3)** — `@vibecook/mille-ui/a11y`
   `createLiveAnnouncer` coalesces and throttles `aria-live` feedback.
+- **`VERSION` no longer lies** — the exported constant read `'0.1.0'` in all
+  three entry points that declare it, while the package shipped as 0.2.1.
+  Nothing compared the two, so it drifted three releases. Now matched to
+  `package.json` and guarded by a test.
+
+### Versioning
+
+- The Rust crates and the npm packages now share one version. `buildInfo()`
+  used to report `crateVersion: '0.1.0'` from a 0.2.1 package, which made
+  build identity in a bug report ambiguous.
 
 ## 0.2.1 — 2026-07-12
 

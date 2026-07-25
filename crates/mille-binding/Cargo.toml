@@ -21,5 +21,14 @@ serde.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 
+# Windows has no stable file id on `std::fs::Metadata` (the accessors are
+# behind the unstable `windows_by_handle` feature), so undo identity asks the
+# kernel through an open handle instead. See `file_id_from_handle`.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Storage_FileSystem",
+] }
+
 [build-dependencies]
 napi-build.workspace = true

@@ -126,16 +126,22 @@ impl CreateIdentity {
             return false;
         };
         let pinned = FsIdentity::from_metadata(&meta, self.fs.kind);
-        if pinned.dev == 0 && pinned.ino == 0 {
-            // Platform gave us no file id, so the pin proves nothing about
-            // which object the path names. Comparing the ids here would
-            // reduce to "same size" — fall back to the recorded metadata,
-            // which at least also requires both timestamps to match.
-            return self.fs.matches_disk(disk);
+        if pinned.dev != 0 || pinned.ino != 0 {
+            // The pinned inode cannot have been reused, so equal ids here mean
+            // the path still resolves to the very object we created.
+            return pinned.dev == disk.dev && pinned.ino == disk.ino && pinned.size == disk.size;
         }
-        // The pinned inode cannot have been reused, so equal ids here mean
-        // the path still resolves to the very object we created.
-        pinned.dev == disk.dev && pinned.ino == disk.ino && pinned.size == disk.size
+        // No id on `Metadata` (Windows). Ask the kernel through the handles
+        // instead: `disk` was read the same blind way, so comparing it here
+        // would reduce to "same size".
+        if let (Some(pinned_id), Some(current_id)) =
+            (file_id_from_handle(pin), file_id_for_path(&self.path))
+        {
+            return pinned_id == current_id && pinned.size == disk.size;
+        }
+        // Neither path yielded an id — fall back to the recorded metadata,
+        // which at least also requires both timestamps to match.
+        self.fs.matches_disk(disk)
     }
 }
 
@@ -587,6 +593,51 @@ fn file_id_from_metadata(meta: &std::fs::Metadata) -> (u64, u64) {
         let _ = meta;
         (0, 0)
     }
+}
+
+/// Filesystem identity of an already-open file, or `None` when the platform
+/// cannot supply one.
+///
+/// Windows keeps the volume serial and file index off `Metadata` on stable
+/// Rust, but `GetFileInformationByHandle` returns both — and a handle is what
+/// the undo pin holds anyway. NTFS file ids carry a sequence number that
+/// advances when an MFT record is reused, so unlike a bare Unix inode number
+/// they do not silently alias a new file.
+#[allow(unused_variables)]
+pub(crate) fn file_id_from_handle(file: &std::fs::File) -> Option<(u64, u64)> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let meta = file.metadata().ok()?;
+        Some((meta.dev(), meta.ino()))
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Storage::FileSystem::{
+            GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+        };
+
+        let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+        // SAFETY: `file` owns the handle for the duration of the call and
+        // `info` is a live, correctly-sized out-parameter.
+        let ok = unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) };
+        if ok == 0 {
+            return None;
+        }
+        let index = ((info.nFileIndexHigh as u64) << 32) | (info.nFileIndexLow as u64);
+        Some((info.dwVolumeSerialNumber as u64, index))
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        None
+    }
+}
+
+/// Identity of whatever `path` names right now, read through a fresh handle.
+fn file_id_for_path(path: &Path) -> Option<(u64, u64)> {
+    let file = std::fs::File::open(path).ok()?;
+    file_id_from_handle(&file)
 }
 
 fn creation_ms(meta: &std::fs::Metadata) -> i64 {

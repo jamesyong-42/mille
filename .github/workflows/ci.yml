@@ -95,13 +95,22 @@ jobs:
         # default gate here was reporting the runner, not a regression.
         #
         # 30 samples makes p95 the second-worst sample, which one scheduling
-        # hiccup decides; 60 halves that leverage (it moves the same local
-        # measurement from 109 ms to 87 ms). The ceiling is then set well above
-        # the observed CI spread so noise cannot turn the build red, while a
-        # real 2x regression still trips it.
+        # hiccup decides, so this takes 60. That stabilises the number without
+        # lowering it here: four green runs at 60 samples measured p95 270.7,
+        # 296.5, 307.8 and 312.1 ms — a ±7% spread around ~297 ms. (It does
+        # lower it locally, 109 ms to ~90 ms; the runner is simply slower.)
         #
-        # Provisional: tighten once there is 60-sample CI data to fit, and
-        # revisit when Phase 1 ratifies reference hardware.
+        # 400 ms is therefore 1.28x the worst of those four, which is enough
+        # headroom for runner noise while still catching a ~30% regression.
+        #
+        # Gating on a ratio to another bench row was tried and rejected: the
+        # reference rows are noisier than the number being gated. follow ÷
+        # "reveal path to row 400k" is 1.38 locally but 2.05-2.68 across these
+        # same CI runs, so normalising would import that spread rather than
+        # cancel the hardware out. The absolute p95 is the steadier signal.
+        #
+        # Tighten when there are more samples to fit; revisit when Phase 1
+        # ratifies reference hardware.
         env:
           MILLE_FOLLOW_ACTIVE_SAMPLES: 60
           MILLE_FOLLOW_ACTIVE_P95_BUDGET_MS: 400

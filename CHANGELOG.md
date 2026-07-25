@@ -54,9 +54,13 @@ unexpected filesystem edge case from taking the whole editor with it.
   acked the stale version. `resync` then waited for a target no ack could
   reach and fell through to the 1 s timeout, returning as though it had
   synchronized. It reproduced about one run in twenty on an idle machine.
-  Mirror versions are now monotonic, and the host reports the version it is
-  actually at rather than the empty ChangeSet's. `applyViewportPatch` had
-  always advanced monotonically; this path had not.
+  The fix is that mirror versions are now monotonic — one `Math.max`.
+  `applyViewportPatch` had always advanced this way; `applyDelta` had not.
+  Deltas deliberately keep reporting the ChangeSet's version rather than the
+  host's current one: understating is the safe direction, since a monotonic
+  mirror cannot be dragged backwards by it, while overstating would ship a
+  version whose entries are not in that delta and let a client ack content it
+  never received.
 - **Scoped provider invalidation** — a watcher event invalidates the directory
   whose listing it changed, and the walk re-reads only those directories,
   returning every subtree with no dirty descendant by reference. Adding one

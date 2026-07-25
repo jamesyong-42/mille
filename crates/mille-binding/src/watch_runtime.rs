@@ -517,6 +517,9 @@ fn in_depth(root: &Path, path: &Path, depth: Option<usize>) -> bool {
     }
 }
 
+// The walk hands back its entries plus the two matchers it resolved; naming
+// the tuple would not make the signature easier to read at the call site.
+#[allow(clippy::type_complexity)]
 fn walk_for_reconcile(
     directory: &Path,
     options: WalkOptions,

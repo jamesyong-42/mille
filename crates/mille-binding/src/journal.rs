@@ -329,6 +329,8 @@ impl OperationJournal {
         )
     }
 
+    // Mirrors the SoftDelete variant's fields one-for-one.
+    #[allow(clippy::too_many_arguments)]
     pub fn push_soft_delete(
         &mut self,
         original_path: PathBuf,
@@ -558,7 +560,7 @@ fn file_id_from_metadata(meta: &std::fs::Metadata) -> (u64, u64) {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
-        return (meta.dev(), meta.ino());
+        (meta.dev(), meta.ino())
     }
     #[cfg(windows)]
     {

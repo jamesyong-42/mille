@@ -368,9 +368,8 @@ impl FileExplorer {
                     self.store
                         .insert(root.clone(), entry)
                         .map_err(fx_error_to_napi)
-                        .map(|id| {
+                        .inspect(|id| {
                             inserted_ids.push(id.raw() as i64);
-                            id
                         })?
                 }
             };
@@ -391,12 +390,11 @@ impl FileExplorer {
                         self.store
                             .insert(current.clone(), entry)
                             .map_err(fx_error_to_napi)
-                            .map(|id| {
+                            .inspect(|id| {
                                 inserted_ids.push(id.raw() as i64);
                                 if let Some(parent) = parent_id {
                                     child_set_changed.push(parent.raw() as i64);
                                 }
-                                id
                             })?
                     }
                 };
@@ -1588,7 +1586,7 @@ impl FileExplorer {
             let dest_meta = tokio::fs::symlink_metadata(&dest.path)
                 .await
                 .map_err(|e| fx_error_to_napi(io_to_fx(e, dest.path.clone())))?;
-            if !(dest_meta.is_dir() && !dest_meta.file_type().is_symlink()) {
+            if !dest_meta.is_dir() || dest_meta.file_type().is_symlink() {
                 self.end_copy_progress(progress.as_ref(), "failed");
                 return Err(fx_error_to_napi(FxError::InvalidInput(
                     "collision: merge requires a real directory destination".into(),
@@ -1799,13 +1797,11 @@ impl FileExplorer {
         let mtime_ms = entry.mtime_ms;
         let ctime_ms = entry.ctime_ms;
 
-        if was_dir {
-            if snap.has_children(eid) && !recursive {
-                return Err(fx_error_to_napi(FxError::Unsupported(format!(
-                    "delete of non-empty directory {:?} requires recursive: true",
-                    path
-                ))));
-            }
+        if was_dir && snap.has_children(eid) && !recursive {
+            return Err(fx_error_to_napi(FxError::Unsupported(format!(
+                "delete of non-empty directory {:?} requires recursive: true",
+                path
+            ))));
         }
 
         if use_trash {
@@ -2121,6 +2117,9 @@ impl FileExplorer {
         })
     }
 
+    // Restoring a soft-delete needs the whole journaled tuple; bundling it
+    // into a struct would just move the same fields behind another name.
+    #[allow(clippy::too_many_arguments)]
     async fn undo_soft_delete(
         &self,
         original_path: &std::path::Path,
@@ -3641,10 +3640,6 @@ async fn copy_via_staging(
         remove_path_best_effort(&backup).await;
         tokio::fs::rename(dst, &backup)
             .await
-            .map_err(|e| {
-                // Leave staging for cleanup; dest still intact on rename fail.
-                e
-            })
             .map_err(|e| io_to_fx(e, dst.to_path_buf()))?;
         Some(backup)
     } else {
@@ -3662,10 +3657,6 @@ async fn copy_via_staging(
         remove_path_best_effort(&backup).await;
     }
     Ok(())
-}
-
-async fn copy_tree_on_disk(src: &Path, dst: &Path) -> std::result::Result<(), FxError> {
-    copy_tree_on_disk_guarded(src, dst, &mut Vec::new(), None).await
 }
 
 async fn copy_tree_on_disk_with_progress(
@@ -3784,13 +3775,13 @@ async fn create_symlink(target: &Path, dst: &Path) -> std::result::Result<(), Fx
     #[cfg(unix)]
     {
         use std::os::unix::fs::symlink;
-        return tokio::task::spawn_blocking({
+        tokio::task::spawn_blocking({
             let target = target.to_path_buf();
             let dst = dst.to_path_buf();
             move || symlink(&target, &dst).map_err(|e| io_to_fx(e, dst))
         })
         .await
-        .map_err(|e| FxError::InternalBug(format!("symlink task join failed: {e}")))?;
+        .map_err(|e| FxError::InternalBug(format!("symlink task join failed: {e}")))?
     }
     #[cfg(windows)]
     {
@@ -3824,10 +3815,6 @@ async fn create_symlink(target: &Path, dst: &Path) -> std::result::Result<(), Fx
 /// children are created; nested directories merge recursively. Directory
 /// symlinks are not followed. If `dst` does not exist, falls back to a full
 /// tree copy.
-async fn merge_tree_on_disk(src: &Path, dst: &Path) -> std::result::Result<(), FxError> {
-    merge_tree_on_disk_with_progress(src, dst, None).await
-}
-
 async fn merge_tree_on_disk_with_progress(
     src: &Path,
     dst: &Path,
@@ -3860,7 +3847,7 @@ async fn merge_tree_on_disk_with_progress(
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return copy_tree_on_disk_with_progress(src, dst, progress).await;
         }
-        Err(error) => return Err(io_to_fx(error, dst.to_path_buf())),
+        Err(error) => Err(io_to_fx(error, dst.to_path_buf())),
         Ok(dst_meta) => {
             // Prefer real directories only for merge descent (no symlink follow).
             let dst_is_real_dir = dst_meta.is_dir() && !dst_meta.file_type().is_symlink();
@@ -3900,10 +3887,6 @@ async fn merge_tree_on_disk_with_progress(
 
 /// Move-merge a directory into an existing directory without deleting
 /// destination-only children. Source directory is removed when empty.
-async fn merge_move_tree_on_disk(src: &Path, dst: &Path) -> std::result::Result<(), FxError> {
-    merge_move_tree_on_disk_with_progress(src, dst, None).await
-}
-
 async fn merge_move_tree_on_disk_with_progress(
     src: &Path,
     dst: &Path,
@@ -3991,11 +3974,7 @@ async fn resolve_transfer_destination(
     let case_conflict = find_case_conflict(parent, desired_name).await?;
     let existing_path = match tokio::fs::symlink_metadata(&desired).await {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            if let Some(actual_name) = case_conflict {
-                Some(parent.join(actual_name))
-            } else {
-                None
-            }
+            case_conflict.map(|actual_name| parent.join(actual_name))
         }
         Err(error) => return Err(io_to_fx(error, desired)),
         Ok(_) => Some(desired.clone()),

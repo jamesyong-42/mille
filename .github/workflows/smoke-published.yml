@@ -96,13 +96,19 @@ jobs:
 
           # musl resolution is the interesting part on Alpine: the loader
           # picks the -musl package off the absence of glibcVersionRuntime.
+          #
+          # `shell: sh` is not incidental — Alpine ships busybox ash and no
+          # bash, so the default `shell: bash` fails with a bare "executable
+          # file not found" before any step runs. Both musl jobs are POSIX sh.
           - target: linux-x64-musl
             host: ubuntu-latest
             container: node:20-alpine
+            shell: sh
 
           - target: linux-arm64-musl
             host: ubuntu-24.04-arm
             container: node:20-alpine
+            shell: sh
 
     steps:
       - uses: actions/checkout@v4
@@ -116,7 +122,7 @@ jobs:
           node-version: 20
 
       - name: Install the published package
-        shell: bash
+        shell: ${{ matrix.shell || 'bash' }}
         run: |
           set -eu
           mkdir -p "${RUNNER_TEMP}/smoke"
@@ -127,7 +133,7 @@ jobs:
           ls node_modules/@vibecook
 
       - name: Smoke test
-        shell: bash
+        shell: ${{ matrix.shell || 'bash' }}
         run: >-
           node "${GITHUB_WORKSPACE}/scripts/smoke-published.mjs"
           "${RUNNER_TEMP}/smoke"

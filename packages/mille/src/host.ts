@@ -638,7 +638,12 @@ class FileExplorerHostImpl implements FileExplorerHost {
       this.send(
         session,
         frame('delta', {
-          version: delta.version,
+          // `delta.version` is the ChangeSet's `toVersion`, which is stale (0)
+          // when this tick is emitting markers rather than entry changes — the
+          // periodic tick may already have drained the real ChangeSet. Report
+          // the version the host is actually at, so a client that applies this
+          // delta can truthfully ack having caught up to it.
+          version: Math.max(delta.version, snap.treeVersion),
           changedIds: liveChangedIds,
           ...(outEntries.length > 0 ? { viewportPatch: encodeClientEntries(outEntries) } : {}),
           childSetChanged: [...childSetChanged],

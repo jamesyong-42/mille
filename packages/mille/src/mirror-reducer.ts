@@ -305,7 +305,14 @@ export function applyDelta(
   mirrorCap: number = DEFAULT_MIRROR_CAP,
 ): MirrorWorking {
   const next = cloneMirror(state);
-  next.treeVersion = msg.version;
+  // Monotonic, never a plain assignment. A delta emitted only to carry
+  // markers (subtree resynced/dirty, root changes, decorations) reports the
+  // version of an empty ChangeSet, so assigning would drag an up-to-date
+  // mirror *backwards* — and a mirror that regresses then acks the old
+  // version, which is how `resync`'s synchronization guarantee was silently
+  // degrading to its 1 s fallback. `applyViewportPatch` below already got
+  // this right; this path did not.
+  next.treeVersion = Math.max(next.treeVersion, msg.version);
   if (msg.visibility !== undefined) {
     next.showHiddenFiles = msg.visibility.showHiddenFiles;
     next.showIgnoredFiles = msg.visibility.showIgnoredFiles;

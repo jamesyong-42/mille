@@ -398,3 +398,52 @@ test('hydrateLookupEntries merges and pins a path chain without inventing child 
   assert.equal(next.children.size, 0, 'partial path must not masquerade as a directory listing');
   assert.equal(state.byId.has(3), false, 'source state remains immutable');
 });
+
+// A mirror's treeVersion must never move backwards.
+//
+// `tick()` emits a delta for marker-only reasons too — subtree resynced/dirty,
+// root changes, decorations — and such a delta reports the version of an empty
+// ChangeSet, which lags whatever the mirror has already applied. Assigning it
+// dragged an up-to-date mirror backwards, and the mirror then acked the older
+// version. That is what made `resync`'s synchronization guarantee fall through
+// to its 1 s timeout roughly one run in twenty: the host waited for an ack at
+// version N while the client, freshly regressed, kept insisting it was at 0.
+test('applyDelta never moves treeVersion backwards', () => {
+  const prev = createMirror();
+  prev.treeVersion = 8;
+
+  // Marker-only delta: no entries, no changed ids — exactly the shape a
+  // resync marker produces once the periodic tick has drained the ChangeSet.
+  const next = applyDelta(prev, {
+    version: 0,
+    changedIds: [],
+    childSetChanged: [],
+    removedIds: [],
+    directChildCounts: {},
+    newVisibleCount: 0,
+    coarseSubtrees: [],
+    subtreeDirty: [],
+    subtreeResynced: [1],
+  });
+
+  assert.equal(next.treeVersion, 8, 'a stale marker delta must not regress the mirror');
+});
+
+test('applyDelta still advances treeVersion for newer deltas', () => {
+  const prev = createMirror();
+  prev.treeVersion = 8;
+
+  const next = applyDelta(prev, {
+    version: 12,
+    changedIds: [],
+    childSetChanged: [],
+    removedIds: [],
+    directChildCounts: {},
+    newVisibleCount: 0,
+    coarseSubtrees: [],
+    subtreeDirty: [],
+    subtreeResynced: [],
+  });
+
+  assert.equal(next.treeVersion, 12, 'monotonic must not mean frozen');
+});

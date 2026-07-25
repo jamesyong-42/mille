@@ -44,6 +44,19 @@ unexpected filesystem edge case from taking the whole editor with it.
   covered by a 1 s fallback, which degrades to the old behaviour rather than
   hanging. Ordinary churn is unchanged — no acks are requested, so the hot
   path stays one-way.
+
+  The ack frame alone was not enough, and the fallback hid the remainder for a
+  while: `applyDelta` **assigned** the incoming `treeVersion` instead of
+  advancing to it. A delta emitted only to carry markers (subtree
+  resynced/dirty, root changes, decorations) reports an empty ChangeSet's
+  version, which lags whatever the periodic tick already delivered — so such a
+  delta dragged an up-to-date mirror *backwards*, and the regressed mirror
+  acked the stale version. `resync` then waited for a target no ack could
+  reach and fell through to the 1 s timeout, returning as though it had
+  synchronized. It reproduced about one run in twenty on an idle machine.
+  Mirror versions are now monotonic, and the host reports the version it is
+  actually at rather than the empty ChangeSet's. `applyViewportPatch` had
+  always advanced monotonically; this path had not.
 - **Scoped provider invalidation** — a watcher event invalidates the directory
   whose listing it changed, and the walk re-reads only those directories,
   returning every subtree with no dirty descendant by reference. Adding one

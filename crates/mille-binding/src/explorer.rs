@@ -174,7 +174,7 @@ pub struct FileExplorer {
 
 #[napi]
 impl FileExplorer {
-    #[napi(constructor)]
+    #[napi(constructor, catch_unwind)]
     pub fn new(mut options: ExplorerOptionsJs) -> Result<Self> {
         let roots: Vec<PathBuf> = options.roots.iter().map(PathBuf::from).collect();
         if roots.is_empty() {
@@ -260,7 +260,7 @@ impl FileExplorer {
 
     /// Cancel an in-flight transfer identified by `operation_id`. Returns
     /// true when a matching operation was found and signalled.
-    #[napi(js_name = "cancelOperation")]
+    #[napi(js_name = "cancelOperation", catch_unwind)]
     pub fn cancel_operation(&self, operation_id: String) -> bool {
         let map = self.operations.lock();
         if let Some(token) = map.get(&operation_id) {
@@ -315,14 +315,14 @@ impl FileExplorer {
 
     /// Local-mode baseline capabilities. Phase 5 wave 3+ will recompute
     /// this from provider registration once the dispatcher lands.
-    #[napi(getter)]
+    #[napi(getter, catch_unwind)]
     pub fn capabilities(&self) -> u32 {
         LOCAL_CAPABILITIES
     }
 
     /// Phase 5.3 replaces with ChangeSet drain + TSFN invocation.
     /// For now: returns the current store tree-version.
-    #[napi(js_name = "getTreeVersion")]
+    #[napi(js_name = "getTreeVersion", catch_unwind)]
     pub fn get_tree_version(&self) -> u32 {
         self.store.tree_version() as u32
     }
@@ -330,7 +330,7 @@ impl FileExplorer {
     /// Resolve an indexed entry identity to its exact absolute path. This is
     /// an internal fast path used by the TypeScript wrapper for lazy prefetch;
     /// unlike basename reconstruction it is unambiguous across workspace roots.
-    #[napi(js_name = "pathForId")]
+    #[napi(js_name = "pathForId", catch_unwind)]
     pub fn path_for_id(&self, id: i64) -> Option<String> {
         self.store
             .path_for_id(EntryId(id as u64))
@@ -343,7 +343,7 @@ impl FileExplorer {
     /// reveal work proportional to path depth rather than workspace size.
     /// Relative paths are tested below every configured root; a leading root
     /// folder name is accepted as well.
-    #[napi(js_name = "resolvePath")]
+    #[napi(js_name = "resolvePath", catch_unwind)]
     pub async fn resolve_path(&self, path: String) -> Result<Option<i64>> {
         let input = PathBuf::from(path);
         if input
@@ -486,7 +486,7 @@ impl FileExplorer {
     ///
     /// The watcher starts before the walk, and path-idempotent insertion
     /// closes the race between initial scan results and live events.
-    #[napi(js_name = "populateFromRoots")]
+    #[napi(js_name = "populateFromRoots", catch_unwind)]
     pub async fn populate_from_roots(&self) -> Result<u32> {
         use mille_core::{
             populate_store_with_provenance, walk, walk_with_ignore, IgnoreMatcher, WalkOptions,
@@ -597,7 +597,7 @@ impl FileExplorer {
     /// stable identity and no stale children. Restored roots keep that id and
     /// become lazy directories again. One public change notice covers the
     /// complete refresh, and the returned version is a synchronization point.
-    #[napi(js_name = "refreshWorkspaceRoots")]
+    #[napi(js_name = "refreshWorkspaceRoots", catch_unwind)]
     pub async fn refresh_workspace_roots(&self) -> Result<u32> {
         self.ensure_watcher()?;
         let roots = self.roots.read().clone();
@@ -739,7 +739,7 @@ impl FileExplorer {
     /// known subtree when `recursive` is true. Files reconcile through their
     /// containing directory so atomic replacement, deletion, and metadata
     /// changes all use the same watcher-tested path.
-    #[napi(js_name = "resync")]
+    #[napi(js_name = "resync", catch_unwind)]
     pub async fn resync(&self, id: i64, recursive: Option<bool>) -> Result<u32> {
         self.ensure_watcher()?;
         let entry_id = EntryId(id as u64);
@@ -793,7 +793,7 @@ impl FileExplorer {
 
     /// Authoritatively reconcile every configured root and all descendants.
     /// One change notice covers the complete operation.
-    #[napi(js_name = "resyncWorkspace")]
+    #[napi(js_name = "resyncWorkspace", catch_unwind)]
     pub async fn resync_workspace(&self) -> Result<u32> {
         self.ensure_watcher()?;
         let roots = self.roots.read().clone();
@@ -827,7 +827,7 @@ impl FileExplorer {
     /// the store doesn't already hold it; the `roots-only` initial-walk
     /// mode in commit B2.2 relies on this to seed each root with a real
     /// Entry record before any children are walked.
-    #[napi(js_name = "populateFromPath")]
+    #[napi(js_name = "populateFromPath", catch_unwind)]
     pub async fn populate_from_path(
         &self,
         path: String,
@@ -981,7 +981,7 @@ impl FileExplorer {
 
     /// Capture an immutable view of the tree. The inner Arc is stable
     /// between deltas, so identity comparison holds on the JS side.
-    #[napi(js_name = "getSnapshot")]
+    #[napi(js_name = "getSnapshot", catch_unwind)]
     pub fn get_snapshot(&self) -> MirrorSnapshot {
         MirrorSnapshot {
             inner: self.store.snapshot(),
@@ -990,7 +990,7 @@ impl FileExplorer {
 
     /// Atomically replace display-only settings and reclassify configured
     /// excludes without rebuilding or walking the explorer.
-    #[napi(js_name = "updateProjectionSettings")]
+    #[napi(js_name = "updateProjectionSettings", catch_unwind)]
     pub fn update_projection_settings(&self, settings: ProjectionSettingsJs) -> Result<u32> {
         let exclude_globs = settings.exclude_globs;
         let _policy_guard = self.policy_gate.lock();
@@ -1074,7 +1074,7 @@ impl FileExplorer {
     /// The input must be an exact permutation. No filesystem paths or entry
     /// records change; this publishes a new immutable snapshot solely so
     /// local subscribers and remote mirrors observe the new display order.
-    #[napi(js_name = "reorderRoots")]
+    #[napi(js_name = "reorderRoots", catch_unwind)]
     pub fn reorder_roots(&self, ids: Vec<i64>) -> Result<u32> {
         let roots: Vec<EntryId> = ids.into_iter().map(|id| EntryId(id as u64)).collect();
         let previous_version = self.store.tree_version() as u32;
@@ -1110,7 +1110,7 @@ impl FileExplorer {
     /// New roots are seeded as entries only; descendants hydrate lazily on
     /// expansion. Removed roots lose their complete known subtrees. Inputs are
     /// validated and statted before watcher/store/config state changes.
-    #[napi(js_name = "updateWorkspaceRoots")]
+    #[napi(js_name = "updateWorkspaceRoots", catch_unwind)]
     pub async fn update_workspace_roots(&self, roots: Vec<String>) -> Result<u32> {
         if self.disposed.load(Ordering::Acquire) {
             return Err(Error::from_reason("FileExplorer is disposed"));
@@ -1290,7 +1290,7 @@ impl FileExplorer {
     /// once per coalescer tick (Phase 7.6) to feed the per-session delta
     /// diff. Empty ChangeSets are cheap — fields are zero-length vecs and
     /// `to_version == from_version`.
-    #[napi(js_name = "takePendingChanges")]
+    #[napi(js_name = "takePendingChanges", catch_unwind)]
     pub fn take_pending_changes(&self) -> ChangeSetJs {
         let cs = self.store.take_pending_changes();
         ChangeSetJs::from_core(&cs)
@@ -1298,7 +1298,7 @@ impl FileExplorer {
 
     /// Create a file or directory under `parent_id`. Phase 5 scope: leaf only.
     /// Fails with EEXIST when the destination already exists (never truncates).
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn create(&self, parent_id: i64, name: String, kind: u8) -> Result<EntryJs> {
         let kind_enum = kind_from_u8(kind).map_err(fx_error_to_napi)?;
         let parent_eid = EntryId(parent_id as u64);
@@ -1412,7 +1412,7 @@ impl FileExplorer {
 
     /// Rename an entry in place while preserving its identity and any known
     /// descendant identities.
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn rename(&self, id: i64, new_name: String) -> Result<EntryJs> {
         let eid = EntryId(id as u64);
         let old_path = resolve_entry_path(&self.store, eid).ok_or_else(|| {
@@ -1504,7 +1504,7 @@ impl FileExplorer {
     }
 
     /// Move an entry under a new parent, optionally renaming in flight.
-    #[napi(js_name = "move")]
+    #[napi(js_name = "move", catch_unwind)]
     pub async fn move_entry(
         &self,
         id: i64,
@@ -1824,7 +1824,7 @@ impl FileExplorer {
     /// recycle directory **outside** the workspace (`$TMPDIR/mille-recycle/…`)
     /// so `undo()` can restore it without polluting the tree. Pass
     /// `trash: false` for a permanent delete (reported as non-undoable).
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn delete(&self, id: i64, options: Option<DeleteOptionsJs>) -> Result<()> {
         let eid = EntryId(id as u64);
         let recursive = options.as_ref().and_then(|o| o.recursive).unwrap_or(false);
@@ -1961,27 +1961,27 @@ impl FileExplorer {
     }
 
     /// True when at least one undoable operation is on the journal stack.
-    #[napi(js_name = "canUndo")]
+    #[napi(js_name = "canUndo", catch_unwind)]
     pub fn can_undo(&self) -> bool {
         self.journal.lock().can_undo()
     }
 
     /// Describe the next **undoable** operation without applying it.
-    #[napi(js_name = "peekUndo")]
+    #[napi(js_name = "peekUndo", catch_unwind)]
     pub fn peek_undo(&self) -> Option<UndoDescriptorJs> {
         self.journal.lock().peek().map(|e| e.descriptor())
     }
 
     /// Most recent mutation descriptor, including non-undoable permanent deletes
     /// and overwrite-moves (`undoable: false` with a reason).
-    #[napi(js_name = "lastMutation")]
+    #[napi(js_name = "lastMutation", catch_unwind)]
     pub fn last_mutation(&self) -> Option<UndoDescriptorJs> {
         self.journal.lock().last_mutation()
     }
 
     /// Reverse the most recent undoable mutation. The journal entry is removed
     /// only after a fully successful reverse mutation.
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn undo(&self) -> Result<UndoResultJs> {
         let entry = self
             .journal
@@ -2280,7 +2280,7 @@ impl FileExplorer {
 
     /// Copy a file or directory under a new parent. Directories copy
     /// recursively with content preserved.
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn copy(
         &self,
         id: i64,
@@ -2564,7 +2564,7 @@ impl FileExplorer {
     /// (`error` default, or `rename` for a free suffix). Per-item failures
     /// surface as structured `FileSystemError`s without creating empty
     /// placeholder files.
-    #[napi(js_name = "copyFromPath")]
+    #[napi(js_name = "copyFromPath", catch_unwind)]
     pub async fn copy_from_path(
         &self,
         source_path: String,
@@ -2806,7 +2806,7 @@ impl FileExplorer {
 
     /// Preflight a transfer destination without mutating disk or the store.
     /// Used by hosts/UI to prompt only when a real collision exists.
-    #[napi(js_name = "probeDestination")]
+    #[napi(js_name = "probeDestination", catch_unwind)]
     pub async fn probe_destination(
         &self,
         parent_id: i64,
@@ -2879,7 +2879,7 @@ impl FileExplorer {
 
     /// Read a file's contents by id. Returns a `Buffer` — JS receives a
     /// zero-copy view over the bytes (standard Node builds).
-    #[napi(js_name = "readFile")]
+    #[napi(js_name = "readFile", catch_unwind)]
     pub async fn read_file(&self, id: i64) -> Result<Buffer> {
         // TODO(phase-6): accept `Option<AbortSignal>` once the wrapper
         // restructures I/O onto `AsyncTask` (napi-rs 3.8 limitation).
@@ -2890,7 +2890,7 @@ impl FileExplorer {
 
     /// Read a file as text. Only UTF-8 is supported in v0.1; pass
     /// `encoding: "utf-8"` (or omit) — anything else returns EUNSUPPORTED.
-    #[napi(js_name = "readText")]
+    #[napi(js_name = "readText", catch_unwind)]
     pub async fn read_text(&self, id: i64, encoding: Option<String>) -> Result<String> {
         let token = crate::cancel::signal_to_token(None);
         let path = self.resolve_path_for_id(id)?;
@@ -2900,7 +2900,7 @@ impl FileExplorer {
     /// Write `data` to a file by id. When `options.atomic` is true, writes
     /// through a sibling `.mille.tmp` file + rename — safe against partial
     /// writes on same-filesystem targets.
-    #[napi(js_name = "writeFile")]
+    #[napi(js_name = "writeFile", catch_unwind)]
     pub async fn write_file(
         &self,
         id: i64,
@@ -2935,7 +2935,7 @@ impl FileExplorer {
     /// TODO(phase-6 / PLAN 13.x): accept `Option<AbortSignal>` once the
     /// wrapper restructures onto `AsyncTask` — same `!Send` constraint
     /// that defers it on read_file/write_file.
-    #[napi(js_name = "readFileStream")]
+    #[napi(js_name = "readFileStream", catch_unwind)]
     pub fn read_file_stream(&self, id: i64) -> Result<crate::stream::FileReadStream> {
         let path = self.resolve_path_for_id(id)?;
         Ok(crate::stream::FileReadStream::open(path))
@@ -2958,7 +2958,7 @@ impl FileExplorer {
     /// Subscribe to the coalesced `'change'` channel — fires once per
     /// coalescer flush regardless of whether the delta was tree-only,
     /// decoration-only, or both.
-    #[napi(js_name = "onChange")]
+    #[napi(js_name = "onChange", catch_unwind)]
     pub fn on_change(
         &self,
         listener: ThreadsafeFunction<
@@ -2973,7 +2973,7 @@ impl FileExplorer {
     }
 
     /// Subscribe to the `'change:tree'` channel — tree-structural changes only.
-    #[napi(js_name = "onChangeTree")]
+    #[napi(js_name = "onChangeTree", catch_unwind)]
     pub fn on_change_tree(
         &self,
         listener: ThreadsafeFunction<
@@ -2989,7 +2989,7 @@ impl FileExplorer {
 
     /// Subscribe to the `'change:decorations'` channel — decoration
     /// bumps that don't touch the tree structure.
-    #[napi(js_name = "onChangeDecorations")]
+    #[napi(js_name = "onChangeDecorations", catch_unwind)]
     pub fn on_change_decorations(
         &self,
         listener: ThreadsafeFunction<
@@ -3005,7 +3005,7 @@ impl FileExplorer {
     }
 
     /// Subscribe to the raw single-event stream fed by the live watcher.
-    #[napi(js_name = "onEvent")]
+    #[napi(js_name = "onEvent", catch_unwind)]
     pub fn on_event(
         &self,
         listener: ThreadsafeFunction<
@@ -3021,7 +3021,7 @@ impl FileExplorer {
 
     /// Subscribe to the batched event stream. Each emission is a Vec
     /// of events coalesced within one debounce window.
-    #[napi(js_name = "onBatch")]
+    #[napi(js_name = "onBatch", catch_unwind)]
     pub fn on_batch(
         &self,
         listener: ThreadsafeFunction<
@@ -3037,7 +3037,7 @@ impl FileExplorer {
 
     /// Subscribe to soft warnings — inotify budget advisories, dropped
     /// events, platform quirks. Non-fatal; distinct from `'error'`.
-    #[napi(js_name = "onWarning")]
+    #[napi(js_name = "onWarning", catch_unwind)]
     pub fn on_warning(
         &self,
         listener: ThreadsafeFunction<
@@ -3053,7 +3053,7 @@ impl FileExplorer {
 
     /// Subscribe to the error channel. Engine-side failures (watcher
     /// crash, walker panic) surface here with an ErrorCode + message.
-    #[napi(js_name = "onError")]
+    #[napi(js_name = "onError", catch_unwind)]
     pub fn on_error(
         &self,
         listener: ThreadsafeFunction<
@@ -3069,7 +3069,7 @@ impl FileExplorer {
 
     /// Subscribe to the `'ready'` channel. Fires once when the initial
     /// scan settles; later phases may re-fire on root re-add.
-    #[napi(js_name = "onReady")]
+    #[napi(js_name = "onReady", catch_unwind)]
     pub fn on_ready(
         &self,
         listener: ThreadsafeFunction<(), Unknown<'static>, (), Status, false>,
@@ -3079,7 +3079,7 @@ impl FileExplorer {
 
     /// Remove the listener registered under `subscription_id`. Returns
     /// true if a listener was actually removed; double-off is idempotent.
-    #[napi(js_name = "off")]
+    #[napi(js_name = "off", catch_unwind)]
     pub fn off(&self, subscription_id: i64) -> bool {
         // `on*` returns u64 but napi widens unsigned 64-bit to JS bigint;
         // the TS wrapper re-narrows to number (we stay < 2^53 in practice
@@ -3093,7 +3093,7 @@ impl FileExplorer {
     /// Gated under `#[cfg(feature = "test-hooks")]` would be cleaner but
     /// the binding crate is cdylib-only; `pub(crate)` + a thin `#[napi]`
     /// wrapper is enough for the integration tests to reach it.
-    #[napi(js_name = "emitReadyForTests")]
+    #[napi(js_name = "emitReadyForTests", catch_unwind)]
     pub fn emit_ready_for_tests(&self) {
         self.events.emit_ready();
     }
@@ -3104,7 +3104,7 @@ impl FileExplorer {
     ///
     /// The client-port path (search-over-the-wire) is Phase 10+ and
     /// is not wired here — this method is local-mode only.
-    #[napi]
+    #[napi(catch_unwind)]
     pub fn search(&self, query: String, options: Option<SearchOptionsJs>) -> Vec<SearchHitJs> {
         let snap = self.store.snapshot();
         let opts = options
@@ -3132,7 +3132,7 @@ impl FileExplorer {
     }
 
     /// Idempotently stop the watcher and release its forwarding thread.
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn dispose(&self) -> Result<()> {
         if self.disposed.swap(true, Ordering::AcqRel) {
             return Ok(());

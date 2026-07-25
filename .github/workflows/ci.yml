@@ -76,9 +76,14 @@ jobs:
 
       # Integration tests load the N-API binary; dist/ is gitignored so we
       # also emit TypeScript before typecheck.
+      #
+      # `:probe` is `:debug` plus the `panic-probe` feature, which adds the
+      # deliberately-panicking entry points `panic-boundary.test.mjs` calls to
+      # prove a native panic reaches JS instead of SIGABRT-ing the host. The
+      # feature is off by default, so published artifacts never carry them.
       - name: Build native + TS packages
         run: |
-          pnpm --filter @vibecook/mille run build:napi:debug
+          pnpm --filter @vibecook/mille run build:napi:probe
           pnpm --filter @vibecook/mille run build:ts
           pnpm --filter @vibecook/mille-ui run build
 

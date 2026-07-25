@@ -76,6 +76,13 @@ export interface BuildIdentity {
   readonly nativeVersion: string;
   readonly nativeProfile: string;
   readonly nativeTarget: string;
+  /**
+   * `'unwind'` or `'abort'` for the loaded binary. An `'abort'` build cannot
+   * turn a native panic into a catchable error — the whole host process takes
+   * SIGABRT instead. Embedders running their own crash triage should record
+   * this; `'unknown'` means the binary predates the field.
+   */
+  readonly nativePanicStrategy: string;
   readonly protocolVersion: number;
   readonly platform: NodeJS.Platform;
   readonly arch: string;
@@ -96,12 +103,14 @@ export function buildIdentity(): BuildIdentity {
     crateVersion: native.version(),
     profile: 'unknown',
     target: `${process.platform}-${process.arch}`,
+    panicStrategy: 'unknown',
   };
   cachedBuildIdentity = Object.freeze({
     packageVersion: nativeLoadInfo.packageVersion,
     nativeVersion: nativeInfo.crateVersion,
     nativeProfile: nativeInfo.profile,
     nativeTarget: nativeInfo.target,
+    nativePanicStrategy: nativeInfo.panicStrategy ?? 'unknown',
     protocolVersion: PROTOCOL_VERSION,
     platform: process.platform,
     arch: process.arch,

@@ -52,6 +52,8 @@
     "build": "pnpm run build:napi && pnpm run build:ts",
     "build:napi": "napi build --platform --release --manifest-path ../../crates/mille-binding/Cargo.toml --output-dir . --no-js",
     "build:napi:debug": "napi build --platform --manifest-path ../../crates/mille-binding/Cargo.toml --output-dir . --no-js",
+    "build:napi:probe": "napi build --platform --manifest-path ../../crates/mille-binding/Cargo.toml --output-dir . --no-js --features panic-probe",
+    "build:napi:probe:release": "napi build --platform --release --manifest-path ../../crates/mille-binding/Cargo.toml --output-dir . --no-js --features panic-probe",
     "build:ts": "tsc --build",
     "typecheck": "tsc --noEmit",
     "test": "node --test --test-concurrency=4 test/*.test.mjs",

@@ -22,7 +22,7 @@ mod watch_runtime;
 
 /// Module version string. Present so the native module has at least one
 /// exported symbol and can be `require()`d end-to-end during Phase 0.
-#[napi]
+#[napi(catch_unwind)]
 pub fn version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
 }
@@ -39,9 +39,15 @@ pub struct NativeBuildInfo {
     pub crate_version: String,
     pub profile: String,
     pub target: String,
+    /// `"unwind"` or `"abort"`. A binary built with `panic = "abort"` cannot
+    /// convert a Rust panic into a JS exception under any circumstances: the
+    /// process takes SIGABRT and the embedding app dies with it. Exposed so a
+    /// test can assert this about the artifact that actually ships, which is
+    /// not the artifact the test suite normally loads.
+    pub panic_strategy: String,
 }
 
-#[napi(js_name = "buildInfo")]
+#[napi(js_name = "buildInfo", catch_unwind)]
 pub fn build_info() -> NativeBuildInfo {
     NativeBuildInfo {
         crate_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -51,5 +57,28 @@ pub fn build_info() -> NativeBuildInfo {
             "release".to_string()
         },
         target: format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH),
+        panic_strategy: if cfg!(panic = "abort") {
+            "abort".to_string()
+        } else {
+            "unwind".to_string()
+        },
     }
+}
+
+/// Deliberate panic behind a sync entry point. Feature-gated: this exists so
+/// `panic-boundary.test.mjs` can prove a panic reaches JS as a catchable
+/// error rather than aborting. Enabled only by `build:napi:probe`.
+#[cfg(feature = "panic-probe")]
+#[napi(js_name = "__panicProbeSync", catch_unwind)]
+pub fn panic_probe_sync() -> u32 {
+    panic!("probe: synchronous panic across the napi boundary");
+}
+
+/// Same, from inside an async entry point. Worth probing separately: the
+/// future runs on the tokio pool, so the panic unwinds through the runtime's
+/// task machinery rather than straight out of the `extern "C"` shim.
+#[cfg(feature = "panic-probe")]
+#[napi(js_name = "__panicProbeAsync", catch_unwind)]
+pub async fn panic_probe_async() -> napi::Result<u32> {
+    panic!("probe: asynchronous panic across the napi boundary");
 }

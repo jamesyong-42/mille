@@ -1303,6 +1303,26 @@ the accessibility/platform quality matrix.
 
 #### 6.2 Platform matrix
 
+- Native panics must not kill the embedding process.
+  **Done** — the shipped artifact used to make this impossible: `[profile.release]`
+  carried `panic = "abort"`, so any panic became SIGABRT in the host editor with
+  no catchable error and nothing flushed. Two independent defects, each proven by
+  measurement before it was fixed:
+  1. `panic = "abort"` — measured a release build exiting **134** for both a sync
+     and an async probe. Abort also defeats tokio's own task-level capture, which
+     is why async entry points recovered in debug and died in release. Now
+     `unwind`.
+  2. None of the 67 callable `#[napi]` entry points opted into `catch_unwind`, so
+     a panic unwound out of the generated `extern "C"` shim — which Rust defines
+     as an abort (`panic_cannot_unwind`). Measured **134 in a debug build**, where
+     the profile already unwinds. All 67 now carry the attribute.
+
+  Guarded by `packages/mille/test/panic-boundary.test.mjs`: a manifest assertion
+  for the release profile (the runtime one is vacuous against a debug binary,
+  which is all CI loads), child-process probes for both entry-point shapes, and a
+  static scan so a newly added entry point cannot silently omit the attribute.
+  All five assertions were observed failing against a deliberately broken tree.
+  Probes live behind the `panic-probe` cargo feature and never ship.
 - Windows drive and UNC behavior.
   **Partial** — `parsePlatformPath` / `isUncPath` / `isWindowsDrivePath`.
   Both msvc targets build again (they had been broken since Phase 4.4 by the
@@ -1312,9 +1332,20 @@ the accessibility/platform quality matrix.
 - macOS Unicode normalization and case-insensitive defaults.
   **Partial** — `normalizeFileName` / `pathsEqual` with NFC/NFD.
 - Linux case-sensitive and inotify limit behavior.
-  **Open** (inotify limits remain native-watcher territory).
+  **Partial, unwired** — `inotify_limits::current_limits` reads
+  `/proc/sys/fs/inotify/max_user_watches` and `advise_budget` classifies a
+  projected watch count as `Ok` / `NearLimit` / `Exceeds`. Both are pure and
+  tested, but **nothing calls them**: no watcher or binding code consults the
+  advisor, and the PollWatcher fallback its doc comment describes does not
+  exist. Detection without enforcement — a large-repo user still silently
+  exceeds the limit and loses events.
 - Symlink/junction policies and permission boundaries.
-  **Open**.
+  **Partial** — `SymlinkPolicy` exists with `Never` / `Always` / `Smart`, and
+  the walker deliberately stops at a symlinked `node_modules` rather than
+  descending its target (pnpm layouts). But `Smart`, which is the default, is
+  documented as *behaviorally equivalent to `Never`*: the `(dev, inode)` dedup
+  and ancestor-cycle detection that would make it correct are unimplemented, so
+  there is no cycle protection under `Always`. Permission boundaries untouched.
 - Network and remote-like latency/failure simulation.
   **Partial** — `withLatency` + offline gate on providers.
 

@@ -94,7 +94,7 @@ impl FileReadStream {
 #[napi]
 impl FileReadStream {
     /// Next chunk, or `null` on EOF / cancel. IO errors mid-read throw.
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn next(&self) -> Result<Option<Buffer>> {
         let mut rx = self.rx.lock().await;
         match rx.recv().await {
@@ -105,7 +105,7 @@ impl FileReadStream {
     }
 
     /// Close the stream early. Idempotent.
-    #[napi]
+    #[napi(catch_unwind)]
     pub fn cancel(&self) {
         self.cancel.cancel();
     }

@@ -120,6 +120,7 @@ export interface NativeBinding {
     readonly crateVersion: string;
     readonly profile: string;
     readonly target: string;
+    readonly panicStrategy?: string;
   };
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   FileExplorer: any;

@@ -77,7 +77,14 @@ tempfile = "3.27"
 [profile.release]
 lto = "fat"
 codegen-units = 1
-panic = "abort"
+# `abort` is wrong for a library that loads into someone else's Electron main
+# process: a panic becomes SIGABRT and takes the host editor down with it, with
+# no catchable error and no chance to flush unsaved work. It also defeats the
+# tokio runtime's own task-level panic capture, so the async entry points that
+# recover cleanly in a debug build were dying in release — measured, both probes
+# exiting 134. Unwinding is what lets `catch_unwind` on the napi entry points
+# turn a panic into a JS exception. See `test/panic-boundary.test.mjs`.
+panic = "unwind"
 
 [profile.bench]
 inherits = "release"

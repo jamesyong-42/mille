@@ -41,34 +41,34 @@ pub struct MirrorSnapshot {
 #[napi]
 impl MirrorSnapshot {
     /// Monotonic tree-version at the moment of capture.
-    #[napi(getter, js_name = "treeVersion")]
+    #[napi(getter, js_name = "treeVersion", catch_unwind)]
     pub fn tree_version(&self) -> u32 {
         self.inner.tree_version() as u32
     }
 
     /// Decoration version. Phase 9 wires to a real counter; 0 until then.
-    #[napi(getter, js_name = "decorationVersion")]
+    #[napi(getter, js_name = "decorationVersion", catch_unwind)]
     pub fn decoration_version(&self) -> u32 {
         0
     }
 
-    #[napi(getter, js_name = "showHiddenFiles")]
+    #[napi(getter, js_name = "showHiddenFiles", catch_unwind)]
     pub fn show_hidden_files(&self) -> bool {
         self.inner.visibility().show_hidden_files
     }
 
-    #[napi(getter, js_name = "showIgnoredFiles")]
+    #[napi(getter, js_name = "showIgnoredFiles", catch_unwind)]
     pub fn show_ignored_files(&self) -> bool {
         self.inner.visibility().show_ignored_files
     }
 
-    #[napi(getter, js_name = "compactFolders")]
+    #[napi(getter, js_name = "compactFolders", catch_unwind)]
     pub fn compact_folders(&self) -> bool {
         self.inner.compact_folders()
     }
 
     /// Workspace roots in the order they were registered.
-    #[napi]
+    #[napi(catch_unwind)]
     pub fn roots(&self) -> Vec<EntryJs> {
         self.inner
             .roots()
@@ -82,7 +82,7 @@ impl MirrorSnapshot {
     }
 
     /// Lookup an entry by id. Returns None if the id isn't in this snapshot.
-    #[napi(js_name = "getById")]
+    #[napi(js_name = "getById", catch_unwind)]
     pub fn get_by_id(&self, id: i64) -> Option<EntryJs> {
         // i64→u64 is lossless for non-negative ids; negative ids never exist
         // (allocator caps at 2^53, well below i64::MAX) so out-of-range is
@@ -95,20 +95,20 @@ impl MirrorSnapshot {
 
     /// Direct-child count for a directory id. None if the id isn't known
     /// or isn't a container.
-    #[napi(js_name = "directChildCount")]
+    #[napi(js_name = "directChildCount", catch_unwind)]
     pub fn direct_child_count(&self, id: i64) -> Option<u32> {
         let eid = EntryId(id as u64);
         self.inner.direct_child_count(eid)
     }
 
-    #[napi(js_name = "projectedChildCount")]
+    #[napi(js_name = "projectedChildCount", catch_unwind)]
     pub fn projected_child_count(&self, id: i64, include_ignored: Option<bool>) -> Option<u32> {
         self.inner
             .projected_child_count(EntryId(id as u64), include_ignored.unwrap_or(false))
     }
 
     /// True if the entry has at least one child visible in this snapshot.
-    #[napi(js_name = "hasChildren")]
+    #[napi(js_name = "hasChildren", catch_unwind)]
     pub fn has_children(&self, id: i64) -> bool {
         let eid = EntryId(id as u64);
         self.inner.has_children(eid)
@@ -118,7 +118,7 @@ impl MirrorSnapshot {
     /// Empty when the id is unknown or not a container. The host walks
     /// the tree via this to serialize the full entry set into the
     /// snapshot frame (Phase 8 commit 8.6).
-    #[napi(js_name = "childrenOf")]
+    #[napi(js_name = "childrenOf", catch_unwind)]
     pub fn children_of(&self, id: i64) -> Vec<i64> {
         let eid = EntryId(id as u64);
         self.inner
@@ -128,7 +128,7 @@ impl MirrorSnapshot {
             .collect()
     }
 
-    #[napi(js_name = "projectedChildrenOf")]
+    #[napi(js_name = "projectedChildrenOf", catch_unwind)]
     pub fn projected_children_of(&self, id: i64, include_ignored: Option<bool>) -> Vec<i64> {
         self.inner
             .projected_children_of(EntryId(id as u64), include_ignored.unwrap_or(false))
@@ -139,7 +139,7 @@ impl MirrorSnapshot {
 
     /// Flattened viewport rows for the current expanded-set and window.
     /// `include_ignored` defaults to false, matching SPEC §4.9.2.
-    #[napi(js_name = "visibleRows")]
+    #[napi(js_name = "visibleRows", catch_unwind)]
     pub fn visible_rows(&self, options: VisibleRowsOptionsJs) -> Vec<VisibleRowJs> {
         let expanded: HashSet<EntryId> = options
             .expanded
@@ -163,7 +163,7 @@ impl MirrorSnapshot {
 
     /// Flattened visible ids for selection-only consumers. Avoids creating
     /// and marshaling complete row objects.
-    #[napi(js_name = "visibleRowIds")]
+    #[napi(js_name = "visibleRowIds", catch_unwind)]
     pub fn visible_row_ids(&self, options: VisibleRowsOptionsJs) -> Vec<i64> {
         let expanded: HashSet<EntryId> = options
             .expanded
@@ -184,7 +184,7 @@ impl MirrorSnapshot {
 
     /// Exact logical index in the flattened visible order. Performs one
     /// native DFS and returns no row payloads.
-    #[napi(js_name = "visibleRowIndex")]
+    #[napi(js_name = "visibleRowIndex", catch_unwind)]
     pub fn visible_row_index(
         &self,
         id: i64,
@@ -201,7 +201,7 @@ impl MirrorSnapshot {
     }
 
     /// Payload-free full-order fallback for UI typeahead.
-    #[napi(js_name = "visiblePrefixMatch")]
+    #[napi(js_name = "visiblePrefixMatch", catch_unwind)]
     pub fn visible_prefix_match(
         &self,
         prefix: String,
@@ -236,7 +236,7 @@ impl MirrorSnapshot {
     ///
     /// `visibleRows` (struct-marshaled) remains the preferred path for
     /// small viewports and stays the default for API parity.
-    #[napi(js_name = "visibleRowsBin")]
+    #[napi(js_name = "visibleRowsBin", catch_unwind)]
     pub fn visible_rows_bin(&self, options: VisibleRowsOptionsJs) -> napi::Result<Buffer> {
         let expanded: HashSet<EntryId> = options
             .expanded
@@ -290,7 +290,7 @@ impl MirrorSnapshot {
     /// Honest scroll-height metric: `known` rows plus any expanded folders
     /// whose children haven't arrived yet (so the UI can render a loading
     /// badge without fudging offsets).
-    #[napi(js_name = "visibleRowCount")]
+    #[napi(js_name = "visibleRowCount", catch_unwind)]
     pub fn visible_row_count(
         &self,
         expanded: Vec<i64>,

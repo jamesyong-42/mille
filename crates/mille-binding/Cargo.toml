@@ -11,6 +11,12 @@ description = "Thin napi-rs binding for mille-core."
 crate-type = ["cdylib"]
 path = "src/lib.rs"
 
+[features]
+# Test-only entry points that deliberately panic, so the suite can assert a
+# native panic surfaces as a catchable JS error instead of killing the host
+# process. Never enabled for published artifacts — see `build:napi:probe`.
+panic-probe = []
+
 [dependencies]
 mille-core = { path = "../mille-core" }
 bincode.workspace = true

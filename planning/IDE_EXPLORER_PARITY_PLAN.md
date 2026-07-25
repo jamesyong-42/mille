@@ -1,8 +1,10 @@
 # IDE Explorer Parity Implementation Plan
 
-**Status:** active — Phases 0–5 complete for planned scope; Phase 6.1 first
-slice landed (`@vibecook/mille/provider` memfs + capability gate + tree
-session); 6.2/6.3 partial (path helpers, live announcer)
+**Status:** active — Phases 0–5 complete for planned scope; Phase 6.1 landed
+(`@vibecook/mille/provider`: memfs, capability gate, tree session with scoped
+invalidation and bounded-concurrency walks); 6.2/6.3 partial (path helpers,
+Windows file identity, live announcer). CI is green on every job for the
+first time since 2026-07-13 — the 63 commits between had never run it.
 **Created:** 2026-07-21  
 **Baseline assessment:**
 [IDE_EXPLORER_PARITY_ASSESSMENT.md](./IDE_EXPLORER_PARITY_ASSESSMENT.md)
@@ -1303,6 +1305,10 @@ the accessibility/platform quality matrix.
 
 - Windows drive and UNC behavior.
   **Partial** — `parsePlatformPath` / `isUncPath` / `isWindowsDrivePath`.
+  Both msvc targets build again (they had been broken since Phase 4.4 by the
+  unstable `windows_by_handle` accessors, so no Windows binary could be
+  produced), and undo identity reads the volume serial + file index through
+  `GetFileInformationByHandle` rather than falling back to size/timestamps.
 - macOS Unicode normalization and case-insensitive defaults.
   **Partial** — `normalizeFileName` / `pathsEqual` with NFC/NFD.
 - Linux case-sensitive and inotify limit behavior.

@@ -1,6 +1,6 @@
 # IDE Explorer Parity Assessment
 
-**Assessment date:** 2026-07-22
+**Assessment date:** 2026-07-22 (reliability re-scored 2026-07-25)
 **Repository baseline:** `476b601` (`perf(ui): smooth live file tree updates`)  
 **Target:** the day-to-day reliability, responsiveness, and workflow depth of the
 file explorers in mature IDEs such as Visual Studio Code and WebStorm.
@@ -36,7 +36,7 @@ mature IDE explorer is the 10/10 reference point.
 | Core tree interaction                |   7.4 | Windowed navigation, scalable multi-selection, reliable deep reveal, resilient inline rename, create/delete, clipboard, filtering, context menus, and drag/drop                                                           |
 | Visual behavior                      |   7.4 | Viewport, focus, selection, and rename drafts survive churn; animation is row-scoped, storm-bounded, and reduced-motion aware; broader theme/sticky-root scenarios remain                                                 |
 | Accessibility                        |   6.0 | Good ARIA tree semantics and keyboard tests; no real assistive-technology matrix                                                                                                                                          |
-| Reliability and recovery             |   5.5 | Deterministic soak gates converge, but repeated Electron watcher stalls and direct native startup misses remain unresolved; crash/platform stress also remains                                                            |
+| Reliability and recovery             |   6.5 | Full CI green again (20x watcher repetition + 1,000-op soak + 8 platform builds); undo no longer deletes files it did not create, `resync` is acknowledged rather than timed, Windows builds and file identity restored. Electron watcher stalls, direct native startup misses, and crash/platform stress remain |
 | Performance confidence               |   7.8 | Million-sibling structure, binary-wire, bounded-hydration, windowed 500,000-row UI, Criterion, and Electron gates cover payload, paint, projection, navigation, and retention                                             |
 | Explorer workflow breadth            |   5.3 | Versioned settings, navigation, active-file following, path/OS actions, refresh/collapse, scoped-search handoff, real external import, and expanded collision policy exist; progress/undo and broader IDE workflows remain shallow |
 
@@ -342,6 +342,25 @@ The watcher pipeline is the explorer's foundation. Missing a file event is more
 serious than a missing convenience feature. The current failing integration
 tests mean release confidence is red until a clean build and repeated soak are
 green.
+
+**Update 2026-07-25.** The build/soak side of that is now green — every CI job
+passes, including the 20x watcher repetition and the 1,000-operation soak,
+which had not run since 2026-07-13 because 63 unpushed commits never reached
+CI. Four correctness defects that hid in that window are fixed:
+
+- `undo` deleted files it had not created on inode-recycling filesystems
+  (ext4 hands a freed inode to the next create; the guard compared
+  `dev + ino + size`). Created files are now pinned by an open handle, and
+  Windows reads its id through `GetFileInformationByHandle`.
+- `resync` advertised itself as a synchronization point but only flushed and
+  waited a tick; mirrors are now acknowledged.
+- Both Windows targets could not compile, so no Windows binary existed.
+- SCM compare followed a symlink out of the workspace, and `git show` accepted
+  an option-shaped revision.
+
+What that does **not** cover, and what still gates this item: the Electron
+watcher stalls and direct-native startup misses named below, plus the
+deterministic edge-case coverage listed next.
 
 Additional behavior that needs deterministic coverage includes:
 

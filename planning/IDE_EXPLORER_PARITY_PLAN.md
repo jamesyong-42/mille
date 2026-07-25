@@ -1331,8 +1331,12 @@ the accessibility/platform quality matrix.
 - VoiceOver on macOS and NVDA on Windows scripted acceptance scenarios.
   **Open**.
 - High contrast, zoom, reduced motion, and keyboard-only operation.
-  **Partial** — reduced-motion covered; contrast now gated by the axe run in
-  both themes. Zoom levels and a forced-colors/high-contrast pass are open.
+  **Partial** — reduced-motion covered; contrast gated by the axe run in both
+  themes; 200% zoom gated by a reflow check that fails when any element is
+  pushed past the viewport (WCAG 1.4.4 / 1.4.10). Note the shell sets
+  `overflow-x: hidden`, so spilled content is *clipped away* rather than
+  scrollable — measuring `scrollWidth` there is unfalsifiable, which is why
+  the check measures element boxes. A forced-colors pass is still open.
 - Announce create, rename, delete, move, errors, loading, and result counts
   without flooding live regions during event storms.
   **Done (first slice)** — `@vibecook/mille-ui/a11y` `createLiveAnnouncer`

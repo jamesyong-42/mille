@@ -259,7 +259,74 @@ async function runAxeAudit(win: BrowserWindow, reportPath: string): Promise<void
       }[];
     };
 
-    writeFileSync(reportPath, `${JSON.stringify(results, null, 2)}\n`);
+    // WCAG 1.4.4 / 1.4.10: text must survive 200% zoom without the page
+    // spilling sideways. Palette-independent, so it runs once.
+    win.webContents.setZoomFactor(2);
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    const reflow = (await win.webContents.executeJavaScript(`(async () => {
+      const doc = document.documentElement;
+      const limit = doc.clientWidth + 1;
+      // The shell sets overflow-x: hidden, so scrollWidth can never exceed
+      // clientWidth no matter how far content spills — measuring that would
+      // be unfalsifiable. Ask the boxes instead. Under clipping, spilled
+      // content is unreachable rather than merely off-screen, which is the
+      // stronger 1.4.10 failure.
+      const offenders = [];
+      for (const el of document.querySelectorAll('body *')) {
+        const rect = el.getBoundingClientRect();
+        if (rect.width <= 1 || rect.height <= 1) continue;
+        const style = getComputedStyle(el);
+        if (
+          style.visibility === 'hidden' ||
+          style.display === 'none' ||
+          style.opacity === '0'
+        ) {
+          continue;
+        }
+        if (rect.right <= limit) continue;
+        // Document order, so an ancestor already recorded covers its children.
+        if (offenders.some((o) => o.el.contains(el))) continue;
+        offenders.push({
+          el,
+          selector:
+            el.tagName.toLowerCase() +
+            (el.className && typeof el.className === 'string'
+              ? '.' + el.className.trim().split(/\\s+/).join('.')
+              : ''),
+          right: Math.round(rect.right),
+        });
+      }
+      return {
+        clientWidth: doc.clientWidth,
+        overflowXHidden: getComputedStyle(doc).overflowX === 'hidden',
+        offenders: offenders.slice(0, 5).map((o) => ({
+          selector: o.selector,
+          right: o.right,
+        })),
+      };
+    })()`)) as {
+      clientWidth: number;
+      overflowXHidden: boolean;
+      offenders: { selector: string; right: number }[];
+    };
+    win.webContents.setZoomFactor(1);
+
+    writeFileSync(
+      reportPath,
+      `${JSON.stringify({ ...results, reflowAt200Percent: reflow }, null, 2)}\n`,
+    );
+    if (reflow.offenders.length > 0) {
+      console.error(
+        `[playground-axe] at 200% zoom, ${reflow.offenders.length} element(s) ` +
+          `extend past the ${reflow.clientWidth}px viewport` +
+          (reflow.overflowXHidden ? ' and are clipped away' : ''),
+      );
+      for (const offender of reflow.offenders) {
+        console.error(`    ${offender.selector} extends to ${offender.right}px`);
+      }
+      exit(1);
+      return;
+    }
     const { violations } = results;
     if (violations.length === 0) {
       console.log('[playground-axe] no WCAG A/AA violations');

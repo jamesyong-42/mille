@@ -6,6 +6,7 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -25,6 +26,29 @@ const settings = {
   compactFolders: false,
   showHiddenFiles: true,
 };
+
+/**
+ * Whether this process may create symlinks at all. Windows requires
+ * Developer Mode or elevation and otherwise fails with EPERM, which the
+ * hijack test below hits while *building its fixture* — so it reported a
+ * failure that said nothing about the behaviour under test. Probed once
+ * rather than per-test.
+ */
+const CAN_SYMLINK = (() => {
+  const probe = mkdtempSync(join(tmpdir(), 'mille-symlink-probe-'));
+  try {
+    symlinkSync(join(probe, 'target'), join(probe, 'link'));
+    return true;
+  } catch {
+    return false;
+  } finally {
+    rmSync(probe, { recursive: true, force: true });
+  }
+})();
+
+const skipWithoutSymlinks = CAN_SYMLINK
+  ? false
+  : 'symlink creation unavailable (Windows needs Developer Mode or elevation)';
 
 function fixture() {
   const sandbox = mkdtempSync(join(tmpdir(), 'mille-undo-'));
@@ -211,7 +235,7 @@ test('P0: undo-rename refuses when destination was replaced', async () => {
   }
 });
 
-test('P0: soft-delete refuses symlink-hijacked recycle base', async () => {
+test('P0: soft-delete refuses symlink-hijacked recycle base', { skip: skipWithoutSymlinks }, async () => {
   await withIsolatedTemp(async (isolatedTemp) => {
     const { sandbox, root } = fixture();
     // Plant a symlink at the *isolated* temp pool only — never the user
@@ -219,7 +243,7 @@ test('P0: soft-delete refuses symlink-hijacked recycle base', async () => {
     const pool = join(isolatedTemp, 'mille-recycle');
     const external = join(sandbox, 'evil-target');
     mkdirSync(external, { recursive: true });
-    const { symlinkSync, lstatSync } = await import('node:fs');
+    const { lstatSync } = await import('node:fs');
     try {
       symlinkSync(external, pool);
 

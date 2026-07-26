@@ -1224,6 +1224,24 @@ mod tests {
     use super::*;
     use crate::entry::{Entry, EntryKind};
 
+    /// A workspace-root path that is absolute on the host platform.
+    ///
+    /// `replace_roots` rejects non-absolute roots, and `Path::is_absolute` is
+    /// false for `"/a"` on Windows — it is rooted but carries no drive prefix.
+    /// The POSIX literals these tests used could therefore only ever pass on
+    /// Unix. Tests that merely `insert` paths do not need this: `insert`
+    /// performs no absoluteness check.
+    fn abs(relative: &str) -> PathBuf {
+        #[cfg(windows)]
+        {
+            PathBuf::from(format!("C:\\{}", relative.replace('/', "\\")))
+        }
+        #[cfg(not(windows))]
+        {
+            PathBuf::from(format!("/{relative}"))
+        }
+    }
+
     fn leaf(name: &str, parent: Option<EntryId>) -> Entry {
         Entry {
             id: EntryId(0),
@@ -1428,17 +1446,14 @@ mod tests {
     #[test]
     fn replace_roots_preserves_retained_ids_and_removes_subtrees_atomically() {
         let s = EntryStore::new();
-        let a = s.insert("/a".into(), dir("a", None)).unwrap();
-        let child = s.insert("/a/child".into(), leaf("child", Some(a))).unwrap();
-        let b = s.insert("/b".into(), dir("b", None)).unwrap();
+        let a = s.insert(abs("a"), dir("a", None)).unwrap();
+        let child = s.insert(abs("a/child"), leaf("child", Some(a))).unwrap();
+        let b = s.insert(abs("b"), dir("b", None)).unwrap();
         let retained = s.snapshot();
         s.take_pending_changes();
 
         let (version, added, removed) = s
-            .replace_roots(vec![
-                ("/b".into(), dir("b", None)),
-                ("/c".into(), dir("c", None)),
-            ])
+            .replace_roots(vec![(abs("b"), dir("b", None)), (abs("c"), dir("c", None))])
             .unwrap();
         let current = s.snapshot();
         let c = current.roots()[1];
@@ -1448,8 +1463,8 @@ mod tests {
         assert_eq!(removed, vec![a, child]);
         assert_eq!(s.path_for_id(a), None);
         assert_eq!(s.path_for_id(child), None);
-        assert_eq!(s.path_for_id(b), Some(PathBuf::from("/b")));
-        assert_eq!(s.path_for_id(c), Some(PathBuf::from("/c")));
+        assert_eq!(s.path_for_id(b), Some(abs("b")));
+        assert_eq!(s.path_for_id(c), Some(abs("c")));
         assert_eq!(retained.roots(), &[a, b]);
         assert!(retained.get(child).is_some());
 
@@ -1463,25 +1478,21 @@ mod tests {
     #[test]
     fn replace_roots_is_idempotent_and_rejects_ambiguous_paths() {
         let s = EntryStore::new();
-        let a = s.insert("/a".into(), dir("a", None)).unwrap();
+        let a = s.insert(abs("a"), dir("a", None)).unwrap();
         let version = s.tree_version();
         s.take_pending_changes();
 
         assert_eq!(
-            s.replace_roots(vec![("/a".into(), dir("a", None))])
-                .unwrap(),
+            s.replace_roots(vec![(abs("a"), dir("a", None))]).unwrap(),
             (version, Vec::new(), Vec::new())
         );
         assert!(s.take_pending_changes().is_empty());
 
         for invalid in [
+            vec![(abs("a"), dir("a", None)), (abs("a"), dir("a", None))],
             vec![
-                (PathBuf::from("/a"), dir("a", None)),
-                (PathBuf::from("/a"), dir("a", None)),
-            ],
-            vec![
-                (PathBuf::from("/a"), dir("a", None)),
-                (PathBuf::from("/a/nested"), dir("nested", None)),
+                (abs("a"), dir("a", None)),
+                (abs("a/nested"), dir("nested", None)),
             ],
         ] {
             let err = s.replace_roots(invalid).unwrap_err();

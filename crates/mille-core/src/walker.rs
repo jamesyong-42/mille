@@ -984,6 +984,13 @@ mod tests {
         );
     }
 
+    // Gated with the cycle tests it controls for. The body only creates a
+    // symlink on Unix, so on Windows it used to compare two symlink-free
+    // walks, assert `follow > never` on 0 vs 0, and fail every run — while
+    // controlling for nothing, since the tests it backstops are themselves
+    // `#[cfg(unix)]`. Windows symlink coverage needs its own tests plus a
+    // Developer Mode check; see `try_symlink_dir` usage in the JS suite.
+    #[cfg(unix)]
     #[test]
     fn always_policy_actually_follows_a_non_cyclic_symlink() {
         // Control for both cycle tests: without this, a walker that had
@@ -993,7 +1000,6 @@ mod tests {
         std::fs::create_dir_all(root.join("real/deep")).unwrap();
         std::fs::write(root.join("real/deep/file.txt"), b"x").unwrap();
         std::fs::create_dir_all(root.join("start")).unwrap();
-        #[cfg(unix)]
         std::os::unix::fs::symlink(root.join("real"), root.join("start/link")).unwrap();
 
         let follow = super::walk(

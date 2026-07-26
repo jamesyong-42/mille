@@ -16,12 +16,18 @@ import { mkdtempSync, rmSync } from 'node:fs';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
 
-// Loaded per host triple. Extend when more prebuilts land.
+// Derived from the host the way `src/native.ts` resolves a dev build, rather
+// than hand-listed. The hand-written list only ever covered darwin and
+// linux-gnu, so on Windows and on musl the assert below fired at import time
+// and took the whole file down — a failure that said nothing about the code
+// under test. napi-rs suffixes Linux/Windows with an ABI (`-gnu` / `-musl` /
+// `-msvc`); darwin is bare.
+const base = `mille.${process.platform}-${process.arch}`;
 const candidates = [
-  '../mille.darwin-arm64.node',
-  '../mille.darwin-x64.node',
-  '../mille.linux-x64-gnu.node',
-  '../mille.linux-arm64-gnu.node',
+  `../${base}.node`,
+  `../${base}-gnu.node`,
+  `../${base}-musl.node`,
+  `../${base}-msvc.node`,
 ];
 
 let native = null;

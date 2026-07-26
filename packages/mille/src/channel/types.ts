@@ -130,12 +130,17 @@ export interface ExplorerSessionPolicy {
  * `remotePeerId` (a Tailscale WhoIs node id).
  */
 export interface ExplorerSessionContext {
-  readonly kind?: 'local' | 'remote';
-  readonly clientId?: string;
-  readonly peerId?: string;
-  readonly peerName?: string;
-  readonly exportId?: string;
-  readonly policy?: ExplorerSessionPolicy;
+  readonly kind?: 'local' | 'remote' | undefined;
+  readonly clientId?: string | undefined;
+  // `| undefined` throughout, not just `?`. Under exactOptionalPropertyTypes
+  // the two differ, and every real caller builds this from values that are
+  // already `string | undefined` — a Truffle socket's `remotePeerId` is
+  // exactly that. Without it, constructing a context requires conditional
+  // spreads at every call site.
+  readonly peerId?: string | undefined;
+  readonly peerName?: string | undefined;
+  readonly exportId?: string | undefined;
+  readonly policy?: ExplorerSessionPolicy | undefined;
 }
 
 /** A context with the defaults applied, as stored on a live session. */

@@ -1,0 +1,40 @@
+{
+  "name": "@vibecook/mille-truffle",
+  "version": "0.1.0",
+  "description": "Serve a mille workspace to another tailnet device over Truffle.",
+  "license": "MIT",
+  "type": "module",
+  "private": true,
+  "//private": "Experimental until the two-device acceptance in PR 6. `pnpm -r publish` would pick this up otherwise; flip to false with the release wiring.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/vibecook-dev/mille"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist", "README.md"],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc --build",
+    "typecheck": "tsc --noEmit",
+    "test": "node ../../scripts/run-tests.mjs"
+  },
+  "peerDependencies": {
+    "@vibecook/mille": "workspace:*",
+    "@vibecook/truffle": ">=0.7.6 <0.8.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@vibecook/mille": "workspace:*",
+    "@vibecook/truffle": "^0.7.6",
+    "typescript": "~6.0.0"
+  }
+}

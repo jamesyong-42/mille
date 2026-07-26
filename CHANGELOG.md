@@ -10,8 +10,46 @@ the binary and perform a single walk. So the watcher, the host/renderer port
 protocol and the mutation paths shipped unexercised there, and three defects
 were living in that gap.
 
+### Remote workspaces (`@vibecook/mille-truffle`, new, unpublished)
+
+- **A mille workspace can now be served to another tailnet device.**
+  `serveMille(mesh, { exports })` binds a Truffle `mesh.net` listener, runs the
+  open handshake, authorizes the peer, and attaches the accepted socket to a
+  `FileExplorerHost` — so a client on another machine drives the same explorer
+  API it uses locally, with no per-file network RPC. Exports are named and
+  server-defined: a client asks for `"work"`, never for a path, which is why
+  traversal is not a request-time concern. Roots are canonicalized once at
+  startup and a misconfigured export fails the service at boot rather than
+  surfacing as a confusing denial later.
+  The ordering inside an accepted connection is the security property: the
+  verified Tailscale peer id is readable synchronously at accept, and no host,
+  engine, or filesystem handle comes into existence until authorization has
+  passed. An unknown export and a forbidden one return byte-identical
+  rejections, because anything else turns the service into an enumerator of
+  its own exports. A socket with no verified identity is refused, an
+  `authorize` callback that throws is a denial, and asking read-write of a
+  read-only export is rejected rather than quietly downgraded.
+  One host is shared per distinct export configuration, keyed on roots and
+  explorer options but never on identity — who you are decides whether you may
+  attach, not which engine you attach to. It stays warm for five minutes after
+  its last session so a reconnect keeps the same `EntryId`s.
+  Verified against a real tailnet, not only a fake mesh: two ephemeral nodes,
+  a denied export refused with no host created, an authorized peer browsing
+  and mutating, and PR 3's policy still returning `EACCES` for host-global
+  calls across the wire. That run caught a defect the fake could not — mille's
+  default `initialWalk: 'full'` is a no-op meaning "the consumer calls
+  `populateFromRoots` itself", which a remote peer cannot do, so every served
+  workspace would have sat empty forever. Served exports now default to
+  `roots-only`.
+
 ### Engine (`@vibecook/mille`)
 
+- **`ExplorerSessionContext` accepts explicit `undefined`** — its optional
+  fields were declared `?:` without `| undefined`, which under
+  `exactOptionalPropertyTypes` is not the same thing. Every real caller builds
+  the context from values that are already `string | undefined` (a Truffle
+  socket's `remotePeerId` is exactly that), so constructing one required a
+  conditional spread per field.
 - **Sessions now have permissions, and the host enforces them** — a session
   attached with `attachChannel` carries an `ExplorerSessionPolicy`, and every
   mutation and call is gated against it before native dispatch. The whole

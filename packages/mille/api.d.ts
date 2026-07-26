@@ -854,12 +854,12 @@ export interface ExplorerSessionPolicy {
  * never a value the client asserted about itself.
  */
 export interface ExplorerSessionContext {
-  readonly kind?: 'local' | 'remote';
-  readonly clientId?: string;
-  readonly peerId?: string;
-  readonly peerName?: string;
-  readonly exportId?: string;
-  readonly policy?: ExplorerSessionPolicy;
+  readonly kind?: 'local' | 'remote' | undefined;
+  readonly clientId?: string | undefined;
+  readonly peerId?: string | undefined;
+  readonly peerName?: string | undefined;
+  readonly exportId?: string | undefined;
+  readonly policy?: ExplorerSessionPolicy | undefined;
 }
 
 export declare function createMessagePortHostChannel(

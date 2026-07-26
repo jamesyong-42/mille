@@ -132,7 +132,44 @@ fn io_error_code(err: &std::io::Error) -> ErrorCode {
 
 #[cfg(windows)]
 fn io_error_code(err: &std::io::Error) -> ErrorCode {
-    // Windows errno mapping is less granular; lean on ErrorKind.
+    // Win32 status codes, not errno values. Leaning on `ErrorKind` alone was
+    // losing the most common Windows failure outright: a file held by another
+    // process fails with ERROR_SHARING_VIOLATION, which `std` reports as
+    // `ErrorKind::Uncategorized` — so it arrived as EUNKNOWN even though
+    // EMBEDDING.md documents EBUSY for exactly that case.
+    //
+    // Only unambiguous codes are listed. Anything else keeps the `ErrorKind`
+    // fallback, which already covers ERROR_ACCESS_DENIED and friends.
+    if let Some(code) = err.raw_os_error() {
+        return match code {
+            // ERROR_FILE_NOT_FOUND / ERROR_PATH_NOT_FOUND / ERROR_INVALID_DRIVE
+            2 | 3 | 15 => ErrorCode::ENOENT,
+            // ERROR_ACCESS_DENIED
+            5 => ErrorCode::EACCES,
+            // ERROR_WRITE_PROTECT
+            19 => ErrorCode::EROFS,
+            // ERROR_SHARING_VIOLATION / ERROR_LOCK_VIOLATION
+            32 | 33 => ErrorCode::EBUSY,
+            // ERROR_HANDLE_DISK_FULL / ERROR_DISK_FULL
+            39 | 112 => ErrorCode::ENOSPC,
+            // ERROR_FILE_EXISTS / ERROR_ALREADY_EXISTS
+            80 | 183 => ErrorCode::EEXIST,
+            // ERROR_INVALID_PARAMETER / ERROR_INVALID_NAME /
+            // ERROR_FILENAME_EXCED_RANGE
+            87 | 123 | 206 => ErrorCode::EINVAL,
+            // ERROR_DIRECTORY — "the directory name is invalid", raised when a
+            // file is used where a directory is required.
+            267 => ErrorCode::ENOTDIR,
+            // ERROR_OPERATION_ABORTED
+            995 => ErrorCode::ECANCELED,
+            // ERROR_USER_MAPPED_FILE — a mapped file cannot be replaced.
+            1224 => ErrorCode::EBUSY,
+            // ERROR_CANT_RESOLVE_FILENAME — reparse-point resolution gave up,
+            // the Windows analogue of a symlink loop.
+            1921 => ErrorCode::ELOOP,
+            _ => io_kind_code(err),
+        };
+    }
     io_kind_code(err)
 }
 
@@ -189,10 +226,17 @@ mod tests {
         }
     }
 
+    /// "Permission denied" as the host OS numbers it: errno 13 on Unix,
+    /// ERROR_ACCESS_DENIED (5) on Windows. Passing the Unix value on Windows
+    /// selects ERROR_INVALID_DATA, which is a different error entirely.
+    const ACCESS_DENIED: i32 = if cfg!(windows) { 5 } else { 13 };
+
     #[test]
     fn fx_error_code_per_variant() {
-        let io =
-            ErrorCode::from_io_error(&std::io::Error::from_raw_os_error(13), PathBuf::from("/x"));
+        let io = ErrorCode::from_io_error(
+            &std::io::Error::from_raw_os_error(ACCESS_DENIED),
+            PathBuf::from("x"),
+        );
         assert_eq!(io.code(), ErrorCode::EACCES);
 
         assert_eq!(
@@ -223,6 +267,67 @@ mod tests {
             let err = std::io::Error::from_raw_os_error(errno);
             let fx = ErrorCode::from_io_error(&err, PathBuf::from("/tmp/x"));
             assert_eq!(fx.code(), expected, "errno {errno}");
+        }
+    }
+
+    /// The Win32 status codes an explorer actually meets. ERROR_SHARING_VIOLATION
+    /// is the important one: `std` reports it as `ErrorKind::Uncategorized`, so
+    /// before this table it surfaced as EUNKNOWN rather than the EBUSY that
+    /// EMBEDDING.md documents for "file in use by another process".
+    #[cfg(windows)]
+    #[test]
+    fn io_error_status_mapping_windows() {
+        let cases = [
+            (5, ErrorCode::EACCES),
+            (2, ErrorCode::ENOENT),
+            (3, ErrorCode::ENOENT),
+            (32, ErrorCode::EBUSY),
+            (33, ErrorCode::EBUSY),
+            (80, ErrorCode::EEXIST),
+            (183, ErrorCode::EEXIST),
+            (19, ErrorCode::EROFS),
+            (112, ErrorCode::ENOSPC),
+            (267, ErrorCode::ENOTDIR),
+            (995, ErrorCode::ECANCELED),
+            (1921, ErrorCode::ELOOP),
+        ];
+        for (status, expected) in cases {
+            let err = std::io::Error::from_raw_os_error(status);
+            let fx = ErrorCode::from_io_error(&err, PathBuf::from("C:\\tmp\\x"));
+            assert_eq!(fx.code(), expected, "win32 status {status}");
+        }
+    }
+
+    /// A real sharing violation, not a synthesized status code: hold a file
+    /// with an exclusive share mode and confirm the operations an explorer
+    /// performs report EBUSY rather than EUNKNOWN.
+    #[cfg(windows)]
+    #[test]
+    fn exclusive_handle_reports_ebusy() {
+        use std::os::windows::fs::OpenOptionsExt;
+
+        let td = tempfile::tempdir().unwrap();
+        let path = td.path().join("locked.txt");
+        std::fs::write(&path, b"x").unwrap();
+
+        // share_mode(0) is what an editor or scanner holding the file does.
+        let _held = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(&path)
+            .unwrap();
+
+        for err in [
+            std::fs::remove_file(&path).unwrap_err(),
+            std::fs::rename(&path, td.path().join("moved.txt")).unwrap_err(),
+            std::fs::read(&path).unwrap_err(),
+        ] {
+            assert_eq!(
+                ErrorCode::from_io_error(&err, path.clone()).code(),
+                ErrorCode::EBUSY,
+                "raw_os_error={:?}",
+                err.raw_os_error()
+            );
         }
     }
 

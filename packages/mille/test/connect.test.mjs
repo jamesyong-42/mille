@@ -8,6 +8,7 @@
 // real entries, setExpanded fans child entries across, and mutations
 // drive snapshot identity bumps.
 
+import { removeTempDir } from '../../../scripts/test-temp.mjs';
 import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -44,7 +45,7 @@ test('connectFileExplorer completes handshake and exposes treeVersion', async ()
     await client.dispose();
     await host.dispose();
   } finally {
-    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    removeTempDir(dir);
   }
 });
 
@@ -62,7 +63,7 @@ test('mutate with unknown op surfaces as FileSystemError', async () => {
     await client.dispose();
     await host.dispose();
   } finally {
-    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    removeTempDir(dir);
   }
 });
 
@@ -78,7 +79,7 @@ test('call getTreeVersion round-trips via callResult', async () => {
     await client.dispose();
     await host.dispose();
   } finally {
-    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    removeTempDir(dir);
   }
 });
 
@@ -105,7 +106,7 @@ test('resolvePath round-trips through the host path index', async () => {
     await client.dispose();
     await host.dispose();
   } finally {
-    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    removeTempDir(dir);
   }
 });
 
@@ -139,7 +140,7 @@ test('resolvePath hydrates only a lazy target ancestor chain into the port mirro
     await client.dispose();
     await host.dispose();
   } finally {
-    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    removeTempDir(dir);
   }
 });
 
@@ -157,7 +158,7 @@ test('call unknown method rejects with FileSystemError', async () => {
     await client.dispose();
     await host.dispose();
   } finally {
-    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    removeTempDir(dir);
   }
 });
 
@@ -181,7 +182,7 @@ test("on('change') fires when the client issues setExpanded", async () => {
     await client.dispose();
     await host.dispose();
   } finally {
-    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    removeTempDir(dir);
   }
 });
 
@@ -202,7 +203,7 @@ test('dispose rejects in-flight requests with ECANCELED', async () => {
     assert.equal(typeof result.code, 'string');
     await host.dispose();
   } finally {
-    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    removeTempDir(dir);
   }
 });
 
@@ -223,7 +224,7 @@ test('two clients on the same host each get their own session', async () => {
     await c2.dispose();
     await host.dispose();
   } finally {
-    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    removeTempDir(dir);
   }
 });
 
@@ -259,7 +260,7 @@ test('handshake delivers root Entry records without hydrating descendants', asyn
     await client.dispose();
     await host.dispose();
   } finally {
-    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    removeTempDir(dir);
   }
 });
 
@@ -300,7 +301,7 @@ test('setExpanded triggers a delta that populates visibleRows', async () => {
     await client.dispose();
     await host.dispose();
   } finally {
-    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    removeTempDir(dir);
   }
 });
 
@@ -345,6 +346,6 @@ test('rename on host propagates updated entry to client mirror', async () => {
     await client.dispose();
     await host.dispose();
   } finally {
-    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    removeTempDir(dir);
   }
 });

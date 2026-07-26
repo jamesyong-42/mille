@@ -22,6 +22,7 @@
 // it and this stops being a guard. If it ever fails, do not treat it as flaky
 // until the gate is confirmed intact.
 
+import { removeTempDir } from '../../../scripts/test-temp.mjs';
 import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -101,7 +102,7 @@ test('a watcher batch cannot resurrect entries a settings change excluded', asyn
       );
     } finally {
       await fx.dispose();
-      rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+      removeTempDir(root);
     }
   }
 });

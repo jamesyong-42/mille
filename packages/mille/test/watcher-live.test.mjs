@@ -1,3 +1,4 @@
+import { removeTempDir } from '../../../scripts/test-temp.mjs';
 import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -89,7 +90,7 @@ test('live watcher reconciles external create/modify/rename/delete', async () =>
   } finally {
     for (const subscription of subscriptions) subscription.dispose();
     await fx.dispose();
-    await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    removeTempDir(root);
   }
 });
 
@@ -116,7 +117,7 @@ test('watcher echo preserves a library-mutated entry', async () => {
     assert.equal(matching[0].size, 15);
   } finally {
     await fx.dispose();
-    await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    removeTempDir(root);
   }
 });
 
@@ -159,7 +160,7 @@ test('external directory rename/delete never leaves dangling descendants', async
     );
   } finally {
     await fx.dispose();
-    await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    removeTempDir(root);
   }
 });
 
@@ -175,6 +176,6 @@ test('dispose stops watcher delivery', async () => {
     assert.equal(fx.getTreeVersion(), version);
   } finally {
     await fx.dispose();
-    await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    removeTempDir(root);
   }
 });

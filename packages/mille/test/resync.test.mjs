@@ -1,3 +1,4 @@
+import { removeTempDir } from '../../../scripts/test-temp.mjs';
 import { strict as assert } from 'node:assert';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -100,7 +101,7 @@ test('recursive subtree resync authoritatively adds, removes, and preserves unre
     }
   } finally {
     await fx.dispose();
-    rmSync(sandbox, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    removeTempDir(sandbox);
   }
 });
 
@@ -126,7 +127,7 @@ test('workspace resync reconciles every configured root subtree', async () => {
     assert.equal(await fx.resyncWorkspace(), version);
   } finally {
     await fx.dispose();
-    rmSync(sandbox, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    removeTempDir(sandbox);
   }
 });
 
@@ -171,7 +172,7 @@ test('port subtree resync is a synchronization point for every attached mirror',
     await clientA.dispose();
     await clientB.dispose();
     await host.dispose();
-    rmSync(sandbox, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    removeTempDir(sandbox);
   }
 });
 
@@ -246,7 +247,7 @@ test('port resync waits for a lagging mirror, not just a tick', async () => {
     await fastClient.dispose();
     await slowClient.dispose();
     await host.dispose();
-    rmSync(sandbox, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    removeTempDir(sandbox);
   }
 });
 
@@ -296,7 +297,7 @@ test('resync still resolves when a client never acknowledges', async () => {
     await client.dispose();
     mute.port2.close();
     await host.dispose();
-    rmSync(sandbox, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    removeTempDir(sandbox);
   }
 });
 
@@ -359,6 +360,6 @@ test('a never-acking client does not slow every subsequent mutation', async () =
     await client.dispose();
     mute.port2.close();
     await host.dispose();
-    rmSync(sandbox, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    removeTempDir(sandbox);
   }
 });

@@ -1,3 +1,4 @@
+import { removeTempDir } from '../../../scripts/test-temp.mjs';
 import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -96,7 +97,7 @@ test('local projection settings update atomically and no-op idempotently', async
     subscription.dispose();
   } finally {
     await fx.dispose();
-    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    removeTempDir(root);
   }
 });
 
@@ -138,7 +139,7 @@ test('locale changes re-sort atomically and invalid locales preserve the snapsho
     assert.deepEqual(names(fx.getSnapshot(), rootEntry.id), names(after, rootEntry.id));
   } finally {
     await fx.dispose();
-    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    removeTempDir(root);
   }
 });
 
@@ -174,7 +175,7 @@ test('locale re-sort reaches a port mirror before the update resolves', async ()
   } finally {
     await client.dispose();
     await host.dispose();
-    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    removeTempDir(root);
   }
 });
 
@@ -239,7 +240,7 @@ test('exclude globs add and remove without erasing repository-ignore provenance'
     assert.equal(fx.updateProjectionSettings(settings), restoredVersion);
   } finally {
     await fx.dispose();
-    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    removeTempDir(root);
   }
 });
 
@@ -296,6 +297,6 @@ test('one port update reaches every client before the initiator resolves', async
     await clientA.dispose();
     await clientB.dispose();
     await host.dispose();
-    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    removeTempDir(root);
   }
 });

@@ -1,3 +1,4 @@
+import { removeTempDir } from '../../../scripts/test-temp.mjs';
 import { strict as assert } from 'node:assert';
 import {
   existsSync,
@@ -74,7 +75,7 @@ test('P0: cancelling overwrite preserves the original destination', async () => 
     assert.equal(existsSync(join(workspace, 'inbox', 'bundle', 'f-0.txt')), false);
   } finally {
     await fx.dispose();
-    rmSync(sandbox, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    removeTempDir(sandbox);
   }
 });
 
@@ -105,7 +106,7 @@ test('P1: reportProgress false suppresses OP_PROGRESS but still completes', asyn
   } finally {
     sub.dispose();
     await fx.dispose();
-    rmSync(sandbox, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    removeTempDir(sandbox);
   }
 });
 
@@ -147,7 +148,7 @@ test('P1: duplicate operationId is rejected', async () => {
     await first;
   } finally {
     await fx.dispose();
-    rmSync(sandbox, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    removeTempDir(sandbox);
   }
 });
 
@@ -180,7 +181,7 @@ test('P1: merge completion reports done equal to total', async () => {
   } finally {
     sub.dispose();
     await fx.dispose();
-    rmSync(sandbox, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    removeTempDir(sandbox);
   }
 });
 
@@ -218,7 +219,7 @@ test('P1: port clients receive OP_PROGRESS warnings', async () => {
     channel.port1.close();
     channel.port2.close();
     await host.dispose();
-    rmSync(sandbox, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    removeTempDir(sandbox);
   }
 });
 
@@ -239,6 +240,6 @@ test('P2: port cancelOperation returns false for missing ids', async () => {
     channel.port1.close();
     channel.port2.close();
     await host.dispose();
-    rmSync(sandbox, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    removeTempDir(sandbox);
   }
 });

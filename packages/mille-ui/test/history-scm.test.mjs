@@ -62,6 +62,13 @@ function makeHistoryFixture() {
   const dir = mkdtempSync(path.join(tmpdir(), 'mille-scm-hist-'));
   runGit(dir, ['init', '-q', '-b', 'main']);
   runGit(dir, ['config', 'commit.gpgsign', 'false']);
+  // Pin line endings inside the fixture instead of inheriting the developer's
+  // global config. Git for Windows defaults to `core.autocrlf=true`, which
+  // rewrites `v2\n` to `v2\r\n` on the checkout `revert` performs — so the
+  // assertion below compared the fixture's own content against a CRLF copy of
+  // itself and failed for reasons unrelated to the SCM client.
+  runGit(dir, ['config', 'core.autocrlf', 'false']);
+  runGit(dir, ['config', 'core.eol', 'lf']);
   writeFileSync(path.join(dir, 'tracked.ts'), 'v1\n');
   runGit(dir, ['add', 'tracked.ts']);
   runGit(dir, ['commit', '-q', '-m', 'first']);

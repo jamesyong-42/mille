@@ -664,7 +664,10 @@ export class FileExplorer {
     const snap = this.nativeFx.getSnapshot();
     // Find the root Entry whose name matches the last path segment of
     // the configured root. Matches the same identity used by `pathOf`.
-    const rootName = match.root.split('/').pop() ?? match.root;
+    // `basename`, not `split('/')` — `rootPaths` holds resolved native paths,
+    // which are backslash-separated on Windows. Matches the identity used
+    // when resolving a root path back from a root name below.
+    const rootName = basename(match.root) || match.root;
     let cursor = snap.roots().find((e) => e.name === rootName) ?? null;
     if (cursor === null) return null;
     if (match.relative.length === 0) {

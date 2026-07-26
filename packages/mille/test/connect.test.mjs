@@ -12,7 +12,7 @@ import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { MessageChannel } from 'node:worker_threads';
 import { createFileExplorerHost, connectFileExplorer, FileSystemError } from '../dist/index.js';
 
@@ -120,7 +120,7 @@ test('resolvePath hydrates only a lazy target ancestor chain into the port mirro
     host.attachPort(port1);
     const client = await connectFileExplorer(port2);
     await waitFor(() => client.getSnapshot().roots().length === 1);
-    assert.equal(client.getSnapshot().roots()[0].name, dir.split('/').at(-1));
+    assert.equal(client.getSnapshot().roots()[0].name, basename(dir));
 
     const id = await client.resolvePath('one/two/target.txt');
     assert.equal(typeof id, 'number');

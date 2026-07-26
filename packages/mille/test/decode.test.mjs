@@ -190,11 +190,16 @@ test('decodeBulkRows: trailing bytes throw (schema drift guard)', () => {
 
 // ────────────────────────────── live .node round-trip ──────────────────────
 
+// Derived from the host the way `src/native.ts` resolves a dev build. The
+// previous hand-written list covered only darwin and linux-gnu, so on Windows
+// and musl `native` stayed null and every test below silently skipped — the
+// live round-trip reported green while running nothing.
+const base = `mille.${process.platform}-${process.arch}`;
 const candidates = [
-  '../mille.darwin-arm64.node',
-  '../mille.darwin-x64.node',
-  '../mille.linux-x64-gnu.node',
-  '../mille.linux-arm64-gnu.node',
+  `../${base}.node`,
+  `../${base}-gnu.node`,
+  `../${base}-musl.node`,
+  `../${base}-msvc.node`,
 ];
 
 let native = null;

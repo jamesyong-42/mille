@@ -18,7 +18,7 @@ import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 
 import { FileExplorer, MirrorSnapshot } from '../dist/index.js';
 
@@ -252,7 +252,7 @@ test('rename round-trip against a populated entry', async () => {
     writeFileSync(join(dir, 'orig.txt'), 'hi');
     const fx = new FileExplorer({ roots: [dir] });
     await fx.populateFromRoots();
-    const rootName = dir.split('/').pop();
+    const rootName = basename(dir);
     const orig = findChildByName(fx, rootName, 'orig.txt');
     assert.ok(orig, 'orig.txt should be seeded');
     const renamed = await fx.rename(orig.id, 'renamed.txt');
@@ -269,7 +269,7 @@ test('readFile round-trip against a populated entry', async () => {
     writeFileSync(join(dir, 'hello.txt'), 'hello world');
     const fx = new FileExplorer({ roots: [dir] });
     await fx.populateFromRoots();
-    const rootName = dir.split('/').pop();
+    const rootName = basename(dir);
     const file = findChildByName(fx, rootName, 'hello.txt');
     assert.ok(file, 'hello.txt should be seeded');
     const data = await fx.readFile(file.id);

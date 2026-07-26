@@ -98,43 +98,46 @@ test('createShellGitClient: parses porcelain v2 -z output with injected spawn', 
   const stdout = lines.join('\0') + '\0';
 
   const warns = [];
+  const ROOT = '/fake/root';
   const client = createShellGitClient({
-    rootPath: '/fake/root',
+    rootPath: ROOT,
     disableWatcher: true,
     spawn: () => fakeChild({ stdout, code: 0 }),
     warn: (m) => warns.push(m),
   });
 
-  const status = await client.getStatus('/fake/root');
+  const status = await client.getStatus(ROOT);
+
+  // The client keys the map by `path.resolve(rootPath, gitRelativePath)`, so
+  // build the expectations the same way rather than hardcoding POSIX strings:
+  // on Windows `path.resolve('/fake/root', 'src/a.ts')` is
+  // `D:\fake\root\src\a.ts`, which the literals below could never match.
+  // Git always reports its paths with forward slashes, hence the split.
+  const at = (rel) => path.resolve(ROOT, ...rel.split('/'));
 
   // Unordered: four entries expected — skipped ignored line.
   const keys = [...status.keys()].sort();
   assert.deepEqual(
     keys,
-    [
-      '/fake/root/new/path.ts',
-      '/fake/root/src/a.ts',
-      '/fake/root/src/b.ts',
-      '/fake/root/untracked.txt',
-    ],
+    ['new/path.ts', 'src/a.ts', 'src/b.ts', 'untracked.txt'].map(at).sort(),
     `unexpected keys: ${JSON.stringify(keys)}`,
   );
 
-  const a = status.get('/fake/root/src/a.ts');
+  const a = status.get(at('src/a.ts'));
   assert.ok(a);
   assert.equal(a.status, 'M');
   assert.equal(a.staged, false);
 
-  const b = status.get('/fake/root/src/b.ts');
+  const b = status.get(at('src/b.ts'));
   assert.ok(b);
   assert.equal(b.status, 'M');
   assert.equal(b.staged, true);
 
-  const u = status.get('/fake/root/untracked.txt');
+  const u = status.get(at('untracked.txt'));
   assert.ok(u);
   assert.equal(u.status, '?');
 
-  const r = status.get('/fake/root/new/path.ts');
+  const r = status.get(at('new/path.ts'));
   assert.ok(r);
   assert.equal(r.status, 'R');
   assert.equal(r.staged, true);

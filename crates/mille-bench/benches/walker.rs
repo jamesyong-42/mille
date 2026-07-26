@@ -14,10 +14,11 @@ use std::collections::HashSet;
 
 use criterion::{criterion_group, criterion_main, Criterion};
 use mille_bench::{large_query_tree, medium_tree};
-use mille_core::{
-    populate_store, walk, walk_with_ignore, EntryStore, IgnoreMatcher, VisibleRowsQuery,
-    WalkOptions,
-};
+use mille_core::{populate_store, walk, EntryStore, VisibleRowsQuery, WalkOptions};
+// Used only by the `#[cfg(unix)]` symlink benches below; ungated these are
+// unused imports on Windows, which `-D warnings` rejects.
+#[cfg(unix)]
+use mille_core::{walk_with_ignore, IgnoreMatcher};
 
 /// Helper: criterion can't see `VisibleRowsQuery` construction easily without
 /// holding the expansion Set outside. We expose an "all expanded" helper that

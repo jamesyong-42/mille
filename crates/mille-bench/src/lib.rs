@@ -101,6 +101,10 @@ pub fn pnpm_style_fixture(repo_entries: usize, store_entries: usize) -> (TempDir
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Only the `#[cfg(unix)]` timing test below uses this; without the gate it
+    // is an unused import on Windows, which `-D warnings` turns into a build
+    // failure there.
+    #[cfg(unix)]
     use std::time::Instant;
 
     #[test]

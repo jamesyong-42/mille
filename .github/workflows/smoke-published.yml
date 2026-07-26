@@ -75,11 +75,17 @@ jobs:
           - target: darwin-arm64
             host: macos-14
 
-          # Intel macOS runners are scarce; a slow queue is fine for a
-          # post-release job. If the label is retired, the fallback is
-          # macos-14 with an x64 Node under Rosetta.
+          # An x64 Node on the arm64 runner, under Rosetta, rather than an
+          # Intel host. `macos-13` was tried first and never got picked up —
+          # the job sat queued until the run was cancelled, twice, so the one
+          # platform this matrix could not speak for was the one whose runner
+          # is being retired. This keeps darwin-x64 coverage off the Intel
+          # fleet entirely: npm sees process.arch === 'x64', resolves the
+          # darwin-x64 package, and the smoke script asserts the loaded binary
+          # agrees.
           - target: darwin-x64
-            host: macos-13
+            host: macos-14
+            node_arch: x64
 
           - target: win32-x64-msvc
             host: windows-latest
@@ -122,6 +128,8 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
+          # Unlike `shell`, step `with:` inputs do accept the matrix context.
+          architecture: ${{ matrix.node_arch || '' }}
 
       - name: Install and smoke test (host)
         if: ${{ !matrix.image }}

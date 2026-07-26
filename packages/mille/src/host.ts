@@ -105,6 +105,18 @@ interface Session {
    * state of a client too old to send them.
    */
   ackedVersion: number;
+  /**
+   * Whether this session is believed capable of acknowledging at all.
+   *
+   * A client that predates the `ack` frame handshakes normally and consumes
+   * deltas but never replies, so waiting on it always costs the full fallback.
+   * That was tolerable when only `resync` waited; mutations are the hot path,
+   * and one such client made every rename take the whole `timeoutMs`. Starts
+   * optimistic, flips to `false` when a synchronization point times out
+   * waiting on it, and flips straight back on any `ack` — so a merely slow
+   * renderer recovers its guarantee instead of being written off permanently.
+   */
+  ackCapable: boolean;
   /** Teardown for the message listener + port. Replaced during attach. */
   detach: () => void;
 }
@@ -342,6 +354,7 @@ class FileExplorerHostImpl implements FileExplorerHost {
       handshook: false,
       lastRootIds: [],
       ackedVersion: -1,
+      ackCapable: true,
       detach: () => {
         /* replaced below */
       },
@@ -452,8 +465,8 @@ class FileExplorerHostImpl implements FileExplorerHost {
    * per 16ms. Wave 4 adds a dirty-flag bypass if even that shows up on a
    * flame graph.
    */
-  private tick(): void {
-    if (this.disposed || this.sessions.size === 0) return;
+  private tick(): boolean {
+    if (this.disposed || this.sessions.size === 0) return false;
     const cs = this.explorer.takePendingChanges();
     const changeSetEmpty =
       cs.changedIds.length === 0 &&
@@ -504,7 +517,7 @@ class FileExplorerHostImpl implements FileExplorerHost {
           break;
         }
       }
-      if (!rootsChangedAnySession) return;
+      if (!rootsChangedAnySession) return false;
     }
 
     // Build the decoration payload once. Every session's delta carries
@@ -530,6 +543,11 @@ class FileExplorerHostImpl implements FileExplorerHost {
     // (native snapshot is a cached view) and we want every attached
     // session to see the same root picture on any given tick.
     const currentRootIds = snap.roots().map((e) => e.id);
+    // Whether this tick actually put a delta on the wire. `flushTickAcked`
+    // needs to know: a tick that posts nothing has nothing to acknowledge,
+    // and waiting for an ack that can never arrive would burn the fallback
+    // timeout on every quiet call.
+    let posted = false;
     for (const session of this.sessions.values()) {
       if (!session.handshook) continue;
       const view: SessionView = {
@@ -684,7 +702,9 @@ class FileExplorerHostImpl implements FileExplorerHost {
           ...(rootsChangedForSession ? { roots: [...currentRootIds] } : {}),
         }),
       );
+      posted = true;
     }
+    return posted;
   }
 
   private handleMessage(session: Session, data: unknown): void {
@@ -726,6 +746,10 @@ class FileExplorerHostImpl implements FileExplorerHost {
       case 'ack': {
         const version = (f.body as { version?: unknown })?.version;
         if (typeof version === 'number' && version > session.ackedVersion) {
+          // Any ack proves the session speaks the protocol, so restore its
+          // standing even if an earlier synchronization point timed out on a
+          // momentarily busy renderer.
+          session.ackCapable = true;
           session.ackedVersion = version;
           this.notifyAckWaiters();
         }
@@ -1073,15 +1097,20 @@ class FileExplorerHostImpl implements FileExplorerHost {
       .then(async () => {
         try {
           const result = await this.dispatchMutation(body.op, body.args);
-          // Fan out first, reply second.
-          await this.flushTickNow();
+          // Fan out first, reply second — and wait for the fan-out to be
+          // acknowledged, not merely posted. `flushTickNow` only yields one
+          // setImmediate, which is a guess about when the peer runs; it holds
+          // on an idle Linux runner and loses on Windows, where the other
+          // session's mirror was still a version behind when the initiator's
+          // promise resolved.
+          await this.flushTickAcked();
           this.send(session, frame('mutateResult', { reqId: body.reqId, result }));
         } catch (e: unknown) {
           const err = toErrorPayload(e);
           // Still flush a delta: partial state (e.g. a rename that
           // created the target before failing on the source) may have
           // landed and other sessions need to see it.
-          await this.flushTickNow();
+          await this.flushTickAcked();
           this.send(
             session,
             frame('mutateResult', { reqId: body.reqId, result: null, error: err }),
@@ -1139,14 +1168,26 @@ class FileExplorerHostImpl implements FileExplorerHost {
     }
 
     this.ackRequestedForNextTick = true;
-    this.tick();
+    const posted = this.tick();
     this.ackRequestedForNextTick = false;
 
+    // A quiet tick put nothing on the wire, so no ack can arrive. Yield once
+    // (matching `flushTickNow`) instead of waiting out the fallback timeout —
+    // otherwise every no-op mutation would cost `timeoutMs`.
+    if (!posted) {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      return;
+    }
+
     const target = this.explorer.getSnapshot().treeVersion;
-    const satisfied = (): boolean =>
-      sessions.every(
-        (s) => !this.sessions.has(s.id) || s.ackedVersion >= target,
+    // Sessions already known not to acknowledge are excluded rather than
+    // waited on: they cannot satisfy the condition, so including them turns
+    // every synchronization point into a full `timeoutMs` stall.
+    const pending = (): Session[] =>
+      sessions.filter(
+        (s) => this.sessions.has(s.id) && s.ackCapable && s.ackedVersion < target,
       );
+    const satisfied = (): boolean => pending().length === 0;
     if (satisfied()) {
       await new Promise<void>((resolve) => setImmediate(resolve));
       return;
@@ -1161,10 +1202,17 @@ class FileExplorerHostImpl implements FileExplorerHost {
         clearTimeout(timer);
         resolve();
       };
+      const giveUp = (): void => {
+        // Timed out. Whoever is still outstanding just demonstrated it does
+        // not answer within the window; remember that so the next mutation is
+        // not charged for it again. An `ack` from them clears the flag.
+        for (const s of pending()) s.ackCapable = false;
+        finish();
+      };
       const check = (): void => {
         if (satisfied()) finish();
       };
-      const timer = setTimeout(finish, timeoutMs);
+      const timer = setTimeout(giveUp, timeoutMs);
       // Node keeps the process alive for pending timers; a host waiting on a
       // detached client should not.
       (timer as unknown as { unref?: () => void }).unref?.();
@@ -1264,7 +1312,7 @@ class FileExplorerHostImpl implements FileExplorerHost {
         );
         // Publish the new ordering/visibility to every session before the
         // initiating renderer observes RPC completion.
-        await this.flushTickNow();
+        await this.flushTickAcked();
         return version;
       }
       case 'reorderRoots': {
@@ -1278,7 +1326,7 @@ class FileExplorerHostImpl implements FileExplorerHost {
         const version = this.explorer.reorderRoots(ids as EntryId[]);
         // The RPC is a synchronization point: every attached mirror has the
         // new order before the initiating client observes completion.
-        await this.flushTickNow();
+        await this.flushTickAcked();
         return version;
       }
       case 'updateWorkspaceRoots': {
@@ -1287,12 +1335,12 @@ class FileExplorerHostImpl implements FileExplorerHost {
           throw new Error('updateWorkspaceRoots requires an array of absolute path strings');
         }
         const version = await this.explorer.updateWorkspaceRoots(roots);
-        await this.flushTickNow();
+        await this.flushTickAcked();
         return version;
       }
       case 'refreshWorkspaceRoots': {
         const version = await this.explorer.refreshWorkspaceRoots();
-        await this.flushTickNow();
+        await this.flushTickAcked();
         return version;
       }
       case 'probeDestination': {

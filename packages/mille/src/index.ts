@@ -53,6 +53,19 @@ export {
   isExplorerChannel,
 } from './channel/message-port.js';
 export { LOCAL_ADMIN_POLICY, resolveSessionContext } from './channel/types.js';
+// Exported so a transport layer can pre-check for a better error message.
+// Host-side enforcement remains authoritative regardless (SPEC §12.3).
+export {
+  MAX_OWNED_OPERATIONS,
+  RESYNC_LIMIT,
+  RESYNC_WINDOW_MS,
+  authorizeCall,
+  authorizeCancel,
+  authorizeDecorations,
+  authorizeMutation,
+  effectiveCapabilities,
+} from './channel/policy.js';
+export type { PolicyVerdict } from './channel/policy.js';
 export type {
   ExplorerChannel,
   ExplorerChannelCloseCode,

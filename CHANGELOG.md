@@ -12,6 +12,38 @@ were living in that gap.
 
 ### Engine (`@vibecook/mille`)
 
+- **Sessions now have permissions, and the host enforces them** — a session
+  attached with `attachChannel` carries an `ExplorerSessionPolicy`, and every
+  mutation and call is gated against it before native dispatch. The whole
+  matrix lives in two lookup tables in `src/channel/policy.ts` rather than in
+  conditionals spread through the dispatch switch, because "which of the forty
+  entry points did we forget to gate" should not be answerable only by
+  grepping. Read-only sessions get `EROFS` on writes; the host-global controls
+  — undo, projection settings, workspace roots, workspace resync, external
+  import via `copyFromPath`, client-pushed decorations — are denied to remote
+  sessions by default and opened only by an explicit per-flag grant, because
+  each of them changes what _every_ session sees. `attachPort` is unchanged and
+  still local-admin, so in-process consumers see no difference.
+  Three consequences worth naming separately. Capabilities are masked per
+  session (`Capability.Readonly` in, `ReadWrite`/`Trash`/`AtomicWrite` out) and
+  `PortFileExplorer.capabilities()` now exists to read them — masking a value
+  no client could fetch would have been decorative. Transfer progress is routed
+  to the session that owns the operation instead of broadcast: `OP_PROGRESS`
+  detail carries source and destination paths, so the old fan-out told every
+  attached window what every other one was copying. And operation ids are
+  claimed per session — a second session using an in-flight id is refused
+  `EEXIST`, cancelling someone else's operation is refused indistinguishably
+  from cancelling a nonexistent one, and claims are released on success,
+  failure, completion, and session close. Entry `resync` is rate-limited to 10
+  per minute per session on a sliding window, which is per-session so a noisy
+  peer cannot starve its neighbour.
+- **File payloads stopped round-tripping through JSON number arrays** —
+  `readFile` returned `Array.from(buf)` and `writeFile` sent `Array.from(data)`,
+  which inflated every byte into a decimal integer plus a comma. Both now carry
+  the `Uint8Array` itself: structured clone preserves it and the framed codec
+  ships it as a raw attachment. Both sides accept either form, so a new client
+  and an old host — or the reverse — keep working. `ErrorCode` gains `EFBIG`
+  for the per-request size limit the remote control stream will enforce.
 - **The host/client protocol now runs over a byte stream** — `@vibecook/mille/node`
   adds `createFramedStreamHostChannel` / `createFramedStreamClientChannel`, which
   carry the existing protocol over any Node `Duplex`. A real `FileExplorerHost`

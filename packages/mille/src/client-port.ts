@@ -377,6 +377,22 @@ export class PortFileExplorer {
   }
 
   /** Reconcile every workspace root and resolve after every mirror is current. */
+  /**
+   * The capability bitmask this session is permitted to use.
+   *
+   * Masked by the host against session policy (SPEC §12.4): a read-only
+   * session sees `Readonly` and no `ReadWrite`/`Trash`/`AtomicWrite`, so a
+   * UI can disable write affordances instead of offering them and failing
+   * at `EROFS`. Without this the masking would be unobservable to clients.
+   */
+  async capabilities(): Promise<number> {
+    const result = await this.call('capabilities', []);
+    if (typeof result !== 'number') {
+      throw new FileSystemError('EUNKNOWN', 'invalid capabilities response');
+    }
+    return result;
+  }
+
   async resyncWorkspace(): Promise<number> {
     const result = await this.call('resyncWorkspace', []);
     if (typeof result !== 'number') {
@@ -530,8 +546,17 @@ export class PortFileExplorer {
   }
 
   async readFile(id: number): Promise<Uint8Array> {
-    const data = (await this.mutate('readFile', { id })) as number[];
-    return Uint8Array.from(data);
+    // SPEC §12.5 — hosts now return a Uint8Array directly, but a client may
+    // be talking to an older host that still expands it into a number
+    // array, so accept both rather than requiring a matched pair.
+    const data = await this.mutate('readFile', { id });
+    if (data instanceof Uint8Array) return data;
+    if (ArrayBuffer.isView(data)) {
+      const v = data as ArrayBufferView;
+      return new Uint8Array(v.buffer, v.byteOffset, v.byteLength);
+    }
+    if (data instanceof ArrayBuffer) return new Uint8Array(data);
+    return Uint8Array.from(data as ArrayLike<number>);
   }
 
   readText(id: number, encoding?: string): Promise<unknown> {
@@ -541,7 +566,10 @@ export class PortFileExplorer {
   }
 
   writeFile(id: number, data: Uint8Array, options?: { atomic?: boolean }): Promise<unknown> {
-    const args: Record<string, unknown> = { id, data: Array.from(data) };
+    // Ship the typed array itself: structured clone preserves it, and the
+    // framed codec carries it as a raw attachment. `Array.from` used to
+    // inflate every byte into a JSON number here (SPEC §12.5).
+    const args: Record<string, unknown> = { id, data };
     if (options !== undefined) args.options = options;
     return this.mutate('writeFile', args);
   }

@@ -105,7 +105,31 @@ pub(crate) struct CreateIdentity {
     /// `None` when the handle could not be opened; undo then refuses rather
     /// than trusting a number that may have been recycled. Directories are
     /// not pinned: their safety comes from the emptiness check.
+    ///
+    /// Always `None` on Windows — see `pinned_id`. Kept in the struct rather
+    /// than `cfg`-ed away so the shape is the same on every platform; nothing
+    /// reads it on Windows, hence the targeted allow.
+    #[cfg_attr(windows, allow(dead_code))]
     pub pin: Option<Arc<std::fs::File>>,
+    /// Windows: the `(volume serial, file index)` read once at create time.
+    ///
+    /// The pin above is a POSIX device. Windows does not need it for identity,
+    /// because an NTFS file id carries a sequence number that advances when the
+    /// MFT record is reused — the id cannot silently come to mean a different
+    /// file the way a bare inode number can. Recording it is therefore just as
+    /// sound as holding the file open.
+    ///
+    /// Holding it open is actively harmful there. Until Windows 10 1709 a
+    /// delete with a live handle only marks the file *delete-pending*: the name
+    /// stays in the directory and cannot be reused, so a user who created a
+    /// file through mille and then deleted it in Explorer could not create a
+    /// file of that name again while the undo entry lived. Newer builds
+    /// unlink immediately under POSIX semantics, which is why this reproduced
+    /// on a Server 2022 runner and not on a Windows 11 developer machine.
+    ///
+    /// `None` when the id could not be read; undo then refuses, matching the
+    /// unpinned case.
+    pub pinned_id: Option<(u64, u64)>,
 }
 
 impl CreateIdentity {
@@ -119,29 +143,46 @@ impl CreateIdentity {
             // Directory: emptiness is the real guard, keep the metadata check.
             return self.fs.matches_disk(disk);
         }
-        let Some(pin) = self.pin.as_ref() else {
-            return false;
-        };
-        let Ok(meta) = pin.metadata() else {
-            return false;
-        };
-        let pinned = FsIdentity::from_metadata(&meta, self.fs.kind);
-        if pinned.dev != 0 || pinned.ino != 0 {
-            // The pinned inode cannot have been reused, so equal ids here mean
-            // the path still resolves to the very object we created.
-            return pinned.dev == disk.dev && pinned.ino == disk.ino && pinned.size == disk.size;
-        }
-        // No id on `Metadata` (Windows). Ask the kernel through the handles
-        // instead: `disk` was read the same blind way, so comparing it here
-        // would reduce to "same size".
-        if let (Some(pinned_id), Some(current_id)) =
-            (file_id_from_handle(pin), file_id_for_path(&self.path))
+        #[cfg(windows)]
         {
-            return pinned_id == current_id && pinned.size == disk.size;
+            // Compare the id recorded at create time against the id the path
+            // resolves to now, read through a fresh handle. Equivalent to what
+            // the pin used to do — the previous code compared
+            // `file_id_from_handle(pin)` with `file_id_for_path(&self.path)`
+            // and a size read off the live pin, which is the same file as
+            // `disk` whenever the ids agree, so that size check could not fail
+            // independently.
+            let Some(recorded) = self.pinned_id else {
+                return false;
+            };
+            let Some(current) = file_id_for_path(&self.path) else {
+                // Cannot read an id now — fall back to the recorded metadata,
+                // which also requires both timestamps to match.
+                return self.fs.matches_disk(disk);
+            };
+            recorded == current
         }
-        // Neither path yielded an id — fall back to the recorded metadata,
-        // which at least also requires both timestamps to match.
-        self.fs.matches_disk(disk)
+
+        #[cfg(not(windows))]
+        {
+            let Some(pin) = self.pin.as_ref() else {
+                return false;
+            };
+            let Ok(meta) = pin.metadata() else {
+                return false;
+            };
+            let pinned = FsIdentity::from_metadata(&meta, self.fs.kind);
+            if pinned.dev != 0 || pinned.ino != 0 {
+                // The pinned inode cannot have been reused, so equal ids here
+                // mean the path still resolves to the very object we created.
+                return pinned.dev == disk.dev
+                    && pinned.ino == disk.ino
+                    && pinned.size == disk.size;
+            }
+            // No id on `Metadata` and not Windows — fall back to the recorded
+            // metadata, which at least also requires both timestamps to match.
+            self.fs.matches_disk(disk)
+        }
     }
 }
 
@@ -632,6 +673,27 @@ pub(crate) fn file_id_from_handle(file: &std::fs::File) -> Option<(u64, u64)> {
     {
         None
     }
+}
+
+/// Turn a freshly-opened handle to a created file into whatever that platform
+/// needs to prove identity later: the descriptor itself on Unix, where holding
+/// it is what stops the inode being recycled; just the id on Windows, where an
+/// NTFS id is already collision-proof and keeping the handle open would leave
+/// the name delete-pending. See `CreateIdentity::pinned_id`.
+#[cfg(windows)]
+pub(crate) fn pin_or_record_id(
+    file: std::fs::File,
+) -> (Option<Arc<std::fs::File>>, Option<(u64, u64)>) {
+    let id = file_id_from_handle(&file);
+    drop(file);
+    (None, id)
+}
+
+#[cfg(not(windows))]
+pub(crate) fn pin_or_record_id(
+    file: std::fs::File,
+) -> (Option<Arc<std::fs::File>>, Option<(u64, u64)>) {
+    (Some(Arc::new(file)), None)
 }
 
 /// Identity of whatever `path` names right now, read through a fresh handle.

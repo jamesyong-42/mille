@@ -86,6 +86,7 @@ jobs:
           pnpm --filter @vibecook/mille run build:napi:probe
           pnpm --filter @vibecook/mille run build:ts
           pnpm --filter @vibecook/mille-ui run build
+          pnpm --filter @vibecook/mille-truffle run build
 
       - name: Typecheck
         run: pnpm -r --if-present typecheck
@@ -240,6 +241,7 @@ jobs:
           pnpm --filter @vibecook/mille run build:napi:probe:release
           pnpm --filter @vibecook/mille run build:ts
           pnpm --filter @vibecook/mille-ui run build
+          pnpm --filter @vibecook/mille-truffle run build
 
       # Without this the job could silently degrade into a second debug run —
       # a green tick proving nothing, which is the failure mode this whole job
@@ -346,6 +348,7 @@ jobs:
           pnpm --filter @vibecook/mille run build:napi:probe
           pnpm --filter @vibecook/mille run build:ts
           pnpm --filter @vibecook/mille-ui run build
+          pnpm --filter @vibecook/mille-truffle run build
 
       # A generated file that is also committed. It used to be rebuilt with
       # mixed line endings here and left the tree dirty; `.gitattributes` plus

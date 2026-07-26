@@ -267,8 +267,8 @@ test('compare refuses to read through a symlink that escapes the root', async ()
     );
   }
 
-  rmSync(dir, { recursive: true, force: true });
-  rmSync(outsideDir, { recursive: true, force: true });
+  rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+  rmSync(outsideDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
 });
 
 test('assertSafeRevision rejects git option injection', () => {
@@ -459,7 +459,7 @@ test(
         /escapes/,
       );
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
       try {
         rmSync(outside, { force: true });
       } catch {
@@ -503,7 +503,7 @@ test(
       );
       assert.equal(readFileSync(outside, 'utf8'), 'SECRET\n');
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
       try {
         rmSync(outside, { force: true });
       } catch {
@@ -541,7 +541,7 @@ test(
       const body = readFileSync(path.join(dir, 'tracked.ts'), 'utf8');
       assert.ok(body === 'again\n' || body === 'v2\n');
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
       try {
         rmSync(outside, { force: true });
       } catch {

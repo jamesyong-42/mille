@@ -55,7 +55,7 @@ test('one complete operation cycle leaves the sandbox consistent', async () => {
     for (const operation of plan) await executeOperation(root, operation);
     assert.deepEqual(await readdir(root), []);
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -102,7 +102,7 @@ test('watcher preflight distinguishes ready, timeout, and host-limit failures', 
       message: 'Error: watch limit reached',
     });
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -114,7 +114,7 @@ test('operation payload sizes match watcher expectations', async () => {
     const file = join(root, 'bench-dir-0001', 'created-0001.txt');
     assert.equal((await stat(file)).size, 640);
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -132,7 +132,7 @@ test('reference-tree seeding is deterministic and reports exact tree size', asyn
       'reference-000002.txt',
     ]);
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 

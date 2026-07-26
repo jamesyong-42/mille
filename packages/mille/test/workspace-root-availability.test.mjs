@@ -66,7 +66,7 @@ test('root disappearance and recovery preserve identity without stale descendant
     assert.equal(fx.getSnapshot().roots()[0].id, rootBefore.id);
   } finally {
     await fx.dispose();
-    rmSync(sandbox, { recursive: true, force: true });
+    rmSync(sandbox, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -85,7 +85,7 @@ test('initially missing roots publish an unavailable row instead of failing', as
     assert.equal(await fx.refreshWorkspaceRoots(), version);
   } finally {
     await fx.dispose();
-    rmSync(sandbox, { recursive: true, force: true });
+    rmSync(sandbox, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -113,7 +113,7 @@ test(
     } finally {
       chmodSync(root, 0o700);
       await fx.dispose();
-      rmSync(sandbox, { recursive: true, force: true });
+      rmSync(sandbox, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
     }
   },
 );
@@ -156,6 +156,6 @@ test('port refresh synchronizes unavailable and recovered roots to every mirror'
     await clientA.dispose();
     await clientB.dispose();
     await host.dispose();
-    rmSync(sandbox, { recursive: true, force: true });
+    rmSync(sandbox, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });

@@ -134,7 +134,7 @@ test('delta ships roots after late populate — client mirror learns root post-h
     await client.dispose();
     await host.dispose();
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -185,7 +185,7 @@ test('handshake after populate still works — roots arrive in the snapshot, nev
     await client.dispose();
     await host.dispose();
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -226,6 +226,6 @@ test('root Entry ref identity in client mirror is stable across stable ticks', a
     await client.dispose();
     await host.dispose();
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });

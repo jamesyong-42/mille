@@ -67,7 +67,7 @@ test('local root reorder is atomic, immutable, observable, and idempotent', asyn
     subscription.dispose();
   } finally {
     await fx.dispose();
-    rmSync(sandbox, { recursive: true, force: true });
+    rmSync(sandbox, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -103,6 +103,6 @@ test('port root reorder synchronizes every attached immutable mirror before reso
     await clientA.dispose();
     await clientB.dispose();
     await host.dispose();
-    rmSync(sandbox, { recursive: true, force: true });
+    rmSync(sandbox, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });

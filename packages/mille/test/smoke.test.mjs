@@ -83,7 +83,7 @@ test('FileExplorer constructs with a valid absolute root', () => {
     assert.equal(typeof fx.capabilities, 'number');
     assert.equal(typeof fx.getTreeVersion(), 'number');
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -93,7 +93,7 @@ test('resolvePath returns null on a pristine store', async () => {
     const fx = new FileExplorer({ roots: [dir] });
     assert.equal(await fx.resolvePath('missing.txt'), null);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -109,7 +109,7 @@ test('getSnapshot() returns a MirrorSnapshot with treeVersion + roots()', () => 
     // Phase 5 does not auto-populate — roots() is empty until Phase 6.
     // Just verify the accessor returns an array without throwing.
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -122,7 +122,7 @@ test('MirrorSnapshot.getById returns null for unknown id', () => {
     assert.equal(snap.hasChildren(99999), false);
     assert.equal(snap.directChildCount(99999), null);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -140,7 +140,7 @@ test('visibleRows/visibleRowCount work on an empty snapshot', () => {
     assert.ok(Array.isArray(count.pendingExpansions));
     assert.equal(snap.visibleRowIndex(99999, []), null);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -162,7 +162,7 @@ test('emitReadyForTests + onReady fire end-to-end through the TSFN', async () =>
     // Double-off is idempotent.
     assert.equal(fx.off(Number(subId)), false);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -172,6 +172,6 @@ test('off() on an unknown subscription is idempotent', () => {
     const fx = new FileExplorer({ roots: [dir] });
     assert.equal(fx.off(12345), false);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });

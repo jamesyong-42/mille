@@ -68,7 +68,7 @@ async function withFx(body) {
     } catch {
       /* swallow — test may have already disposed */
     }
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 }
 

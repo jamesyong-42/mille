@@ -117,7 +117,7 @@ test(
       await clientB.dispose();
       await host.dispose();
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
     }
   },
 );
@@ -156,7 +156,7 @@ test('monotonic tree-version across deltas on a client', async () => {
     await client.dispose();
     await host.dispose();
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -204,7 +204,7 @@ test(
       await client.dispose();
       await host.dispose();
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
     }
   },
 );

@@ -71,7 +71,7 @@ test('copyFromPath emits OP_PROGRESS and OP_COMPLETE for recursive imports', asy
   } finally {
     sub.dispose();
     await fx.dispose();
-    rmSync(sandbox, { recursive: true, force: true });
+    rmSync(sandbox, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -121,7 +121,7 @@ test('cancelOperation aborts an in-flight recursive copy with cleanup', async ()
   } finally {
     sub.dispose();
     await fx.dispose();
-    rmSync(sandbox, { recursive: true, force: true });
+    rmSync(sandbox, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -153,6 +153,6 @@ test('AbortSignal cancels copyFromPath via generated operation id', async () => 
     assert.equal(aborted, true, 'expected progress before abort');
   } finally {
     await fx.dispose();
-    rmSync(sandbox, { recursive: true, force: true });
+    rmSync(sandbox, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });

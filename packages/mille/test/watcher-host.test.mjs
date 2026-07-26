@@ -62,6 +62,6 @@ test('external changes flow through host deltas and survive collapse/re-expand',
   } finally {
     await client.dispose();
     await host.dispose();
-    rmSync(root, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });

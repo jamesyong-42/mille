@@ -39,7 +39,7 @@ test('search: empty query returns empty array', async () => {
     assert.equal(hits.length, 0);
     await fx.dispose();
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -59,7 +59,7 @@ test('search: finds files matching a substring query', async () => {
     assert.ok(top.matchedIndices.length > 0, 'expected at least one matched index');
     await fx.dispose();
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -74,7 +74,7 @@ test('search: matchedIndices point at the right characters', async () => {
     assert.deepEqual([...mainHit.matchedIndices], [0, 1, 2, 3]);
     await fx.dispose();
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -95,7 +95,7 @@ test('search: limit option truncates results', async () => {
 
     await fx.dispose();
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -112,7 +112,7 @@ test('search: fuzzy (skip-char) queries still match', async () => {
     );
     await fx.dispose();
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -124,7 +124,7 @@ test('search: non-matching query returns empty', async () => {
     assert.equal(hits.length, 0);
     await fx.dispose();
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -160,6 +160,6 @@ test('search: caseSensitive option respects case', async () => {
 
     await fx.dispose();
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });

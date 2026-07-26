@@ -92,7 +92,7 @@ test('copyFromPath imports file content and never creates empty placeholders', a
     );
   } finally {
     await fx.dispose();
-    rmSync(sandbox, { recursive: true, force: true });
+    rmSync(sandbox, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -124,7 +124,7 @@ test('copyFromPath recursively imports directories with nested content', async (
     assert.ok(childByName(snap, bundle.id, 'readme.md'));
   } finally {
     await fx.dispose();
-    rmSync(sandbox, { recursive: true, force: true });
+    rmSync(sandbox, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -145,7 +145,7 @@ test('copyFromPath surfaces missing sources without leaving placeholders', async
     assert.equal(childByName(snap, inboxId, 'no-such-file.txt'), null);
   } finally {
     await fx.dispose();
-    rmSync(sandbox, { recursive: true, force: true });
+    rmSync(sandbox, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -176,6 +176,6 @@ test('port copyFromPath flushes the imported entry to attached mirrors', async (
     channel.port1.close();
     channel.port2.close();
     await host.dispose();
-    rmSync(sandbox, { recursive: true, force: true });
+    rmSync(sandbox, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });

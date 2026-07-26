@@ -139,7 +139,7 @@ test('local workspace-root replacement is atomic, lazy, and failure-safe', async
     subscription.dispose();
   } finally {
     await fx.dispose();
-    rmSync(sandbox, { recursive: true, force: true });
+    rmSync(sandbox, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -202,7 +202,7 @@ test('one port root replacement updates every mirror before resolving', async ()
     await clientA.dispose();
     await clientB.dispose();
     await host.dispose();
-    rmSync(sandbox, { recursive: true, force: true });
+    rmSync(sandbox, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -242,6 +242,6 @@ test('watcher follows added roots and stops reconciling removed roots', async ()
     );
   } finally {
     await fx.dispose();
-    rmSync(sandbox, { recursive: true, force: true });
+    rmSync(sandbox, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });

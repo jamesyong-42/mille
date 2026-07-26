@@ -84,5 +84,5 @@ try {
   );
 } finally {
   await fx.dispose();
-  rmSync(sandbox, { recursive: true, force: true });
+  rmSync(sandbox, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
 }

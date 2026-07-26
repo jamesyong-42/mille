@@ -33,7 +33,7 @@ test('FileExplorer constructor accepts an absolute root path', () => {
     assert.equal(typeof fx.capabilities, 'number');
     assert.equal(typeof fx.getTreeVersion(), 'number');
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -43,7 +43,7 @@ test('FileExplorer constructor accepts a Uri-shaped root', () => {
     const fx = new FileExplorer({ roots: [{ scheme: 'file', path: dir }] });
     assert.equal(typeof fx.capabilities, 'number');
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -56,7 +56,7 @@ test('FileExplorer constructor forwards followSymlinks booleans + smart', () => 
       assert.equal(typeof fx.capabilities, 'number');
     }
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -70,7 +70,7 @@ test('getSnapshot returns MirrorSnapshot with tree/decoration versions', () => {
     assert.equal(typeof snap.decorationVersion, 'number');
     assert.ok(Array.isArray(snap.roots()));
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -85,7 +85,7 @@ test('MirrorSnapshot.getById / hasChildren / directChildCount for unknown id', (
     // Decorations land in Phase 9 — wrapper returns an empty array.
     assert.deepEqual(snap.getDecorations(99999), []);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -103,7 +103,7 @@ test('visibleRows + visibleRowCount return empty on a pristine tree', () => {
     assert.equal(count.pendingExpansions.size, 0);
     assert.equal(snap.visibleRowIndex(99999, new Set()), null);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -116,7 +116,7 @@ test('visibleRowsBulk decodes the bincode payload (empty case)', () => {
     assert.ok(Array.isArray(rows));
     assert.equal(rows.length, 0);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -142,7 +142,7 @@ test('on("ready") fires via emitReadyForTests and disposes cleanly', async () =>
     await new Promise((r) => setTimeout(r, 50));
     assert.equal(fired, 1);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -152,7 +152,7 @@ test('on() rejects unknown event names', () => {
     const fx = new FileExplorer({ roots: [dir] });
     assert.throws(() => fx.on('bogus', () => {}), /unknown event channel/);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -162,7 +162,7 @@ test('dispose() resolves without throwing', async () => {
     const fx = new FileExplorer({ roots: [dir] });
     await fx.dispose();
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -220,7 +220,7 @@ test('populateFromRoots seeds the store with entries', async () => {
     assert.equal(await fx.resolvePath('missing.txt'), null);
     await fx.dispose();
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -242,7 +242,7 @@ test('resolvePath hydrates an unindexed path without a full workspace walk', asy
     assert.equal(await fx.resolvePath('../outside.txt'), null);
     await fx.dispose();
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -259,7 +259,7 @@ test('rename round-trip against a populated entry', async () => {
     assert.equal(renamed.name, 'renamed.txt');
     await fx.dispose();
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -276,6 +276,6 @@ test('readFile round-trip against a populated entry', async () => {
     assert.equal(Buffer.from(data).toString('utf8'), 'hello world');
     await fx.dispose();
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });

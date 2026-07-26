@@ -21,6 +21,7 @@ export type ErrorCode =
   | 'EBUSY'
   | 'EINVAL'
   | 'ECANCELED'
+  | 'EFBIG'
   | 'EUNSUPPORTED'
   | 'EUNKNOWN';
 

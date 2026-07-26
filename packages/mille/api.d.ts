@@ -42,6 +42,12 @@ export type ErrorCode =
   | 'EBUSY'
   | 'EINVAL'
   | 'ECANCELED'
+  /**
+   * Payload exceeds the transport's per-request size limit. Emitted by the
+   * remote control-stream policy (SPEC §19.1); the native engine never
+   * produces it.
+   */
+  | 'EFBIG'
   | 'EUNSUPPORTED'
   | 'EUNKNOWN';
 
@@ -955,6 +961,15 @@ export interface PortFileExplorer {
   peekUndo(): Promise<UndoDescriptor | null>;
   lastMutation(): Promise<UndoDescriptor | null>;
   undo(): Promise<UndoResult | null>;
+  /**
+   * Capability bitmask for this session, already masked against its policy
+   * (SPEC §12.4). A read-only session sees `Readonly` and no `ReadWrite` /
+   * `Trash` / `AtomicWrite` — disable write affordances on this, rather
+   * than offering them and failing at `EROFS`.
+   */
+  capabilities(): Promise<number>;
+  /** Subscribe to connection-state transitions (see ExplorerConnectionEvent). */
+  onConnection(listener: (event: ExplorerConnectionEvent) => void): Disposable;
   // Remaining methods match FileExplorer's async surface; see runtime class
   // in `src/client-port.ts` / `dist/client-port.d.ts` for the full list.
 }

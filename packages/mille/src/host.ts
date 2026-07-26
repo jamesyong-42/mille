@@ -18,7 +18,17 @@ import { FileExplorer, type Entry, type MirrorSnapshot, type TransferOptions } f
 import type { EntryId, ExplorerOptions } from './client.js';
 import { DecorationStore, type Decoration, type DecorationProvider } from './decorations.js';
 import { computeSessionDelta, type SessionView } from './delta.js';
-import { isFileSystemError } from './errors.js';
+import { FileSystemError, isFileSystemError } from './errors.js';
+import {
+  MAX_OWNED_OPERATIONS,
+  RESYNC_LIMIT,
+  RESYNC_WINDOW_MS,
+  authorizeCall,
+  authorizeCancel,
+  authorizeDecorations,
+  authorizeMutation,
+  effectiveCapabilities,
+} from './channel/policy.js';
 import { encodeClientEntries } from './entry-codec.js';
 import { encodeChildLists } from './child-list-codec.js';
 import type { ClientEntry } from './mirror.js';
@@ -61,6 +71,50 @@ function entryToClient(e: Entry): ClientEntry {
     isReadonly: e.isReadonly,
     isHidden: e.isHidden,
   };
+}
+
+/**
+ * Pull an `operationId` out of a warning's JSON `detail`, if it has one.
+ *
+ * Transfer progress arrives as `OP_PROGRESS` / `OP_COMPLETE` with a
+ * JSON-encoded detail string. Anything that does not parse, or that carries
+ * no operation id, is a general warning and stays broadcast.
+ */
+function extractOperationId(detail: string | undefined): string | null {
+  if (typeof detail !== 'string' || detail.length === 0) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(detail);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== 'object' || parsed === null) return null;
+  const id = (parsed as { operationId?: unknown }).operationId;
+  return typeof id === 'string' && id.length > 0 ? id : null;
+}
+
+/**
+ * Accept a write payload in either wire form (SPEC §12.5).
+ *
+ * New clients send a `Uint8Array`; older ones send a plain number array,
+ * and the framed codec can hand back any typed-array view. All three have
+ * to keep working — a host must not require a client upgrade.
+ */
+function toBytes(data: unknown): Uint8Array {
+  if (data instanceof Uint8Array) return data;
+  if (ArrayBuffer.isView(data)) {
+    const v = data as ArrayBufferView;
+    return new Uint8Array(v.buffer, v.byteOffset, v.byteLength);
+  }
+  if (data instanceof ArrayBuffer) return new Uint8Array(data);
+  return new Uint8Array(data as ArrayLike<number>);
+}
+
+/** The `operationId` a mutation's arguments ask the host to track it under. */
+function requestedOperationId(args: Record<string, unknown>): string | null {
+  const options = args.options as { operationId?: unknown } | undefined;
+  const id = options?.operationId;
+  return typeof id === 'string' && id.length > 0 ? id : null;
 }
 
 /** Native store order is authoritative for viewport and structural metadata. */
@@ -130,6 +184,18 @@ interface Session {
    * renderer recovers its guarantee instead of being written off permanently.
    */
   ackCapable: boolean;
+  /**
+   * Transfer operation ids this session currently owns (SPEC §16.3).
+   * Progress and completion for these route here and nowhere else, and only
+   * the owner (or an admin) may cancel them.
+   */
+  readonly ownedOperationIds: Set<string>;
+  /**
+   * Timestamps of recent `resync` calls, for the per-session rate limit.
+   * A resync is a bounded re-walk; unmetered it is a cheap way for one
+   * remote peer to keep the shared host busy.
+   */
+  resyncTimes: number[];
   /** Teardown for the message listener + port. Replaced during attach. */
   detach: () => void;
 }
@@ -219,7 +285,11 @@ class FileExplorerHostImpl implements FileExplorerHost {
       this.prefetched.delete(event.id);
       this.markSubtreeCoarse(event.id);
     });
-    // Forward transfer progress / other warnings to every attached renderer.
+    // Forward warnings to attached renderers. Operation-scoped warnings go
+    // only to the session that owns the operation: `OP_PROGRESS` detail
+    // carries the source and destination paths, and broadcasting that to
+    // every session leaks one peer's filesystem activity to all the others
+    // (SPEC SEC-005, §16.3). Non-operation warnings stay global.
     this.warningSub = this.explorer.on('warning', (raw) => {
       const payload = raw as { code?: string; detail?: string } | undefined;
       if (!payload || typeof payload.code !== 'string') return;
@@ -227,6 +297,23 @@ class FileExplorerHostImpl implements FileExplorerHost {
         code: payload.code,
         ...(typeof payload.detail === 'string' ? { detail: payload.detail } : null),
       };
+
+      const operationId = extractOperationId(payload.detail);
+      if (operationId !== null) {
+        const owner = this.findOperationOwner(operationId);
+        if (owner !== null) {
+          this.send(owner, frame('warning', body));
+          // A terminal record releases the claim so the id can be reused and
+          // the session's budget is not consumed by finished work.
+          if (payload.code === 'OP_COMPLETE' || payload.code === 'OP_CANCELLED') {
+            owner.ownedOperationIds.delete(operationId);
+          }
+        }
+        // An unowned operation id means the host itself started it (via
+        // `host.local`), so there is no session to inform.
+        return;
+      }
+
       for (const session of this.sessions.values()) {
         this.send(session, frame('warning', body));
       }
@@ -337,6 +424,8 @@ class FileExplorerHostImpl implements FileExplorerHost {
       lastRootIds: [],
       ackedVersion: -1,
       ackCapable: true,
+      ownedOperationIds: new Set<string>(),
+      resyncTimes: [],
       detach: () => {
         /* replaced below */
       },
@@ -756,6 +845,13 @@ class FileExplorerHostImpl implements FileExplorerHost {
    * produce a targeted `error` frame without disrupting other sessions.
    */
   private handleDecorations(session: Session, body: DecorationsFrameBody): void {
+    // Client decorations write into the store every session reads from, so
+    // one remote peer could otherwise paint badges in another's tree.
+    const verdict = authorizeDecorations(session.context);
+    if (!verdict.allowed) {
+      this.sendError(session, verdict.code, verdict.message);
+      return;
+    }
     if (
       typeof body.providerId !== 'string' ||
       body.providerId.length === 0 ||
@@ -1077,7 +1173,19 @@ class FileExplorerHostImpl implements FileExplorerHost {
     // keep the next mutation unblocked.
     this.mutationQueue = this.mutationQueue
       .then(async () => {
+        let claimedOperationId: string | null = null;
         try {
+          // SPEC §12.3 — policy is checked host-side, before native
+          // dispatch, so no transport or client can route around it.
+          const verdict = authorizeMutation(session.context, body.op);
+          if (!verdict.allowed) {
+            throw new FileSystemError(verdict.code, verdict.message);
+          }
+          // SPEC §16.3 — claim the operation id. The mutation queue
+          // serializes every session's mutations, so "check then claim" is
+          // atomic here by construction rather than by locking.
+          claimedOperationId = this.claimOperation(session, body.args);
+
           const result = await this.dispatchMutation(body.op, body.args);
           // Fan out first, reply second — and wait for the fan-out to be
           // acknowledged, not merely posted. `flushTickNow` only yields one
@@ -1097,6 +1205,14 @@ class FileExplorerHostImpl implements FileExplorerHost {
             session,
             frame('mutateResult', { reqId: body.reqId, result: null, error: err }),
           );
+        } finally {
+          // SPEC §16.3 — release on every terminal path. A claim that
+          // outlived its mutation would deny the id forever and eat the
+          // session's budget. `OP_COMPLETE` may already have released it;
+          // deleting twice is harmless.
+          if (claimedOperationId !== null) {
+            session.ownedOperationIds.delete(claimedOperationId);
+          }
         }
       })
       .catch((e: unknown) => {
@@ -1105,6 +1221,56 @@ class FileExplorerHostImpl implements FileExplorerHost {
         // eslint-disable-next-line no-console
         console.error('[mille] mutation queue error:', e);
       });
+  }
+
+  /** The live session that owns `operationId`, if any. */
+  private findOperationOwner(operationId: string): Session | null {
+    for (const session of this.sessions.values()) {
+      if (session.ownedOperationIds.has(operationId)) return session;
+    }
+    return null;
+  }
+
+  /**
+   * Claim the operation id a mutation asked to be tracked under.
+   *
+   * Returns the claimed id, or null when the mutation named none. Throws
+   * `EEXIST` when another live session already owns it — two sessions
+   * sharing an id would cross their progress streams and let either cancel
+   * the other's work.
+   */
+  private claimOperation(session: Session, args: Record<string, unknown>): string | null {
+    const operationId = requestedOperationId(args);
+    if (operationId === null) return null;
+
+    const owner = this.findOperationOwner(operationId);
+    if (owner !== null && owner.id !== session.id) {
+      throw new FileSystemError('EEXIST', `operation ${operationId} is already in progress`);
+    }
+    if (
+      !session.ownedOperationIds.has(operationId) &&
+      session.ownedOperationIds.size >= MAX_OWNED_OPERATIONS
+    ) {
+      throw new FileSystemError(
+        'EBUSY',
+        `session has ${MAX_OWNED_OPERATIONS} operations in flight`,
+      );
+    }
+    session.ownedOperationIds.add(operationId);
+    return operationId;
+  }
+
+  /**
+   * SPEC §20.2 — 10 entry resyncs per minute per session. Sliding window
+   * rather than a fixed bucket so a peer cannot burst 20 across a boundary.
+   */
+  private checkResyncRate(session: Session): void {
+    const now = Date.now();
+    session.resyncTimes = session.resyncTimes.filter((t) => now - t < RESYNC_WINDOW_MS);
+    if (session.resyncTimes.length >= RESYNC_LIMIT) {
+      throw new FileSystemError('EBUSY', `resync rate limit reached (${RESYNC_LIMIT} per minute)`);
+    }
+    session.resyncTimes.push(now);
   }
 
   /**
@@ -1245,17 +1411,19 @@ class FileExplorerHostImpl implements FileExplorerHost {
       case 'undo':
         return this.explorer.undo();
       case 'readFile': {
-        const buf = await this.explorer.readFile(args.id as EntryId);
-        // Convert Uint8Array to a plain array so structured clone ships
-        // it through the wire without being mistaken for a TypedArray.
-        return Array.from(buf);
+        // SPEC §12.5 — return the Uint8Array as-is. It used to be expanded
+        // into a plain number array so structured clone would not mistake
+        // it for a TypedArray; that cost roughly an order of magnitude in
+        // size on both transports, and the framed codec ships a typed array
+        // as a raw attachment. Clients accept both forms.
+        return this.explorer.readFile(args.id as EntryId);
       }
       case 'readText':
         return this.explorer.readText(args.id as EntryId, args.encoding as string | undefined);
       case 'writeFile':
         return this.explorer.writeFile(
           args.id as EntryId,
-          new Uint8Array(args.data as ArrayLike<number>),
+          toBytes(args.data),
           args.options as { atomic?: boolean } | undefined,
         );
       default:
@@ -1268,6 +1436,11 @@ class FileExplorerHostImpl implements FileExplorerHost {
     body: { reqId: number; method: string; args: unknown[] },
   ): Promise<void> {
     try {
+      // SPEC §12.3 — authoritative, host-side, before native dispatch.
+      const verdict = authorizeCall(session.context, body.method);
+      if (!verdict.allowed) {
+        throw new FileSystemError(verdict.code, verdict.message);
+      }
       const result = await this.dispatchCall(session, body.method, body.args);
       this.send(session, frame('callResult', { reqId: body.reqId, result }));
     } catch (e: unknown) {
@@ -1281,7 +1454,10 @@ class FileExplorerHostImpl implements FileExplorerHost {
       case 'getTreeVersion':
         return this.explorer.getTreeVersion();
       case 'capabilities':
-        return this.explorer.capabilities;
+        // SPEC §12.4 — what the session is told must match what it is
+        // allowed to do, or a read-only UI renders enabled write actions
+        // that only fail at EROFS.
+        return effectiveCapabilities(session.context, this.explorer.capabilities);
       case 'updateProjectionSettings': {
         const settings = args[0];
         if (typeof settings !== 'object' || settings === null || Array.isArray(settings)) {
@@ -1341,6 +1517,17 @@ class FileExplorerHostImpl implements FileExplorerHost {
         if (typeof operationId !== 'string' || operationId.length === 0) {
           throw new Error('cancelOperation requires a non-empty operationId');
         }
+        // SPEC §16.3 / SEC-005 — a session may cancel only what it owns.
+        // The denial is deliberately indistinguishable from "no such
+        // operation" so an unprivileged peer cannot probe for live ids.
+        const cancelVerdict = authorizeCancel(
+          session.context,
+          session.ownedOperationIds,
+          operationId,
+        );
+        if (!cancelVerdict.allowed) {
+          throw new FileSystemError(cancelVerdict.code, cancelVerdict.message);
+        }
         return this.explorer.cancelOperation(operationId);
       }
       case 'canUndo':
@@ -1359,6 +1546,7 @@ class FileExplorerHostImpl implements FileExplorerHost {
         ) {
           throw new Error('resync requires a non-negative integer id and recursive boolean');
         }
+        this.checkResyncRate(session);
         const requested = this.explorer.getSnapshot().getById(id);
         const markerId =
           requested !== null && requested.kind !== 1 && requested.symlinkTargetIsDir !== true
@@ -1459,6 +1647,10 @@ class FileExplorerHostImpl implements FileExplorerHost {
     const session = this.sessions.get(id);
     if (!session) return;
     session.detach();
+    // SPEC §23.3 — releasing the claims here is what stops a session that
+    // dropped mid-transfer from reserving its operation ids forever.
+    session.ownedOperationIds.clear();
+    session.resyncTimes = [];
     this.sessions.delete(id);
     if (this.sessions.size === 0) this.stopTick();
   }

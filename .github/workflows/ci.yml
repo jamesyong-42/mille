@@ -271,6 +271,124 @@ jobs:
           echo "20 clean resync repetitions"
 
   # ------------------------------------------------------------------
+  # The suite on Windows.
+  #
+  # Every job above runs on ubuntu-latest, and Windows appeared only in the
+  # `build` matrix below — which compiles a .node and uploads it without ever
+  # loading it. The only Windows execution anywhere was `smoke-published.yml`,
+  # which runs after a release and does one walk. So nothing exercised the
+  # watcher, the host/renderer port protocol, or the mutation paths on Windows
+  # before shipping, and three classes of defect lived there undetected:
+  #
+  #   - `ReadDirectoryChangesW` reports a content write as `Modify(Any)`,
+  #     which the classifier sent into the rename pairer; every save waited out
+  #     the pair window and then surfaced to JS as a WRENAMEDEGRADED warning
+  #     instead of a `changed` event.
+  #   - The RPCs documented as synchronization points flushed with a single
+  #     `setImmediate` rather than waiting for the delta to be acknowledged.
+  #     That guess held on an idle Linux runner and lost on Windows, so a
+  #     second attached client's mirror was a version behind when the
+  #     initiator's promise resolved.
+  #   - Several tests asserted POSIX path and errno shapes, so they could only
+  #     ever pass on Unix.
+  #
+  # `timeout-minutes` is deliberate: the failure mode that hid the port bug was
+  # a test process that finished its tests and then never exited, which without
+  # a timeout burns the default 6h budget instead of reporting.
+  test-windows:
+    name: Windows tests
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.97.1
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: windows-tests
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile=false
+
+      # Worth repeating per-platform rather than trusting the Linux run:
+      # `cfg`-gated code changes what is reachable, so a `#[cfg(unix)]` block
+      # can leave imports unused on Windows only — three such warnings existed
+      # here, and `-D warnings` makes them build failures.
+      #
+      # `cargo fmt --check` also only passes because `.gitattributes` pins the
+      # checkout to LF: `rustfmt.toml` sets `newline_style = "Unix"`, so a CRLF
+      # working tree fails every file.
+      - name: cargo fmt --check
+        run: cargo fmt --all -- --check
+
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      # Same exclusion as the Linux job: mille-binding is a cdylib against
+      # Node's N-API and cannot produce a standalone test binary.
+      - name: cargo test
+        run: cargo test --workspace --exclude mille-binding
+
+      - name: Build native + TS packages
+        run: |
+          pnpm --filter @vibecook/mille run build:napi:probe
+          pnpm --filter @vibecook/mille run build:ts
+          pnpm --filter @vibecook/mille-ui run build
+
+      # A generated file that is also committed. It used to be rebuilt with
+      # mixed line endings here and left the tree dirty; `.gitattributes` plus
+      # `scripts/build-tokens.mjs` pin it, and this proves it stays pinned.
+      - name: Generated tokens.css is byte-identical
+        shell: bash
+        run: git diff --exit-code -- packages/mille-ui/tokens.css
+
+      - name: Typecheck
+        run: pnpm -r --if-present typecheck
+
+      - name: Test
+        run: pnpm -r --if-present test
+
+      # The Windows watcher path is the one this job exists for, and its
+      # failures are timing-dependent. The Linux job repeats these for the
+      # same reason.
+      - name: Repeat live watcher regressions
+        shell: bash
+        run: |
+          for run in $(seq 1 10); do
+            echo "watcher repetition ${run}/10"
+            node --test packages/mille/test/watcher-host.test.mjs packages/mille/test/watcher-live.test.mjs
+          done
+
+      # Multi-client fan-out ordering — the class of bug that only reproduced
+      # off-Linux. Each of these asserts that every attached mirror is current
+      # before the initiating client's promise resolves.
+      - name: Repeat port synchronization regressions
+        shell: bash
+        run: |
+          for run in $(seq 1 10); do
+            node --test \
+              packages/mille/test/resync.test.mjs \
+              packages/mille/test/settings-live.test.mjs \
+              packages/mille/test/multi-root-order.test.mjs \
+              packages/mille/test/workspace-roots-live.test.mjs \
+              >/dev/null \
+              || { echo "::error::port synchronization regression on repetition ${run}"; exit 1; }
+          done
+          echo "10 clean port synchronization repetitions"
+
+  # ------------------------------------------------------------------
   # Native build matrix — 8 triples per SPEC §6.2.
   # Each job produces a .node artifact for the corresponding platform.
   # ------------------------------------------------------------------

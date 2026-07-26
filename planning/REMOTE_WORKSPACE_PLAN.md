@@ -80,6 +80,23 @@ established by WireGuard and tsnet `WhoIs`, not by the peer — is the **Tailsca
 `socket.remotePeerId` on an inbound socket. A `null` peer id is a denial, never a pass. The
 `Peer` handle from `socket.remotePeer` supplies `displayName`/`deviceId` for logging only.
 
+**Measured, 2026-07-26.** Two ephemeral mesh nodes on one machine, a real `FileExplorerHost`
+behind `mesh.net.createServer`, a real `PortFileExplorer` over `mesh.net.connect`. The inbound
+socket reported:
+
+```
+remotePeerId          "nhuoDhUsfh11CNTRL"     Tailscale StableID
+remotePeerName        "james yong"            WhoIs display name — a user, not a device
+remoteAddress         "100.123.36.55:27567"
+remotePeer.tailscaleId "nhuoDhUsfh11CNTRL"
+remotePeer.deviceId    null
+```
+
+`deviceId` is **null on a raw TCP accept**, confirming the reasoning above by observation rather
+than by reading: authorizing on the RFC 017 ULID would have been authorizing on `null`. Note also
+that `remotePeerName` came back as the tailnet _user's_ display name, not the device name — useful
+for audit lines, useless as a device discriminator.
+
 > Note the namespace asymmetry: `remotePeerId` is a device id **outbound** and a Tailscale node id
 > **inbound**. An operator who copies an ID observed client-side and pastes it into `allowedPeerIds`
 > will get a silent no-match. Document the source of the value in the export config.
@@ -113,6 +130,28 @@ expose the full `TailscalePeerIdentity` as a structured getter instead of the fl
 `mesh.quic` is fully implemented (`TruffleQuicStream extends Duplex`, async-iterable connections and
 streams), so spec §27.1's deferred content multiplexing is reachable when wanted — not blocked. The
 Phase 1 choice of `mesh.net` still stands: the control stream is single and ordered.
+
+## Proven end to end, 2026-07-26
+
+Before writing any of `@vibecook/mille-truffle`, the thesis was executed directly: PRs 1–3 plus
+`mesh.net` are already enough to serve a workspace across a real tailnet. Two ephemeral nodes, a
+genuine host and client, no fake mesh and no `PassThrough`. Eight checks, all passing:
+
+| Check                             | Result                                     |
+| --------------------------------- | ------------------------------------------ |
+| Handshake over the tailnet        | 20 ms                                      |
+| Verified peer identity at accept  | `nhuoDhUsfh11CNTRL`                        |
+| Roots delivered                   | 1 root                                     |
+| Expansion produced rows           | `src`, `README.md`                         |
+| Remote `create`                   | ok                                         |
+| Binary write/read round trip      | 26 B, `Uint8Array`                         |
+| `resyncWorkspace` denied remotely | `EACCES` — PR 3 policy holds over the wire |
+| 512 KiB payload round trip        | 22 ms (≈1 MiB across the wire)             |
+
+Node startup dominates everything else at ~10 s for the pair; once up, the transport is not the
+cost. This does **not** discharge AC-002: two tsnet stacks in one process exercise the real
+sidecar, WireGuard and framing path, but not NAT traversal, DERP relay, or wide-area latency.
+Two physical devices are still required for acceptance.
 
 ## PR sequence
 

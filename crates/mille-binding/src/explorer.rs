@@ -48,7 +48,8 @@ fn entry_from_walked(walked: &mille_core::WalkedEntry, parent_id: Option<EntryId
 use crate::events::{Channel, EventBus};
 use crate::journal::{
     capture_fs_identity, directory_is_empty, ensure_managed_recycle_base, path_is_under,
-    CreateIdentity, FsIdentity, JournalKind, OperationJournal, UndoDescriptorJs, UndoResultJs,
+    pin_or_record_id, CreateIdentity, FsIdentity, JournalKind, OperationJournal, UndoDescriptorJs,
+    UndoResultJs,
 };
 use crate::mutations::{
     kind_from_u8, resolve_entry_path, stat_to_entry, DeleteOptionsJs, TransferOptionsJs,
@@ -1377,19 +1378,20 @@ impl FileExplorer {
         // entry lives; see `CreateIdentity::pin`. Directories rely on the
         // emptiness check instead, and a failure to open leaves `None`, which
         // makes undo refuse rather than trust a possibly-reused inode.
-        let pin = if kind_u8 == 0 {
+        let (pin, pinned_id) = if kind_u8 == 0 {
             match tokio::fs::File::open(&new_path).await {
-                Ok(file) => Some(std::sync::Arc::new(file.into_std().await)),
-                Err(_) => None,
+                Ok(file) => pin_or_record_id(file.into_std().await),
+                Err(_) => (None, None),
             }
         } else {
-            None
+            (None, None)
         };
         let identity = CreateIdentity {
             entry_id: EntryId(0), // filled after insert
             path: new_path.clone(),
             fs,
             pin,
+            pinned_id,
         };
         let _policy_guard = self.policy_gate.lock();
         let exclude_matchers = self.current_exclude_matchers().map_err(fx_error_to_napi)?;

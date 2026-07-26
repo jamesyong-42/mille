@@ -46,6 +46,24 @@ were living in that gap.
   skipped by later synchronization points, and any `ack` restores standing, so
   a momentarily busy renderer recovers rather than being written off. One
   bounded probe, then ~1 ms.
+- **A created file's name could not be reused after deleting it on Windows** —
+  the undo journal pinned an open handle to every file it created, held for the
+  life of the journal entry. That pin exists because POSIX recycles an inode as
+  soon as its last link goes, and an open descriptor is what keeps the number
+  from being handed to a different file. Windows needs none of it: an NTFS file
+  id carries a sequence number that advances when the MFT record is reused, so
+  the id cannot come to mean a different file — the journal's own notes said as
+  much. The handle was only ever the means of reading the id there. Its cost
+  was real: on Windows a delete with a live handle can only mark the file
+  delete-pending, so the name stays in the directory and cannot be reused.
+  Create a file through mille, delete it in Explorer, and creating a file of
+  the same name failed with `EPERM` while the undo entry lived. Windows now
+  records the id at create time and closes the handle; `undo` still refuses a
+  replaced file. Verified by holding an exclusive (`share_mode(0)`) open
+  against a just-created file: previously `ERROR_SHARING_VIOLATION`, now
+  succeeds. Only reproducible on Windows builds without POSIX-semantics
+  deletes, which is why a Server 2022 runner caught it and a Windows 11
+  developer machine did not.
 - **Windows filesystem errors reported `EUNKNOWN`** — error mapping fell back
   to `io::ErrorKind` on Windows, which has no category for
   `ERROR_SHARING_VIOLATION`: a file held by another process (an open editor, a

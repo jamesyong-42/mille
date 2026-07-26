@@ -5,7 +5,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/jamesyong-42/mille"
+    "url": "https://github.com/vibecook-dev/mille"
   },
   "main": "mille.linux-arm64-gnu.node",
   "files": [

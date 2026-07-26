@@ -4,11 +4,11 @@
 
 Rust walks, watches, and searches the tree. TypeScript freezes viewport snapshots. React renders hundreds of thousands of rows without breaking a sweat.
 
-**Docs:** [jamesyong-42.github.io/mille](https://jamesyong-42.github.io/mille/) · [API reference](https://jamesyong-42.github.io/mille/api.html) · [npm](https://www.npmjs.com/package/@vibecook/mille)
+**Docs:** [vibecook-dev.github.io/mille](https://vibecook-dev.github.io/mille/) · [API reference](https://vibecook-dev.github.io/mille/api.html) · [npm](https://www.npmjs.com/package/@vibecook/mille)
 
 [![npm](https://img.shields.io/npm/v/%40vibecook%2Fmille?style=flat-square&color=7c9cff&label=%40vibecook%2Fmille)](https://www.npmjs.com/package/@vibecook/mille)
 [![npm ui](https://img.shields.io/npm/v/%40vibecook%2Fmille-ui?style=flat-square&color=4ad4b5&label=%40vibecook%2Fmille-ui)](https://www.npmjs.com/package/@vibecook/mille-ui)
-[![CI](https://img.shields.io/github/actions/workflow/status/jamesyong-42/mille/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/jamesyong-42/mille/actions/workflows/ci.yml)
+[![CI](https://img.shields.io/github/actions/workflow/status/vibecook-dev/mille/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/vibecook-dev/mille/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](./LICENSE)
 
 ---
@@ -72,9 +72,9 @@ For Electron UtilityProcess host/client wiring, packaging, and performance notes
 
 |                       |                                                                                              |
 | --------------------- | -------------------------------------------------------------------------------------------- |
-| **Site**              | https://jamesyong-42.github.io/mille/                                                        |
-| **API**               | https://jamesyong-42.github.io/mille/api.html                                                |
-| **Icons**             | https://jamesyong-42.github.io/mille/icons-preview.html                                      |
+| **Site**              | https://vibecook-dev.github.io/mille/                                                        |
+| **API**               | https://vibecook-dev.github.io/mille/api.html                                                |
+| **Icons**             | https://vibecook-dev.github.io/mille/icons-preview.html                                      |
 | Embedding             | [`packages/mille/EMBEDDING.md`](./packages/mille/EMBEDDING.md)                               |
 | Types                 | [`packages/mille/api.d.ts`](./packages/mille/api.d.ts)                                       |
 | Changelog             | [`CHANGELOG.md`](./CHANGELOG.md)                                                             |

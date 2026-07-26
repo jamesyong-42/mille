@@ -6,7 +6,7 @@ name: Release
 #
 # First-time packages: publish once with a human/npm login (see scripts below
 # or an initial Automation token), then add Trusted Publisher on each package:
-#   Organization/user: jamesyong-42
+#   Organization/user: vibecook-dev
 #   Repository:        mille
 #   Workflow filename: release.yml
 #   Allowed actions:   npm publish

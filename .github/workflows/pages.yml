@@ -1,7 +1,7 @@
 name: Pages
 
 # Deploy static docs/ to GitHub Pages on every push to main that touches docs,
-# or on demand. Site URL: https://jamesyong-42.github.io/mille/
+# or on demand. Site URL: https://vibecook-dev.github.io/mille/
 
 on:
   push:

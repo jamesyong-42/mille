@@ -140,5 +140,5 @@ PY
 echo ""
 echo "Bootstrap publish complete."
 echo "Next: configure Trusted Publisher on npmjs.com for each package"
-echo "  (GitHub user jamesyong-42 / repo mille / workflow release.yml)"
+echo "  (GitHub org vibecook-dev / repo mille / workflow release.yml)"
 echo "Then future tags v* publish via OIDC with no token."

@@ -27,7 +27,7 @@ PACKAGES=(
 
 echo "Fill in Trusted Publisher on each page with:"
 echo "  Provider:            GitHub Actions"
-echo "  Organization/user:   jamesyong-42"
+echo "  Organization/user:   vibecook-dev"
 echo "  Repository:          mille"
 echo "  Workflow filename:   release.yml"
 echo "  Environment:         (leave blank)"

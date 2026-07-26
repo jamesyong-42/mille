@@ -23,7 +23,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-REPO="${NPM_TRUST_REPO:-jamesyong-42/mille}"
+REPO="${NPM_TRUST_REPO:-vibecook-dev/mille}"
 WORKFLOW="${NPM_TRUST_WORKFLOW:-release.yml}"
 DRY_RUN=false
 

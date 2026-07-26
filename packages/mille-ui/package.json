@@ -7,11 +7,11 @@
   "sideEffects": false,
   "repository": {
     "type": "git",
-    "url": "https://github.com/jamesyong-42/mille"
+    "url": "https://github.com/vibecook-dev/mille"
   },
-  "homepage": "https://github.com/jamesyong-42/mille#readme",
+  "homepage": "https://github.com/vibecook-dev/mille#readme",
   "bugs": {
-    "url": "https://github.com/jamesyong-42/mille/issues"
+    "url": "https://github.com/vibecook-dev/mille/issues"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

@@ -144,9 +144,14 @@ Verified against the current Mille tree:
   `Uint8Array.from`; `:526` does `Array.from(data)`.
 - **Spec §12.2's `Session` sketch is incomplete** — the real one also carries `lastRootIds`,
   `ackedVersion`, `ackCapable`. Preserve them.
-- **Repository URL disagreement.** Spec targets `vibecook-dev/mille`; `package.json` says
-  `jamesyong-42/mille`; `Cargo.toml:14` says `jamesyong/file-explorer`. Truffle's remote is
-  `jamesyong-42/truffle`, matching the spec. Settle Mille's before publishing.
+- **Repository metadata is stale, and one entry is dead.** The git remote is
+  `vibecook-dev/mille`, so the spec's target is the correct one. Both package manifests, the README
+  badge, and the docs links still say `jamesyong-42/mille` — those still resolve, because GitHub
+  keeps a redirect after a transfer, so nothing is broken today. They stop resolving the moment
+  anyone re-creates that name, which is a cheap thing to not be exposed to.
+  `Cargo.toml:14` is the real one: `https://github.com/jamesyong/file-explorer` 404s. It is only
+  crate metadata (the crates are unpublished), so nothing consumes it yet — but it would ship the
+  first time one is published.
 - **`8628354` helps** — mutation sync points are now genuinely acknowledged rather than
   `setImmediate`-timed, which §18.3 and §20.1 both lean on.
 

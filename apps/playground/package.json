@@ -10,7 +10,7 @@
     "build": "electron-vite build",
     "preview": "electron-vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
-    "test": "node --test test/*.test.mjs",
+    "test": "node ../../scripts/run-tests.mjs",
     "bench:watch": "node scripts/watch-bench.mjs",
     "bench:navigation": "node scripts/navigation-state-store-bench.mjs",
     "bench:tabs": "node scripts/editor-tab-churn-bench.mjs",

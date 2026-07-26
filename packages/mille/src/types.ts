@@ -10,6 +10,7 @@
 // under src/.
 
 import type { FileExplorer } from './client.js';
+import type { ExplorerHostChannel, ExplorerSessionContext } from './channel/types.js';
 
 /**
  * Minimal `MessagePort`-like surface satisfied by `MessagePortMain`,
@@ -35,7 +36,20 @@ export interface Disposable {
  * Mirrors api.d.ts.
  */
 export interface FileExplorerHost {
+  /**
+   * Attach a renderer session over a MessagePort. Equivalent to
+   * `attachChannel(createMessagePortHostChannel(port))` — the session gets
+   * local-admin permissions, matching pre-channel behavior.
+   */
   attachPort(port: MessagePortLike): Disposable;
+  /**
+   * Attach a session over any `ExplorerChannel`. This is the transport-neutral
+   * entry point: a MessagePort locally, a framed Node Duplex (and through it a
+   * Truffle mesh socket) remotely. Remote callers must pass an explicit
+   * context — omitting it defaults to local-admin, which is only correct
+   * in-process.
+   */
+  attachChannel(channel: ExplorerHostChannel, context?: ExplorerSessionContext): Disposable;
   readonly sessionCount: number;
   readonly local: FileExplorer;
   /**

@@ -37,8 +37,11 @@ import {
   frame,
   PROTOCOL_VERSION,
   validateFrameVersion,
+  type ClientToHostMessage,
   type DecorationOnWire,
 } from './protocol.js';
+import { createMessagePortClientChannel, isExplorerChannel } from './channel/message-port.js';
+import type { ExplorerChannelCloseEvent, ExplorerClientChannel } from './channel/types.js';
 import type { Disposable, MessagePortLike } from './types.js';
 import type { ExplorerProjectionSettings } from './explorer-settings.js';
 import type { ResyncOptions, TransferOptions, Uri } from './client.js';
@@ -59,35 +62,12 @@ export interface ClientOptions {
 type ChangeListener = () => void;
 
 /**
- * Normalize a Node `worker_threads::MessagePort` onto the common
- * MessagePortLike shape. Mirrors host.ts's adaptPort.
+ * Emitted when the underlying channel goes down. The mirror stays readable
+ * and immutable afterwards; only new network work fails.
  */
-function adaptPort(port: unknown): MessagePortLike {
-  const p = port as {
-    postMessage?: (m: unknown, t?: readonly unknown[]) => void;
-    addEventListener?: MessagePortLike['addEventListener'];
-    removeEventListener?: MessagePortLike['removeEventListener'];
-    on?: (event: string, listener: (data: unknown) => void) => unknown;
-    start?: () => void;
-    close?: () => void;
-  };
-  if (typeof p.addEventListener === 'function') {
-    return port as MessagePortLike;
-  }
-  if (typeof p.on === 'function') {
-    return {
-      postMessage: (m, t) => p.postMessage!(m, t),
-      addEventListener: (_type, listener) => {
-        p.on!('message', (data) => listener({ data }));
-      },
-      removeEventListener: () => {
-        /* no-op on Node MessagePort — close() handles teardown */
-      },
-      start: () => p.start?.(),
-      close: () => p.close?.(),
-    };
-  }
-  throw new Error('port does not satisfy MessagePortLike (no addEventListener or on)');
+export interface ExplorerConnectionEvent {
+  readonly state: 'online' | 'closed';
+  readonly reason?: ExplorerChannelCloseEvent;
 }
 
 /**
@@ -111,10 +91,11 @@ interface RegisteredDecorationProvider {
 }
 
 export class PortFileExplorer {
-  private readonly port: MessagePortLike;
+  private readonly channel: ExplorerClientChannel;
   private readonly pending = new Map<number, PendingRequest>();
   private readonly changeListeners = new Set<ChangeListener>();
   private readonly warningListeners = new Set<(payload: unknown) => void>();
+  private readonly connectionListeners = new Set<(ev: ExplorerConnectionEvent) => void>();
   private nextReqId = 1;
   private working: MirrorWorking = createMirror();
   private publishedSnapshot: ClientMirrorSnapshot = new ClientMirrorSnapshot(this.working);
@@ -136,22 +117,59 @@ export class PortFileExplorer {
    */
   private lastKnownEntryIds: Set<number> = new Set();
 
-  constructor(rawPort: MessagePortLike, options?: ClientOptions) {
-    this.port = adaptPort(rawPort);
+  /**
+   * Accepts either a raw MessagePort (the historic signature, still the
+   * common case) or an already-built `ExplorerClientChannel`. Duck-typing
+   * the two apart keeps `new PortFileExplorer(port)` working unchanged
+   * while `connectFileExplorerChannel` can hand in a framed stream.
+   */
+  constructor(transport: MessagePortLike | ExplorerClientChannel, options?: ClientOptions) {
+    this.channel = isExplorerChannel(transport)
+      ? (transport as ExplorerClientChannel)
+      : createMessagePortClientChannel(transport as MessagePortLike);
     this.mirrorCap = options?.mirrorCap ?? DEFAULT_MIRROR_CAP;
     this.handshakeReady = new Promise((resolve, reject) => {
       this.handshakeResolve = resolve;
       this.handshakeReject = reject;
     });
-    this.port.addEventListener('message', (ev) => this.handleMessage(ev.data));
-    this.port.start?.();
-    this.port.postMessage(
+    this.channel.onMessage((msg) => this.handleMessage(msg));
+    this.channel.onClose((reason) => this.handleChannelClose(reason));
+    this.channel.send(
       frame('handshake', {
         version: PROTOCOL_VERSION,
         clientId: `c-${Math.random().toString(36).slice(2, 10)}`,
         options: { ...options, packedChildLists: true },
-      }),
+      }) as ClientToHostMessage,
     );
+  }
+
+  /** Subscribe to connection-state transitions. */
+  onConnection(listener: (ev: ExplorerConnectionEvent) => void): Disposable {
+    this.connectionListeners.add(listener);
+    return { dispose: () => this.connectionListeners.delete(listener) };
+  }
+
+  /**
+   * The channel went away. Fail everything in flight rather than leaving
+   * callers hanging, and leave the last snapshot readable — a stale tree
+   * is more useful to a UI than a blank one (SPEC §18.3).
+   */
+  private handleChannelClose(reason: ExplorerChannelCloseEvent): void {
+    if (this.disposed) return;
+    const err = new FileSystemError('ECANCELED', `connection closed: ${reason.code}`);
+    this.handshakeReject(err);
+    // The handshake promise is often never awaited after ready() resolves;
+    // swallow the rejection so a late close can't surface as unhandled.
+    void this.handshakeReady.catch(() => {});
+    for (const [, p] of this.pending) p.reject(err);
+    this.pending.clear();
+    for (const listener of [...this.connectionListeners]) {
+      try {
+        listener({ state: 'closed', reason });
+      } catch {
+        /* a bad listener must not break teardown */
+      }
+    }
   }
 
   /** Resolves once the host has replied with its initial snapshot. */
@@ -537,7 +555,7 @@ export class PortFileExplorer {
     return new Promise((resolve, reject) => {
       this.pending.set(reqId, { resolve, reject });
       try {
-        this.port.postMessage(frame('mutate', { reqId, op, args }));
+        this.channel.send(frame('mutate', { reqId, op, args }) as ClientToHostMessage);
       } catch (e) {
         this.pending.delete(reqId);
         reject(e);
@@ -642,7 +660,7 @@ export class PortFileExplorer {
     return new Promise((resolve, reject) => {
       this.pending.set(reqId, { resolve, reject });
       try {
-        this.port.postMessage(frame('call', { reqId, method, args }));
+        this.channel.send(frame('call', { reqId, method, args }) as ClientToHostMessage);
       } catch (e) {
         this.pending.delete(reqId);
         reject(e);
@@ -656,7 +674,7 @@ export class PortFileExplorer {
     // Best-effort notify the host before tearing down. If the port is
     // already closed the send will throw and we swallow it.
     try {
-      this.port.postMessage(frame('dispose', {}));
+      this.channel.send(frame('dispose', {}) as ClientToHostMessage);
     } catch {
       /* ignore */
     }
@@ -664,14 +682,14 @@ export class PortFileExplorer {
       p.reject(new FileSystemError('ECANCELED', 'explorer disposed'));
     }
     this.pending.clear();
-    this.port.close?.();
+    this.channel.close();
   }
 
   private sendAfterReady(msg: unknown): void {
     void this.handshakeReady.then(() => {
       if (this.disposed) return;
       try {
-        this.port.postMessage(msg);
+        this.channel.send(msg as ClientToHostMessage);
       } catch {
         /* port closed; ignore */
       }
@@ -697,8 +715,8 @@ export class PortFileExplorer {
         // ack means "applied", not "received".
         if (body?.ackRequested === true) {
           try {
-            this.port.postMessage(
-              frame('ack', { version: this.working.treeVersion }),
+            this.channel.send(
+              frame('ack', { version: this.working.treeVersion }) as ClientToHostMessage,
             );
           } catch {
             /* a dead port fails the host's wait by timeout, not by throw */
@@ -941,7 +959,20 @@ export async function connectFileExplorer(
   port: MessagePortLike,
   options?: ClientOptions,
 ): Promise<PortFileExplorer> {
-  const fx = new PortFileExplorer(port, options);
+  return connectFileExplorerChannel(createMessagePortClientChannel(port), options);
+}
+
+/**
+ * Transport-neutral factory. Same contract as `connectFileExplorer`, but
+ * takes an already-built channel — a framed Node Duplex, and through it a
+ * Truffle mesh socket. `connectFileExplorer` is the MessagePort wrapper
+ * around this.
+ */
+export async function connectFileExplorerChannel(
+  channel: ExplorerClientChannel,
+  options?: ClientOptions,
+): Promise<PortFileExplorer> {
+  const fx = new PortFileExplorer(channel, options);
   await fx.ready();
   return fx;
 }

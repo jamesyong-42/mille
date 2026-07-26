@@ -129,6 +129,10 @@ pub(crate) struct CreateIdentity {
     ///
     /// `None` when the id could not be read; undo then refuses, matching the
     /// unpinned case.
+    ///
+    /// Always `None` off Windows, where `pin` carries the identity instead —
+    /// the mirror of the allow on `pin` above.
+    #[cfg_attr(not(windows), allow(dead_code))]
     pub pinned_id: Option<(u64, u64)>,
 }
 
@@ -644,7 +648,13 @@ fn file_id_from_metadata(meta: &std::fs::Metadata) -> (u64, u64) {
 /// the undo pin holds anyway. NTFS file ids carry a sequence number that
 /// advances when an MFT record is reused, so unlike a bare Unix inode number
 /// they do not silently alias a new file.
+///
+/// Only Windows calls this now: since the pin is Windows-only, the Unix branch
+/// below is reachable only through a `cfg(unix)` build that never invokes it.
+/// Kept whole rather than `cfg`-ed to Windows so the two platforms' identity
+/// sources stay side by side and comparable.
 #[allow(unused_variables)]
+#[cfg_attr(not(windows), allow(dead_code))]
 pub(crate) fn file_id_from_handle(file: &std::fs::File) -> Option<(u64, u64)> {
     #[cfg(unix)]
     {
@@ -697,6 +707,9 @@ pub(crate) fn pin_or_record_id(
 }
 
 /// Identity of whatever `path` names right now, read through a fresh handle.
+///
+/// Windows-only for the same reason as `file_id_from_handle`.
+#[cfg_attr(not(windows), allow(dead_code))]
 fn file_id_for_path(path: &Path) -> Option<(u64, u64)> {
     let file = std::fs::File::open(path).ok()?;
     file_id_from_handle(&file)

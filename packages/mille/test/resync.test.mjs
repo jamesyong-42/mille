@@ -299,3 +299,66 @@ test('resync still resolves when a client never acknowledges', async () => {
     rmSync(sandbox, { recursive: true, force: true });
   }
 });
+
+test('a never-acking client does not slow every subsequent mutation', async () => {
+  // Mutations are an acknowledged synchronization point, which means one
+  // client that never replies could charge the fallback timeout to *every*
+  // rename — measured at ~1s each before the host learned to stop waiting on
+  // it. The first mutation may still pay the probe; the rest must not.
+  const { frame, PROTOCOL_VERSION } = await import('../dist/protocol.js');
+  const { sandbox, root } = fixture();
+  for (let i = 0; i < 4; i += 1) writeFileSync(join(root, `mut${i}.txt`), 'x');
+  const host = await createFileExplorerHost({ roots: [root], settings });
+  await host.local.populateFromRoots();
+
+  const live = new MessageChannel();
+  const mute = new MessageChannel();
+  host.attachPort(live.port1);
+  host.attachPort(mute.port1);
+  const client = await connectFileExplorer(live.port2);
+
+  // Handshakes, receives deltas, never acknowledges — a client older than the
+  // ack frame.
+  mute.port2.on('message', () => {});
+  mute.port2.postMessage(
+    frame('handshake', { version: PROTOCOL_VERSION, clientId: 'silent', options: {} }),
+  );
+
+  try {
+    const rootId = client.getSnapshot().roots()[0]?.id;
+    assert.ok(rootId !== undefined);
+    client.setExpanded({ add: [rootId] });
+    // Wait for the row itself, not just a child count: the count goes positive
+    // as soon as the delta lands, while `visibleRows` needs the viewport patch
+    // carrying the entries.
+    await waitFor(
+      () => childByName(client.getSnapshot(), rootId, 'mut0.txt'),
+      Boolean,
+      'client did not mirror the fixture files',
+    );
+
+    const durations = [];
+    for (let i = 0; i < 4; i += 1) {
+      const target = childByName(client.getSnapshot(), rootId, `mut${i}.txt`);
+      assert.ok(target, `expected mut${i}.txt to be mirrored`);
+      const started = Date.now();
+      await client.rename(target.id, `moved${i}.txt`);
+      durations.push(Date.now() - started);
+    }
+
+    // Everything after the first must be fast. Generous bound: the failure
+    // mode is a full 1000 ms fallback, so anything near it is unambiguous.
+    const afterFirst = durations.slice(1);
+    for (const [i, ms] of afterFirst.entries()) {
+      assert.ok(
+        ms < 300,
+        `mutation ${i + 2} took ${ms} ms — host is still waiting on the silent client (all: ${durations.join(', ')})`,
+      );
+    }
+  } finally {
+    await client.dispose();
+    mute.port2.close();
+    await host.dispose();
+    rmSync(sandbox, { recursive: true, force: true });
+  }
+});

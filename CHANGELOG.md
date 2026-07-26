@@ -69,6 +69,13 @@ were living in that gap.
   dirty after every build. A `.gitattributes` pins the checkout and
   `tokens.css` generation moved to a script that normalizes line endings, so
   the artifact is byte-identical on every platform.
+- **`pnpm test` runs outside a globbing shell** — the package test scripts were
+  spelled `node --test test/*.test.mjs`, which depends on the *shell* expanding
+  the glob. pnpm runs package scripts through the platform shell, and neither
+  cmd.exe nor PowerShell expands globs, so on Windows Node received the pattern
+  verbatim and exited before running anything. Node only learned to expand
+  globs itself in v21 and this repo targets v20, so the three packages now
+  share a small runner that expands it explicitly.
 - **Test files no longer assume POSIX** — `smoke.test.mjs` and
   `decode.test.mjs` hardcoded a `.node` candidate list covering only darwin
   and linux-gnu; the first failed at import on Windows and musl, and the

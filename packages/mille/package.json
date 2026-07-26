@@ -56,7 +56,7 @@
     "build:napi:probe:release": "napi build --platform --release --manifest-path ../../crates/mille-binding/Cargo.toml --output-dir . --no-js --features panic-probe",
     "build:ts": "tsc --build",
     "typecheck": "tsc --noEmit",
-    "test": "node --test --test-concurrency=4 test/*.test.mjs",
+    "test": "node ../../scripts/run-tests.mjs --test-concurrency=4",
     "bench:viewport": "node bench/viewport-retention.mjs",
     "bench:wide-folder": "node bench/wide-folder-order.mjs",
     "bench:natural-sort": "node bench/natural-sort.mjs",

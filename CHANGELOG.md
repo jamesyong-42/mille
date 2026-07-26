@@ -2,6 +2,82 @@
 
 ## Unreleased
 
+Windows was building but never running. Every test job targeted
+`ubuntu-latest`; Windows appeared only in the build matrix, which compiles a
+`.node` and uploads it without loading it. The one thing that executed on
+Windows was the post-release published-package smoke test — 94 lines that load
+the binary and perform a single walk. So the watcher, the host/renderer port
+protocol and the mutation paths shipped unexercised there, and three defects
+were living in that gap.
+
+### Engine (`@vibecook/mille`)
+
+- **Every file save on Windows arrived as a warning, a pair-window late** —
+  `ReadDirectoryChangesW` reports a content write as `FILE_ACTION_MODIFIED`
+  without distinguishing data from metadata, so notify surfaces `Modify(Any)`.
+  That fell into the classifier's catch-all and became `RawEvent::Any`, and
+  `Any` is not merely "ambiguous": it is the only channel `RenamePairer`
+  accepts. Every save was therefore queued as a possible rename half, held for
+  the pair window, then flushed as `RenameDegraded` — consumers listening for
+  `changed` never fired, and got a `WRENAMEDEGRADED` warning instead. Measured
+  through the public API: modify now reports `changed` in ~49 ms (the debounce)
+  where it previously reported a warning. Reconciliation was never affected —
+  `Modified` and `Unknown` take the same `reconcile_nearest_parent`.
+  Classifying `Modify(Any)` alone regressed directory renames, because Windows
+  can report `Modify(Name(..))` and `Modify(Any)` for one path in a single
+  batch and the coalescer's `Modified`-wins arm then consumed the rename's
+  "from" half, leaving the destination with no known descendants; the coalescer
+  keeps the pairing channel intact on Windows for that reason. Both halves are
+  pinned by tests that assert the Windows and non-Windows mappings explicitly.
+- **The documented synchronization points were timed, not acknowledged** —
+  `mutate`, `updateProjectionSettings`, `reorderRoots`, `updateWorkspaceRoots`
+  and `refreshWorkspaceRoots` all promise in comments that every attached
+  mirror is current before the initiating client observes completion, but each
+  flushed with a single `setImmediate`. That is a guess about when the peer
+  runs; it held on an idle Linux runner and lost on Windows, where a second
+  client's mirror was reliably one version behind when the initiator's promise
+  resolved. They now use the acknowledged flush that `resync` already had. Six
+  tests across five files covered this invariant and had never run on a
+  platform that could fail it.
+- **A client that never acknowledges no longer slows every mutation** — the
+  change above introduced this: a session that handshakes but predates the
+  `ack` frame cannot satisfy the wait, so each mutation paid the full fallback,
+  measured at ~1012 ms per rename. Sessions that time out are now marked and
+  skipped by later synchronization points, and any `ack` restores standing, so
+  a momentarily busy renderer recovers rather than being written off. One
+  bounded probe, then ~1 ms.
+- **Windows filesystem errors reported `EUNKNOWN`** — error mapping fell back
+  to `io::ErrorKind` on Windows, which has no category for
+  `ERROR_SHARING_VIOLATION`: a file held by another process (an open editor, a
+  scanner) reported `EUNKNOWN` despite `EMBEDDING.md` documenting `EBUSY` for
+  exactly that case. Win32 status codes now map explicitly — sharing and lock
+  violations, disk-full, write-protect, invalid name, aborted operation and
+  reparse-resolution failure among them.
+
+### Tooling & CI
+
+- **The suite runs on Windows** — a `test-windows` job runs fmt, clippy, the
+  Rust suite, the full JS suite, and repeats the watcher and port
+  synchronization regressions ten times each. It carries an explicit
+  `timeout-minutes`, because the failure mode that concealed the port defect
+  was a test process that completed its tests and then never exited.
+- **Line endings are pinned** — `.editorconfig` declared `end_of_line = lf`
+  but nothing enforced it at checkout, so a Windows clone (Git's default
+  `core.autocrlf=true`) materialized the tree as CRLF. That broke
+  `pnpm format:check` and `cargo fmt --check` wholesale — `rustfmt.toml` sets
+  `newline_style = "Unix"` — and left the committed, generated `tokens.css`
+  dirty after every build. A `.gitattributes` pins the checkout and
+  `tokens.css` generation moved to a script that normalizes line endings, so
+  the artifact is byte-identical on every platform.
+- **Test files no longer assume POSIX** — `smoke.test.mjs` and
+  `decode.test.mjs` hardcoded a `.node` candidate list covering only darwin
+  and linux-gnu; the first failed at import on Windows and musl, and the
+  second silently skipped its only live round-trip while reporting green. Both
+  now derive the binary name from the host. Also fixed: POSIX basename
+  splitting on real temp paths, Unix errno literals, rooted-but-not-absolute
+  workspace paths, a symlink fixture that needs Windows Developer Mode, and a
+  git fixture that inherited the developer's `core.autocrlf`.
+
 ## 0.3.0 — 2026-07-25
 
 Ships Phases 4.4, 5 and 6.1–6.3, and closes a defect that made every prior

@@ -38,6 +38,10 @@
     "./provider": {
       "types": "./dist/provider.d.ts",
       "import": "./dist/provider.js"
+    },
+    "./node": {
+      "types": "./dist/node.d.ts",
+      "import": "./dist/node.js"
     }
   },
   "files": [

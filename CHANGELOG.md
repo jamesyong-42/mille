@@ -12,6 +12,30 @@ were living in that gap.
 
 ### Engine (`@vibecook/mille`)
 
+- **The host/client protocol now runs over a byte stream** — `@vibecook/mille/node`
+  adds `createFramedStreamHostChannel` / `createFramedStreamClientChannel`, which
+  carry the existing protocol over any Node `Duplex`. A real `FileExplorerHost`
+  serving a real `PortFileExplorer` across paired `PassThrough`s is covered
+  end-to-end: handshake, roots, expansion, viewport rows, RPC, and abrupt
+  transport loss. Swap the pipes for a socket and that is a remote workspace.
+  The wire format is a 20-byte header (`MLLE`, big-endian, versioned major and
+  minor) plus UTF-8 JSON metadata and raw binary attachments. Payloads matter
+  here: snapshots and deltas already carry bincode buffers, and base64-ing them
+  through JSON would inflate every one. Instead the encoder swaps each binary
+  view for a `{$mille:'bin',i}` placeholder and appends the exact bytes — honouring
+  `byteOffset`/`byteLength`, so a 10-byte subarray of a 1000-byte buffer ships 10
+  bytes rather than the whole backing allocation. The decoder validates the
+  header before allocating anything, so a frame claiming 4 GiB of attachments is
+  rejected having buffered only the 20 bytes that actually arrived; a fuzzer
+  mutates every byte of a valid frame and asserts the only failure mode is a
+  clean protocol error. Fragmentation is arbitrary — one frame across 40,000
+  single-byte chunks and 50 frames in one chunk both decode, and a property test
+  re-partitions a stream at random cut points. Writes queue in the channel and go
+  to the stream one at a time, stopping when `write()` returns false, so
+  `bufferedBytes` measures what we are holding rather than what the OS took, and
+  the hard limit closes the connection instead of growing without bound.
+  A malformed frame retires only that session; the shared host and its other
+  sessions keep serving.
 - **The host and client were welded to MessagePort for no reason** — both sides
   only ever needed an ordered, reliable, message-oriented pipe with a close
   notification, but that requirement was never named, so `postMessage` calls

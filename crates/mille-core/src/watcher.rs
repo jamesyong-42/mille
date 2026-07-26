@@ -432,6 +432,26 @@ fn raw_events_for(event: &Event) -> Vec<RawEvent> {
                 out.push(RawEvent::Any(path.clone()));
             }
             EventKind::Modify(ModifyKind::Other) => out.push(RawEvent::Modified(path.clone())),
+            // Windows only. `ReadDirectoryChangesW` reports FILE_ACTION_MODIFIED
+            // without distinguishing data from metadata, so notify surfaces it
+            // as `Modify(Any)` — that is the platform's ordinary "this file was
+            // written" signal, not an ambiguous one. Left in the catch-all it
+            // became `RawEvent::Any` -> `FsChangeEvent::Unknown`, and `Unknown`
+            // is the *rename pairer's* input channel: every save was queued as
+            // a possible rename half, held for the pair window, then flushed as
+            // `RenameDegraded`. Consumers saw a `WRENAMEDEGRADED` warning a
+            // pair-window late instead of a `changed` event. (Reconciliation
+            // was never the problem — `watch_runtime` gives `Modified` and
+            // `Unknown` the same `reconcile_nearest_parent`.)
+            //
+            // Deliberately not applied to the other platforms. On inotify and
+            // FSEvents a content write already arrives as `Modify(Data(..))`,
+            // so `Modify(Any)` there really is the ambiguous fallback it looks
+            // like, and degrading to a re-stat is the safer reading. Renames
+            // are matched above as `Modify(Name(..))` on every platform, so
+            // this cannot swallow them.
+            #[cfg(windows)]
+            EventKind::Modify(ModifyKind::Any) => out.push(RawEvent::Modified(path.clone())),
             EventKind::Modify(_) => out.push(RawEvent::Any(path.clone())),
             EventKind::Access(_) => { /* uninteresting */ }
             EventKind::Any => out.push(RawEvent::Any(path.clone())),
@@ -659,6 +679,22 @@ fn transition(prev: Option<PathState>, ev: &RawEvent) -> PathState {
 
         // Unknown → ... (preserve Unknown unless concretely overwritten).
         (Some(PathState::Unknown), RawEvent::Created(_)) => PathState::Created,
+        // Windows keeps the Unknown. `Unknown` is not merely "ambiguous" — it
+        // is the only channel `RenamePairer` accepts, so downgrading it drops
+        // the path out of rename pairing entirely. That matters here because
+        // Windows reports a rename half as `Modify(Name(..))` *and* can report
+        // a `Modify(Any)` for the same path in the same batch; with
+        // `Modify(Any)` now classified as `Modified` (see `raw_events_for`),
+        // this arm was consuming the "from" half of a directory rename and
+        // leaving the destination with no known descendants.
+        //
+        // Created and Deleted still win below: those are concrete lifecycle
+        // facts. A content write is not, and an unpaired half still degrades
+        // after the pair window and reconciles from disk — the same
+        // `reconcile_nearest_parent` a `Modified` would have triggered.
+        #[cfg(windows)]
+        (Some(PathState::Unknown), RawEvent::Modified(_)) => PathState::Unknown,
+        #[cfg(not(windows))]
         (Some(PathState::Unknown), RawEvent::Modified(_)) => PathState::Modified,
         (Some(PathState::Unknown), RawEvent::Deleted(_)) => PathState::Deleted,
         (Some(PathState::Unknown), RawEvent::Any(_)) => PathState::Unknown,
@@ -926,6 +962,80 @@ mod tests {
             options,
         )
         .expect("watcher construction")
+    }
+
+    /// How `raw_events_for` classifies a bare `Modify(Any)`.
+    ///
+    /// `watch_detects_file_modify` below only ever sees whichever shape the
+    /// host OS happens to emit, so it cannot pin the split: Windows sends
+    /// `Modify(Any)` for an ordinary write and used to land in the catch-all,
+    /// which reported every save to JS as a `WRENAMEDEGRADED` warning instead
+    /// of a change. This asserts both sides so the divergence stays a decision
+    /// rather than an accident.
+    #[test]
+    fn modify_any_classification_is_platform_deliberate() {
+        let ev = Event {
+            kind: EventKind::Modify(ModifyKind::Any),
+            paths: vec![PathBuf::from("w/file.txt")],
+            ..Default::default()
+        };
+        let got = raw_events_for(&ev);
+
+        #[cfg(windows)]
+        assert!(
+            matches!(got.as_slice(), [RawEvent::Modified(_)]),
+            "Windows must read Modify(Any) as a content change, got {got:?}"
+        );
+
+        #[cfg(not(windows))]
+        assert!(
+            matches!(got.as_slice(), [RawEvent::Any(_)]),
+            "non-Windows must keep Modify(Any) ambiguous, got {got:?}"
+        );
+    }
+
+    /// A rename half must survive a same-batch content write on the same path.
+    ///
+    /// `RenamePairer` only accepts `FsChangeEvent::Unknown`, so anything that
+    /// knocks a path out of that state silently removes it from rename
+    /// pairing. Windows can report `Modify(Name(From))` and `Modify(Any)` for
+    /// one path in a single batch; once `Modify(Any)` became `Modified`, the
+    /// "from" half of a *directory* rename was being dropped and the renamed
+    /// directory arrived with no known descendants.
+    #[test]
+    fn rename_half_survives_a_same_batch_modify() {
+        let p = PathBuf::from("w/old-dir");
+        let out = coalesce_events(&[RawEvent::Any(p.clone()), RawEvent::Modified(p.clone())]);
+
+        #[cfg(windows)]
+        assert!(
+            matches!(out.as_slice(), [FsChangeEvent::Unknown { .. }]),
+            "Windows must keep the path in the pairer's channel, got {out:?}"
+        );
+
+        #[cfg(not(windows))]
+        assert!(
+            matches!(out.as_slice(), [FsChangeEvent::Modified { .. }]),
+            "non-Windows keeps the pre-existing concrete-wins behaviour, got {out:?}"
+        );
+    }
+
+    /// The Windows arm above must not intercept a rename half — both sides
+    /// have to reach the pairer as `Any` or renames degrade into a delete
+    /// plus an unrelated create.
+    #[test]
+    fn rename_halves_stay_ambiguous_for_the_pairer() {
+        for mode in [RenameMode::From, RenameMode::To, RenameMode::Both] {
+            let ev = Event {
+                kind: EventKind::Modify(ModifyKind::Name(mode)),
+                paths: vec![PathBuf::from("w/file.txt")],
+                ..Default::default()
+            };
+            assert!(
+                matches!(raw_events_for(&ev).as_slice(), [RawEvent::Any(_)]),
+                "rename half {mode:?} must reach the pairer as Any"
+            );
+        }
     }
 
     /// Poll up to `timeout` for `pred(events)` to return true. Returns the

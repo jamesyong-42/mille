@@ -35,16 +35,37 @@ export type {
   VisibleRowsOptions,
 } from './client.js';
 export type { UndoDescriptor, UndoKind, UndoResult } from './undo.js';
-export {
-  normalizeUndoDescriptor,
-  normalizeUndoKind,
-  normalizeUndoResult,
-} from './undo.js';
+export { normalizeUndoDescriptor, normalizeUndoKind, normalizeUndoResult } from './undo.js';
 export { DecorationStore } from './decorations.js';
 export type { DecorationProvider } from './decorations.js';
 export { createFileExplorerHost } from './host.js';
 export type { FileExplorerHost, MessagePortLike } from './types.js';
-export { connectFileExplorer, PortFileExplorer, PortMirrorSnapshot } from './client-port.js';
+export {
+  connectFileExplorer,
+  connectFileExplorerChannel,
+  PortFileExplorer,
+  PortMirrorSnapshot,
+} from './client-port.js';
+export type { ExplorerConnectionEvent } from './client-port.js';
+export {
+  createMessagePortClientChannel,
+  createMessagePortHostChannel,
+  isExplorerChannel,
+} from './channel/message-port.js';
+export { LOCAL_ADMIN_POLICY, resolveSessionContext } from './channel/types.js';
+export type {
+  ExplorerChannel,
+  ExplorerChannelCloseCode,
+  ExplorerChannelCloseEvent,
+  ExplorerChannelLogger,
+  ExplorerChannelState,
+  ExplorerClientChannel,
+  ExplorerHostChannel,
+  ExplorerSessionAccess,
+  ExplorerSessionContext,
+  ExplorerSessionPolicy,
+  ResolvedSessionContext,
+} from './channel/types.js';
 export {
   EXPLORER_SETTINGS_VERSION,
   EXPLORER_SETTINGS_LIMITS,

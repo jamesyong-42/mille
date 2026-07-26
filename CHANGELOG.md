@@ -12,6 +12,26 @@ were living in that gap.
 
 ### Engine (`@vibecook/mille`)
 
+- **The host and client were welded to MessagePort for no reason** — both sides
+  only ever needed an ordered, reliable, message-oriented pipe with a close
+  notification, but that requirement was never named, so `postMessage` calls
+  and port lifecycle were spread through `host.ts` and `client-port.ts`. They
+  now talk through an `ExplorerChannel`, with `createMessagePortHostChannel` /
+  `createMessagePortClientChannel` as the compatibility path:
+  `attachPort(port)` is a wrapper over the new `attachChannel(channel, context)`
+  and `connectFileExplorer(port)` over `connectFileExplorerChannel(channel)`.
+  Existing consumers need no migration and the wire format is unchanged — this
+  is the seam a framed Node Duplex (and through it a remote workspace) plugs
+  into. Two things improved on the way through. `adaptPort` was duplicated
+  verbatim in the host and the client; it is now one function. And its Node
+  `MessagePort` branch has always carried a no-op `removeEventListener` with a
+  `TODO(7.10)`, which meant a detached session could still observe messages —
+  the channel now gates delivery on its own state, so a closed channel
+  delivers nothing even when the underlying listener could not be detached.
+  A closed channel also rejects the client's in-flight calls and emits a
+  `connection` event rather than leaving callers hanging; the last mirror
+  snapshot stays readable. Session policy types ship with it but enforce
+  nothing yet.
 - **Every file save on Windows arrived as a warning, a pair-window late** —
   `ReadDirectoryChangesW` reports a content write as `FILE_ACTION_MODIFIED`
   without distinguishing data from metadata, so notify surfaces `Modify(Any)`.
@@ -88,7 +108,7 @@ were living in that gap.
   `tokens.css` generation moved to a script that normalizes line endings, so
   the artifact is byte-identical on every platform.
 - **`pnpm test` runs outside a globbing shell** — the package test scripts were
-  spelled `node --test test/*.test.mjs`, which depends on the *shell* expanding
+  spelled `node --test test/*.test.mjs`, which depends on the _shell_ expanding
   the glob. pnpm runs package scripts through the platform shell, and neither
   cmd.exe nor PowerShell expands globs, so on Windows Node received the pattern
   verbatim and exited before running anything. Node only learned to expand
@@ -151,7 +171,7 @@ unexpected filesystem edge case from taking the whole editor with it.
   advancing to it. A delta emitted only to carry markers (subtree
   resynced/dirty, root changes, decorations) reports an empty ChangeSet's
   version, which lags whatever the periodic tick already delivered — so such a
-  delta dragged an up-to-date mirror *backwards*, and the regressed mirror
+  delta dragged an up-to-date mirror _backwards_, and the regressed mirror
   acked the stale version. `resync` then waited for a target no ack could
   reach and fell through to the 1 s timeout, returning as though it had
   synchronized. It reproduced about one run in twenty on an idle machine.
@@ -162,6 +182,7 @@ unexpected filesystem edge case from taking the whole editor with it.
   mirror cannot be dragged backwards by it, while overstating would ship a
   version whose entries are not in that delta and let a client ack content it
   never received.
+
 - **Scoped provider invalidation** — a watcher event invalidates the directory
   whose listing it changed, and the walk re-reads only those directories,
   returning every subtree with no dirty descendant by reference. Adding one
@@ -248,7 +269,7 @@ types — old clients keep working, new fields ignored if unused.
   no longer ends up with `roots=[]` forever. `populateFromRoots`-before-
   `ready` workarounds can be removed.
 - **Lazy list-on-expand (B2).** New `ExplorerOptions.initialWalk?:
-  'full' | 'roots-only' | 'none'` (default `'full'` for back-compat).
+'full' | 'roots-only' | 'none'` (default `'full'` for back-compat).
   `host.handleSetExpanded` now triggers shallow walks for newly-expanded
   folders whose direct children aren't yet in the store. Tree renders in
   <200 ms with `'roots-only'` even on huge repos.
@@ -284,10 +305,10 @@ types — old clients keep working, new fields ignored if unused.
   / `clearFilter` / `clearClipboard` / `focusFilter`. New
   `useFileTreeRef` hook for nested consumers.
 - **Headless bundle trim (B8).** Headless entry now ships logic hooks
-  + ARIA primitives without the styled-row chrome. Bundle dropped from
-  21.69 KB → 12.46 KB gzip (SPEC §12 target was 12 KB; landed within
-  the 13 KB fail-on-regression boundary). `size-limit` now fails CI on
-  regression.
+  - ARIA primitives without the styled-row chrome. Bundle dropped from
+    21.69 KB → 12.46 KB gzip (SPEC §12 target was 12 KB; landed within
+    the 13 KB fail-on-regression boundary). `size-limit` now fails CI on
+    regression.
 
 ### Playground (`apps/playground`)
 

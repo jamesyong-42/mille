@@ -779,6 +779,104 @@ export interface MessagePortLike {
   close?(): void;
 }
 
+// ─── Transport-neutral channel surface ──────────────────────────────────
+//
+// The host and client depend on an ordered, reliable, message-oriented pipe
+// with a close notification — nothing more. `ExplorerChannel` names that
+// contract so a MessagePort (local) and a framed Node Duplex (remote) are
+// interchangeable. Factories for the MessagePort form are exported from the
+// package root; the framed stream form ships from `@vibecook/mille/node`.
+
+export type ExplorerChannelState = 'open' | 'closing' | 'closed';
+
+export type ExplorerChannelCloseCode =
+  | 'LOCAL_CLOSE'
+  | 'REMOTE_CLOSE'
+  | 'TRANSPORT_ERROR'
+  | 'PROTOCOL_ERROR'
+  | 'BACKPRESSURE'
+  | 'AUTH_REJECTED';
+
+export interface ExplorerChannelCloseEvent {
+  readonly code: ExplorerChannelCloseCode;
+  readonly reason?: string | undefined;
+  readonly cause?: unknown;
+}
+
+export interface ExplorerChannelLogger {
+  warn(message: string, detail?: unknown): void;
+}
+
+export interface ExplorerChannel<TOutbound, TInbound> extends Disposable {
+  readonly state: ExplorerChannelState;
+  /** Bytes queued but not yet accepted by the transport. Always 0 on MessagePort. */
+  readonly bufferedBytes: number;
+  /** Queue one ordered message. Throws if the channel is not open. */
+  send(message: TOutbound): void;
+  /** Resolves once everything queued before this call has been accepted. */
+  drain(): Promise<void>;
+  onMessage(listener: (message: TInbound) => void): Disposable;
+  onClose(listener: (event: ExplorerChannelCloseEvent) => void): Disposable;
+  /** Idempotent. Emits exactly one close event locally. */
+  close(reason?: string): void;
+}
+
+/** Host-side channel: sends host→client frames, receives client→host frames. */
+export type ExplorerHostChannel = ExplorerChannel<unknown, unknown>;
+/** Client-side channel: sends client→host frames, receives host→client frames. */
+export type ExplorerClientChannel = ExplorerChannel<unknown, unknown>;
+
+export type ExplorerSessionAccess = 'admin' | 'read-write' | 'read-only';
+
+/**
+ * What a session may do. Each `allow*` flag gates an operation that is
+ * host-global today (undo, projection settings, workspace roots), so remote
+ * sessions default to denied.
+ */
+export interface ExplorerSessionPolicy {
+  readonly access: ExplorerSessionAccess;
+  readonly allowClientDecorations?: boolean;
+  readonly allowProjectionMutation?: boolean;
+  readonly allowWorkspaceRootMutation?: boolean;
+  readonly allowExternalImport?: boolean;
+  readonly allowUndo?: boolean;
+  readonly allowWorkspaceResync?: boolean;
+}
+
+/**
+ * Who is on the other end. `peerId` must be a transport-verified identity,
+ * never a value the client asserted about itself.
+ */
+export interface ExplorerSessionContext {
+  readonly kind?: 'local' | 'remote';
+  readonly clientId?: string;
+  readonly peerId?: string;
+  readonly peerName?: string;
+  readonly exportId?: string;
+  readonly policy?: ExplorerSessionPolicy;
+}
+
+export declare function createMessagePortHostChannel(
+  port: MessagePortLike,
+  options?: { logger?: ExplorerChannelLogger },
+): ExplorerHostChannel;
+
+export declare function createMessagePortClientChannel(
+  port: MessagePortLike,
+  options?: { logger?: ExplorerChannelLogger },
+): ExplorerClientChannel;
+
+/** Duck-type an already-built channel apart from a raw MessagePort. */
+export declare function isExplorerChannel(
+  value: unknown,
+): value is ExplorerChannel<unknown, unknown>;
+
+/** Emitted when a client's underlying channel goes down. */
+export interface ExplorerConnectionEvent {
+  readonly state: 'online' | 'closed';
+  readonly reason?: ExplorerChannelCloseEvent;
+}
+
 /**
  * UtilityProcess-side factory. Loads the native module, owns the canonical
  * EntryStore, walker, and watcher. Accepts any number of client connections
@@ -787,6 +885,13 @@ export interface MessagePortLike {
 export interface FileExplorerHost extends Disposable {
   /** Attach a renderer/client port. Each port gets its own session (expansion + viewport state). */
   attachPort(port: MessagePortLike): Disposable;
+  /**
+   * Attach a session over any transport. `attachPort` is the MessagePort
+   * wrapper around this; a framed Node Duplex (from `@vibecook/mille/node`)
+   * is the remote path. Omitting `context` defaults to local-admin
+   * permissions, which is only correct in-process.
+   */
+  attachChannel(channel: ExplorerHostChannel, context?: ExplorerSessionContext): Disposable;
   /** Number of currently-attached client sessions. */
   readonly sessionCount: number;
   /** Direct access for the host process itself (e.g. SCM extension running alongside). */
@@ -818,6 +923,15 @@ export interface ClientOptions {
  */
 export declare function connectFileExplorer(
   port: MessagePortLike,
+  options?: ClientOptions,
+): Promise<PortFileExplorer>;
+
+/**
+ * Transport-neutral form of `connectFileExplorer`. Same contract, but takes
+ * an already-built channel instead of a MessagePort.
+ */
+export declare function connectFileExplorerChannel(
+  channel: ExplorerClientChannel,
   options?: ClientOptions,
 ): Promise<PortFileExplorer>;
 

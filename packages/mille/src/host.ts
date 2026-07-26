@@ -28,7 +28,15 @@ import {
   validateFrameVersion,
   type DecorationOnWire,
   type DecorationsFrameBody,
+  type HostToClientMessage,
 } from './protocol.js';
+import { createMessagePortHostChannel } from './channel/message-port.js';
+import { resolveSessionContext } from './channel/types.js';
+import type {
+  ExplorerHostChannel,
+  ExplorerSessionContext,
+  ResolvedSessionContext,
+} from './channel/types.js';
 import type { Disposable, FileExplorerHost, MessagePortLike } from './types.js';
 import type { ExplorerProjectionSettings } from './explorer-settings.js';
 
@@ -65,7 +73,12 @@ function sortedChildIds(snap: MirrorSnapshot, parentId: number): number[] {
  */
 interface Session {
   readonly id: number;
-  readonly port: MessagePortLike;
+  readonly channel: ExplorerHostChannel;
+  /**
+   * Who is on the other end, with defaults applied. PR 1 records it;
+   * the permission tables that read `context.policy` land in PR 3.
+   */
+  readonly context: ResolvedSessionContext;
   /** Expansion set this client has declared via `setExpanded`. */
   expanded: Set<number>;
   /** Current viewport window the client has requested. */
@@ -119,46 +132,6 @@ interface Session {
   ackCapable: boolean;
   /** Teardown for the message listener + port. Replaced during attach. */
   detach: () => void;
-}
-
-/**
- * Normalize a Node `worker_threads::MessagePort` (uses `.on`/`.off`) and
- * a DOM/Electron `MessagePort` (uses `addEventListener`) down to the
- * common `MessagePortLike` shape the rest of the host works against.
- *
- * Node's MessagePort wraps listeners with its own bookkeeping, so
- * `removeEventListener` here is currently a no-op — the session's
- * `detach` relies on `port.close()` to drop the listener instead. Phase
- * 7.10 tightens this with per-listener bookkeeping.
- */
-function adaptPort(port: unknown): MessagePortLike {
-  const p = port as {
-    postMessage?: (m: unknown, t?: readonly unknown[]) => void;
-    addEventListener?: MessagePortLike['addEventListener'];
-    removeEventListener?: MessagePortLike['removeEventListener'];
-    on?: (event: string, listener: (data: unknown) => void) => unknown;
-    start?: () => void;
-    close?: () => void;
-  };
-  if (typeof p.addEventListener === 'function') {
-    return port as MessagePortLike;
-  }
-  if (typeof p.on === 'function') {
-    return {
-      postMessage: (m, t) => p.postMessage!(m, t),
-      addEventListener: (_type, listener) => {
-        p.on!('message', (data) => listener({ data }));
-      },
-      // TODO(7.10): per-listener bookkeeping so removeEventListener
-      // actually detaches. close() below covers the common case.
-      removeEventListener: () => {
-        /* no-op on Node MessagePort */
-      },
-      start: () => p.start?.(),
-      close: () => p.close?.(),
-    };
-  }
-  throw new Error('port does not satisfy MessagePortLike (no addEventListener or on)');
 }
 
 /**
@@ -335,15 +308,24 @@ class FileExplorerHostImpl implements FileExplorerHost {
     };
   }
 
+  /**
+   * Back-compat wrapper: wrap the port in a MessagePort channel and attach
+   * it with local-admin permissions, which is exactly what an in-process
+   * UtilityProcess consumer had before channels existed.
+   */
   attachPort(rawPort: MessagePortLike): Disposable {
+    return this.attachChannel(createMessagePortHostChannel(rawPort));
+  }
+
+  attachChannel(channel: ExplorerHostChannel, context?: ExplorerSessionContext): Disposable {
     if (this.disposed) {
       throw new Error('FileExplorerHost is disposed');
     }
-    const port = adaptPort(rawPort);
     const id = this.nextSessionId++;
     const session: Session = {
       id,
-      port,
+      channel,
+      context: resolveSessionContext(context),
       expanded: new Set<number>(),
       viewport: { offset: 0, limit: 0, overscan: 0 },
       viewportIds: new Set<number>(),
@@ -360,15 +342,15 @@ class FileExplorerHostImpl implements FileExplorerHost {
       },
     };
 
-    const onMessage = (evt: { data: unknown }): void => {
-      this.handleMessage(session, evt.data);
-    };
-    port.addEventListener('message', onMessage);
-    port.start?.();
+    const messageSub = channel.onMessage((msg) => this.handleMessage(session, msg));
+    // A transport that dies on its own must retire just this session —
+    // never the shared host (SPEC NFR-005).
+    const closeSub = channel.onClose(() => this.detachSession(id));
 
     session.detach = (): void => {
-      port.removeEventListener('message', onMessage);
-      port.close?.();
+      messageSub.dispose();
+      closeSub.dispose();
+      channel.close();
     };
     this.sessions.set(id, session);
     this.ensureTick();
@@ -1184,9 +1166,7 @@ class FileExplorerHostImpl implements FileExplorerHost {
     // waited on: they cannot satisfy the condition, so including them turns
     // every synchronization point into a full `timeoutMs` stall.
     const pending = (): Session[] =>
-      sessions.filter(
-        (s) => this.sessions.has(s.id) && s.ackCapable && s.ackedVersion < target,
-      );
+      sessions.filter((s) => this.sessions.has(s.id) && s.ackCapable && s.ackedVersion < target);
     const satisfied = (): boolean => pending().length === 0;
     if (satisfied()) {
       await new Promise<void>((resolve) => setImmediate(resolve));
@@ -1460,7 +1440,10 @@ class FileExplorerHostImpl implements FileExplorerHost {
 
   private send(session: Session, msg: unknown): void {
     try {
-      session.port.postMessage(msg);
+      // The host builds frames through `frame()`, which is generic over the
+      // body; the channel is typed to the HostToClient union. One cast at
+      // the single send site beats threading the union through every caller.
+      session.channel.send(msg as HostToClientMessage);
     } catch {
       // Port may be closed mid-flight. Detach this session quietly so
       // the host can keep serving other sessions.

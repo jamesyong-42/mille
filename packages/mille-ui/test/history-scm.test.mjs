@@ -538,9 +538,25 @@ test(
       } catch (err) {
         assert.match(String(err), /abort/i);
       }
-      // Tree may be either dirty or restored depending on race; no crash.
-      const body = readFileSync(path.join(dir, 'tracked.ts'), 'utf8');
-      assert.ok(body === 'again\n' || body === 'v2\n');
+      // Tree may be dirty or restored depending on the race; no crash.
+      //
+      // A third outcome is legitimate and was not admitted here, which made
+      // this flaky: `git restore` was killed mid-checkout, and git replaces a
+      // file by removing it and writing it back, so the path can be absent at
+      // the instant we look. That is the kill working, not corruption — the
+      // property under test is that aborting rejects cleanly rather than
+      // crashing the client, which the assertions above cover.
+      let body;
+      try {
+        body = readFileSync(path.join(dir, 'tracked.ts'), 'utf8');
+      } catch (err) {
+        assert.equal(err.code, 'ENOENT', `unexpected read failure: ${err}`);
+        body = null;
+      }
+      assert.ok(
+        body === null || body === 'again\n' || body === 'v2\n',
+        `unexpected working-tree content: ${JSON.stringify(body)}`,
+      );
     } finally {
       removeTempDir(dir);
       try {

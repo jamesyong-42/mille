@@ -247,7 +247,7 @@ try {
 } finally {
   await fx?.dispose();
   if (options.keep) console.log(`[mille watch soak] preserved workspace ${sandbox}`);
-  else await rm(sandbox, { recursive: true, force: true });
+  else await rm(sandbox, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
 }
 
 if (process.exitCode !== 2) process.exitCode = exitCode;

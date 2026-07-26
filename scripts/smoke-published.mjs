@@ -82,7 +82,7 @@ try {
     if (!names.includes(expected)) failures.push(`walk did not find ${expected}`);
   }
 } finally {
-  rmSync(sandbox, { recursive: true, force: true });
+  rmSync(sandbox, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
 }
 
 if (failures.length > 0) {

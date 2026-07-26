@@ -76,7 +76,7 @@ test('native file nesting drives rows, counts, ids, index, and prefix navigation
     assert.equal(snapshot.visiblePrefixMatch('source.test', source.id, true, expanded), testRow.id);
   } finally {
     await fx.dispose();
-    rmSync(root, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -145,6 +145,6 @@ test('lazy port expansion and live rename preserve the nesting projection', asyn
   } finally {
     await client.dispose();
     await host.dispose();
-    rmSync(root, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });

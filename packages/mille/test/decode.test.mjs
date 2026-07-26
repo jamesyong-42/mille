@@ -223,6 +223,6 @@ test('visibleRowsBin on an empty snapshot round-trips to []', { skip: !native },
     const rows = decodeBulkRows(buf);
     assert.deepEqual(rows, []);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });

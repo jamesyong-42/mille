@@ -83,5 +83,5 @@ try {
   assert.ok(result.p95Ms <= budgetMs, `file nesting p95 ${result.p95Ms}ms > ${budgetMs}ms`);
 } finally {
   await fx.dispose();
-  rmSync(root, { recursive: true, force: true });
+  rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
 }

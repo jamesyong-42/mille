@@ -78,7 +78,7 @@ if (!preflight.ok) {
   if (keep) {
     console.log(`[mille watch bench] preserved sandbox: ${sandboxBase}`);
   } else {
-    await rm(sandboxBase, { recursive: true, force: true });
+    await rm(sandboxBase, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
   process.exit(2);
 }
@@ -128,7 +128,7 @@ async function stop(signal) {
   if (keep) {
     console.log(`[mille watch bench] preserved sandbox: ${sandboxBase}`);
   } else {
-    await rm(sandboxBase, { recursive: true, force: true });
+    await rm(sandboxBase, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 }
 

@@ -42,7 +42,7 @@ const CAN_SYMLINK = (() => {
   } catch {
     return false;
   } finally {
-    rmSync(probe, { recursive: true, force: true });
+    rmSync(probe, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 })();
 
@@ -88,7 +88,7 @@ async function withIsolatedTemp(fn) {
     else process.env.TMP = prev.TMP;
     if (prev.TEMP === undefined) delete process.env.TEMP;
     else process.env.TEMP = prev.TEMP;
-    rmSync(isolated, { recursive: true, force: true });
+    rmSync(isolated, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 }
 
@@ -129,7 +129,7 @@ test('P0: create refuses to truncate an existing file', async () => {
     assert.equal(fx.canUndo(), false);
   } finally {
     await fx.dispose();
-    rmSync(sandbox, { recursive: true, force: true });
+    rmSync(sandbox, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -146,7 +146,7 @@ test('P0: rename refuses to overwrite an existing sibling', async () => {
     assert.equal(fx.canUndo(), false);
   } finally {
     await fx.dispose();
-    rmSync(sandbox, { recursive: true, force: true });
+    rmSync(sandbox, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -171,7 +171,7 @@ test('P0: undo-create refuses to delete an unrelated replacement', async () => {
     void created;
   } finally {
     await fx.dispose();
-    rmSync(sandbox, { recursive: true, force: true });
+    rmSync(sandbox, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -190,7 +190,7 @@ test('P0: undo-create refuses same-size empty file replacement (inode identity)'
     assert.equal(fx.canUndo(), true);
   } finally {
     await fx.dispose();
-    rmSync(sandbox, { recursive: true, force: true });
+    rmSync(sandbox, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -209,7 +209,7 @@ test('P0: undo-create refuses non-empty directory (descendant guard)', async () 
     void dir;
   } finally {
     await fx.dispose();
-    rmSync(sandbox, { recursive: true, force: true });
+    rmSync(sandbox, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -231,7 +231,7 @@ test('P0: undo-rename refuses when destination was replaced', async () => {
     assert.equal(fx.canUndo(), true);
   } finally {
     await fx.dispose();
-    rmSync(sandbox, { recursive: true, force: true });
+    rmSync(sandbox, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -267,7 +267,7 @@ test('P0: soft-delete refuses symlink-hijacked recycle base', { skip: skipWithou
         await fx.dispose();
       }
     } finally {
-      rmSync(sandbox, { recursive: true, force: true });
+      rmSync(sandbox, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
     }
   });
 });
@@ -290,7 +290,7 @@ test('P0: overwrite-move is reported non-undoable', async () => {
     assert.match(String(last.reason ?? ''), /overwrite|cannot be restored/i);
   } finally {
     await fx.dispose();
-    rmSync(sandbox, { recursive: true, force: true });
+    rmSync(sandbox, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -312,7 +312,7 @@ test('default soft-delete is outside the workspace tree and undo restores', asyn
     assert.equal(readFileSync(join(root, 'note.txt'), 'utf8'), 'hello');
   } finally {
     await fx.dispose();
-    rmSync(sandbox, { recursive: true, force: true });
+    rmSync(sandbox, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -366,7 +366,7 @@ test('P1: soft-delete undo refuses replaced recycle payload', async () => {
       assert.equal(fx.peekUndo()?.kind, 'delete');
     } finally {
       await fx.dispose();
-      rmSync(sandbox, { recursive: true, force: true });
+      rmSync(sandbox, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
     }
   });
 });
@@ -386,7 +386,7 @@ test('permanent delete is reported non-undoable via lastMutation', async () => {
     assert.match(String(last.reason ?? ''), /permanent/i);
   } finally {
     await fx.dispose();
-    rmSync(sandbox, { recursive: true, force: true });
+    rmSync(sandbox, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -421,7 +421,7 @@ test('undo reverses create, rename, and move in LIFO order', async () => {
     assert.equal(fx.canUndo(), false);
   } finally {
     await fx.dispose();
-    rmSync(sandbox, { recursive: true, force: true });
+    rmSync(sandbox, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -458,7 +458,7 @@ test('port undo flushes mirrors before resolve', async () => {
     channel.port1.close();
     channel.port2.close();
     await host.dispose();
-    rmSync(sandbox, { recursive: true, force: true });
+    rmSync(sandbox, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -469,6 +469,6 @@ test('capabilities advertise Trash support', async () => {
     assert.equal((fx.capabilities & 8) !== 0, true);
   } finally {
     await fx.dispose();
-    rmSync(sandbox, { recursive: true, force: true });
+    rmSync(sandbox, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });

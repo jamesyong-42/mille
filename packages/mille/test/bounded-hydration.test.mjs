@@ -129,6 +129,6 @@ test('handshake and expansion hydrate only roots plus the mounted viewport', asy
     legacy.port1.close();
     legacy.port2.close();
     await host?.dispose().catch(() => {});
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });

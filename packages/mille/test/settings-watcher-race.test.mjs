@@ -101,7 +101,7 @@ test('a watcher batch cannot resurrect entries a settings change excluded', asyn
       );
     } finally {
       await fx.dispose();
-      rmSync(root, { recursive: true, force: true });
+      rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
     }
   }
 });

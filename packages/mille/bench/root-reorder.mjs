@@ -91,5 +91,5 @@ try {
   assert.ok(reorder.p95Ms <= p95BudgetMs, `root reorder p95 ${reorder.p95Ms}ms > ${p95BudgetMs}ms`);
 } finally {
   await fx.dispose();
-  rmSync(sandbox, { recursive: true, force: true });
+  rmSync(sandbox, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
 }

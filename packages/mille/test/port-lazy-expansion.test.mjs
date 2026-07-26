@@ -170,7 +170,7 @@ test('initialWalk=roots-only seeds root; setExpanded triggers child walk via del
     await client.dispose();
     await host.dispose();
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -246,7 +246,7 @@ test('re-expanding an already-walked folder does not re-trigger a walk', async (
     await client.dispose();
     await host.dispose();
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -283,6 +283,6 @@ test('initialWalk=none leaves store empty until explicit populateFromRoots', asy
     await client.dispose();
     await host.dispose();
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });

@@ -125,6 +125,6 @@ test('setViewport re-fetches and retains rows evicted by a bounded mirror', asyn
   } finally {
     await client?.dispose().catch(() => {});
     await host?.dispose().catch(() => {});
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });

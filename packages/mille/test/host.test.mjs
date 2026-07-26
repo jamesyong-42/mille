@@ -29,7 +29,7 @@ test('createFileExplorerHost creates a host with sessionCount 0', async () => {
     assert.equal(host.sessionCount, 0);
     await host.dispose();
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -46,7 +46,7 @@ test('attachPort + dispose subscription increments/decrements sessionCount', asy
     port2.close();
     await host.dispose();
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -58,7 +58,7 @@ test('host.local returns the wrapped FileExplorer', async () => {
     assert.equal(typeof host.local.getTreeVersion, 'function');
     await host.dispose();
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -75,7 +75,7 @@ test('attachPort throws after dispose', async () => {
       port2.close();
     }
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -93,7 +93,7 @@ test('dispose tears down all attached sessions', async () => {
     ch1.port2.close();
     ch2.port2.close();
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -140,7 +140,7 @@ test('handshake -> snapshot reply with version + roots (mirror omitted when empt
     port2.close();
     await host.dispose();
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -158,7 +158,7 @@ test('non-handshake before handshake yields EINVAL error frame', async () => {
     port2.close();
     await host.dispose();
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -176,7 +176,7 @@ test('unsupported protocol version yields EUNSUPPORTED error frame', async () =>
     port2.close();
     await host.dispose();
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -203,7 +203,7 @@ test('setExpanded after handshake replies with a delta frame', async () => {
     port2.close();
     await host.dispose();
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -235,7 +235,7 @@ test('mutate with unknown op yields mutateResult with error + reqId echo', async
     port2.close();
     await host.dispose();
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -265,7 +265,7 @@ test('call getTreeVersion returns the current version via callResult', async () 
     port2.close();
     await host.dispose();
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -290,7 +290,7 @@ test('dispose frame detaches the session on the host', async () => {
     port2.close();
     await host.dispose();
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -309,7 +309,7 @@ test('FileExplorer.takePendingChanges returns an empty ChangeSet on a fresh expl
     assert.equal(typeof cs.toVersion, 'number');
     await fx.dispose();
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -323,7 +323,7 @@ test('takePendingChanges drains — second call is still empty with no activity'
     assert.deepEqual(second.childSetChanged, []);
     await fx.dispose();
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -343,7 +343,7 @@ test('host.dispose while the tick is running tears down cleanly', async () => {
     port1.close();
     port2.close();
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -393,7 +393,7 @@ test('tick fan-out delivers delta after mutation on one session', async () => {
     port2.close();
     await host.dispose();
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -453,7 +453,7 @@ test(
       chB.port2.close();
       await host.dispose();
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
     }
   },
 );
@@ -503,7 +503,7 @@ test(
       port2.close();
       await host.dispose();
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
     }
   },
 );
@@ -594,7 +594,7 @@ test(
       chB.port2.close();
       await host.dispose();
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
     }
   },
 );
@@ -628,7 +628,7 @@ test('markSubtreeCoarse produces coarseSubtrees in the next delta', async () => 
     port2.close();
     await host.dispose();
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -662,7 +662,7 @@ test('markSubtreeDirty fires subtreeDirty in the next delta', async () => {
     port2.close();
     await host.dispose();
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -700,7 +700,7 @@ test(
       port2.close();
       await host.dispose();
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
     }
   },
 );
@@ -739,7 +739,7 @@ test(
       port2.close();
       await host.dispose();
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
     }
   },
 );

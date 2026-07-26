@@ -1,3 +1,4 @@
+import { removeTempDir } from '../../../scripts/test-temp.mjs';
 import { strict as assert } from 'node:assert';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -62,6 +63,6 @@ test('external changes flow through host deltas and survive collapse/re-expand',
   } finally {
     await client.dispose();
     await host.dispose();
-    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    removeTempDir(root);
   }
 });

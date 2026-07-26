@@ -13,6 +13,7 @@
 //   - coalescer behaviour under a storm of read-only ops (commit 7.6)
 //   - monotonic tree-version across deltas
 
+import { removeTempDir } from '../../../scripts/test-temp.mjs';
 import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
@@ -117,7 +118,7 @@ test(
       await clientB.dispose();
       await host.dispose();
     } finally {
-      rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+      removeTempDir(dir);
     }
   },
 );
@@ -156,7 +157,7 @@ test('monotonic tree-version across deltas on a client', async () => {
     await client.dispose();
     await host.dispose();
   } finally {
-    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    removeTempDir(dir);
   }
 });
 
@@ -204,7 +205,7 @@ test(
       await client.dispose();
       await host.dispose();
     } finally {
-      rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+      removeTempDir(dir);
     }
   },
 );

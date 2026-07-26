@@ -1,3 +1,4 @@
+import { removeTempDir } from '../../../scripts/test-temp.mjs';
 import { strict as assert } from 'node:assert';
 import {
   existsSync,
@@ -58,7 +59,7 @@ test('P0: overwrite of a file onto itself does not delete the source', async () 
     assert.ok(fx.getSnapshot().getById(source));
   } finally {
     await fx.dispose();
-    rmSync(sandbox, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    removeTempDir(sandbox);
   }
 });
 
@@ -77,7 +78,7 @@ test('P0: newName traversal cannot escape the workspace root', async () => {
     assert.equal(existsSync(join(sandbox, 'escaped.txt')), false);
   } finally {
     await fx.dispose();
-    rmSync(sandbox, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    removeTempDir(sandbox);
   }
 });
 
@@ -88,7 +89,7 @@ test('P0: copyFromPath into a workspace symlink that escapes the root is rejecte
     symlinkSync(outside, link, 'dir');
   } catch {
     // Platform may disallow dir symlinks; skip in that case.
-    rmSync(sandbox, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    removeTempDir(sandbox);
     return;
   }
   const fx = new FileExplorer({ roots: [root], settings });
@@ -102,7 +103,7 @@ test('P0: copyFromPath into a workspace symlink that escapes the root is rejecte
     assert.equal(existsSync(join(outside, 'leaked.txt')), false);
   } finally {
     await fx.dispose();
-    rmSync(sandbox, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    removeTempDir(sandbox);
   }
 });
 
@@ -119,7 +120,7 @@ test('P1: move with collision merge preserves destination-only children', async 
     assert.equal(existsSync(join(root, 'src', 'bundle')), false);
   } finally {
     await fx.dispose();
-    rmSync(sandbox, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    removeTempDir(sandbox);
   }
 });
 
@@ -146,7 +147,7 @@ test('P1: merge updates existing snapshot metadata for overwritten files', async
     assert.equal(readFileSync(join(root, 'inbox', 'bundle', 'keep.txt'), 'utf8'), 'keep-dst');
   } finally {
     await fx.dispose();
-    rmSync(sandbox, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    removeTempDir(sandbox);
   }
 });
 
@@ -163,6 +164,6 @@ test('probeDestination reports free vs exists without mutating', async () => {
     await assert.rejects(fx.probeDestination(inbox, '../x.txt'), (error) => error?.code === 'EINVAL');
   } finally {
     await fx.dispose();
-    rmSync(sandbox, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    removeTempDir(sandbox);
   }
 });

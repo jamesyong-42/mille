@@ -5,6 +5,7 @@
 // auto-populates it, so tests that require pre-existing entries (create
 // under a parent, readFile by id, mutations) are deferred.
 
+import { removeTempDir } from '../../../scripts/test-temp.mjs';
 import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
 import { createRequire } from 'node:module';
@@ -83,7 +84,7 @@ test('FileExplorer constructs with a valid absolute root', () => {
     assert.equal(typeof fx.capabilities, 'number');
     assert.equal(typeof fx.getTreeVersion(), 'number');
   } finally {
-    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    removeTempDir(dir);
   }
 });
 
@@ -93,7 +94,7 @@ test('resolvePath returns null on a pristine store', async () => {
     const fx = new FileExplorer({ roots: [dir] });
     assert.equal(await fx.resolvePath('missing.txt'), null);
   } finally {
-    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    removeTempDir(dir);
   }
 });
 
@@ -109,7 +110,7 @@ test('getSnapshot() returns a MirrorSnapshot with treeVersion + roots()', () => 
     // Phase 5 does not auto-populate — roots() is empty until Phase 6.
     // Just verify the accessor returns an array without throwing.
   } finally {
-    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    removeTempDir(dir);
   }
 });
 
@@ -122,7 +123,7 @@ test('MirrorSnapshot.getById returns null for unknown id', () => {
     assert.equal(snap.hasChildren(99999), false);
     assert.equal(snap.directChildCount(99999), null);
   } finally {
-    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    removeTempDir(dir);
   }
 });
 
@@ -140,7 +141,7 @@ test('visibleRows/visibleRowCount work on an empty snapshot', () => {
     assert.ok(Array.isArray(count.pendingExpansions));
     assert.equal(snap.visibleRowIndex(99999, []), null);
   } finally {
-    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    removeTempDir(dir);
   }
 });
 
@@ -162,7 +163,7 @@ test('emitReadyForTests + onReady fire end-to-end through the TSFN', async () =>
     // Double-off is idempotent.
     assert.equal(fx.off(Number(subId)), false);
   } finally {
-    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    removeTempDir(dir);
   }
 });
 
@@ -172,6 +173,6 @@ test('off() on an unknown subscription is idempotent', () => {
     const fx = new FileExplorer({ roots: [dir] });
     assert.equal(fx.off(12345), false);
   } finally {
-    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    removeTempDir(dir);
   }
 });

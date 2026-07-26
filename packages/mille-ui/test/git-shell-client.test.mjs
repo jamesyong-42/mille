@@ -17,6 +17,7 @@
 // Absolute paths are used as map keys by `createShellGitClient`, so
 // the assertions resolve each expected path the same way.
 
+import { removeTempDir } from '../../../scripts/test-temp.mjs';
 import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
 import { execSync, spawnSync } from 'node:child_process';
@@ -231,7 +232,7 @@ test(
       assert.ok(untracked, 'untracked.txt must appear with ? status');
       assert.equal(untracked.status, '?');
     } finally {
-      rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+      removeTempDir(dir);
     }
   },
 );
@@ -272,7 +273,7 @@ test(
       assert.ok(fired >= 1, 'onChange must fire on index mutation');
       unsub();
     } finally {
-      rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+      removeTempDir(dir);
     }
   },
 );

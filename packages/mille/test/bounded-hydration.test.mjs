@@ -1,3 +1,4 @@
+import { removeTempDir } from '../../../scripts/test-temp.mjs';
 import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -129,6 +130,6 @@ test('handshake and expansion hydrate only roots plus the mounted viewport', asy
     legacy.port1.close();
     legacy.port2.close();
     await host?.dispose().catch(() => {});
-    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    removeTempDir(dir);
   }
 });

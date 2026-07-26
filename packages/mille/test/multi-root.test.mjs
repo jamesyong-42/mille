@@ -1,3 +1,4 @@
+import { removeTempDir } from '../../../scripts/test-temp.mjs';
 import { strict as assert } from 'node:assert';
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -58,7 +59,7 @@ test('same-basename roots route URI lookup, reads, prefetch, and creates by iden
     assert.equal(existsSync(join(left, 'right-only.txt')), false);
   } finally {
     await fx.dispose();
-    rmSync(sandbox, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    removeTempDir(sandbox);
   }
 });
 
@@ -86,6 +87,6 @@ test('same-basename absolute paths resolve to distinct identities through a port
   } finally {
     await client.dispose();
     await host.dispose();
-    rmSync(sandbox, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    removeTempDir(sandbox);
   }
 });

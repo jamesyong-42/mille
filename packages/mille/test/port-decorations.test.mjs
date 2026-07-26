@@ -14,6 +14,7 @@
 // MessageChannel shape (`port1`/`port2`) matches Electron's
 // MessageChannelMain — no renderer harness required.
 
+import { removeTempDir } from '../../../scripts/test-temp.mjs';
 import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -122,7 +123,7 @@ async function twoClientSetup() {
       } catch {
         /* ignore */
       }
-      rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+      removeTempDir(dir);
     },
   };
 }

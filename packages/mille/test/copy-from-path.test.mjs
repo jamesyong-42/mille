@@ -1,3 +1,4 @@
+import { removeTempDir } from '../../../scripts/test-temp.mjs';
 import { strict as assert } from 'node:assert';
 import {
   mkdirSync,
@@ -92,7 +93,7 @@ test('copyFromPath imports file content and never creates empty placeholders', a
     );
   } finally {
     await fx.dispose();
-    rmSync(sandbox, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    removeTempDir(sandbox);
   }
 });
 
@@ -124,7 +125,7 @@ test('copyFromPath recursively imports directories with nested content', async (
     assert.ok(childByName(snap, bundle.id, 'readme.md'));
   } finally {
     await fx.dispose();
-    rmSync(sandbox, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    removeTempDir(sandbox);
   }
 });
 
@@ -145,7 +146,7 @@ test('copyFromPath surfaces missing sources without leaving placeholders', async
     assert.equal(childByName(snap, inboxId, 'no-such-file.txt'), null);
   } finally {
     await fx.dispose();
-    rmSync(sandbox, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    removeTempDir(sandbox);
   }
 });
 
@@ -176,6 +177,6 @@ test('port copyFromPath flushes the imported entry to attached mirrors', async (
     channel.port1.close();
     channel.port2.close();
     await host.dispose();
-    rmSync(sandbox, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    removeTempDir(sandbox);
   }
 });

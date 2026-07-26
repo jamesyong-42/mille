@@ -1,3 +1,4 @@
+import { removeTempDir } from '../../../scripts/test-temp.mjs';
 import { strict as assert } from 'node:assert';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -82,7 +83,7 @@ test('cross-root transfer is opt-in and collisions never overwrite by default', 
     assert.equal(readFileSync(join(rootB, 'shared copy 2.txt'), 'utf8'), 'source');
   } finally {
     await fx.dispose();
-    rmSync(sandbox, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    removeTempDir(sandbox);
   }
 });
 
@@ -117,7 +118,7 @@ test('same-root and cross-root reparent preserve subtree identity atomically', a
     assert.equal(readFileSync(join(rootB, 'moved-folder', 'nested.txt'), 'utf8'), 'nested');
   } finally {
     await fx.dispose();
-    rmSync(sandbox, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    removeTempDir(sandbox);
   }
 });
 
@@ -150,6 +151,6 @@ test('port cross-root move updates every mirror before resolving', async () => {
     await clientA.dispose();
     await clientB.dispose();
     await host.dispose();
-    rmSync(sandbox, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    removeTempDir(sandbox);
   }
 });

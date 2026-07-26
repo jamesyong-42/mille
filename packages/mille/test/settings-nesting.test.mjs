@@ -1,3 +1,4 @@
+import { removeTempDir } from '../../../scripts/test-temp.mjs';
 import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -76,7 +77,7 @@ test('native file nesting drives rows, counts, ids, index, and prefix navigation
     assert.equal(snapshot.visiblePrefixMatch('source.test', source.id, true, expanded), testRow.id);
   } finally {
     await fx.dispose();
-    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    removeTempDir(root);
   }
 });
 
@@ -145,6 +146,6 @@ test('lazy port expansion and live rename preserve the nesting projection', asyn
   } finally {
     await client.dispose();
     await host.dispose();
-    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    removeTempDir(root);
   }
 });

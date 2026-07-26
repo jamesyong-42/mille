@@ -1,3 +1,4 @@
+import { removeTempDir } from '../../../scripts/test-temp.mjs';
 import { strict as assert } from 'node:assert';
 import {
   mkdirSync,
@@ -52,7 +53,7 @@ test('collision overwrite replaces file content', async () => {
     assert.equal(readFileSync(join(root, 'inbox', 'note.txt'), 'utf8'), 'source');
   } finally {
     await fx.dispose();
-    rmSync(sandbox, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    removeTempDir(sandbox);
   }
 });
 
@@ -68,7 +69,7 @@ test('collision skip leaves the destination untouched', async () => {
     assert.equal(readFileSync(join(root, 'inbox', 'note.txt'), 'utf8'), 'destination');
   } finally {
     await fx.dispose();
-    rmSync(sandbox, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    removeTempDir(sandbox);
   }
 });
 
@@ -86,7 +87,7 @@ test('collision merge combines directory trees without deleting siblings', async
     assert.equal(readFileSync(join(root, 'inbox', 'bundle', 'keep.txt'), 'utf8'), 'keep-dst');
   } finally {
     await fx.dispose();
-    rmSync(sandbox, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    removeTempDir(sandbox);
   }
 });
 
@@ -102,7 +103,7 @@ test('self-copy of a directory into its descendant is rejected', async () => {
     );
   } finally {
     await fx.dispose();
-    rmSync(sandbox, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    removeTempDir(sandbox);
   }
 });
 
@@ -142,6 +143,6 @@ test('case-only sibling names collide on case-insensitive volumes', async () => 
     );
   } finally {
     await fx.dispose();
-    rmSync(sandbox, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    removeTempDir(sandbox);
   }
 });

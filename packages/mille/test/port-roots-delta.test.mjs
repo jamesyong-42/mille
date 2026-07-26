@@ -19,6 +19,7 @@
 //   6. A subsequent tick (no further changes) does NOT repeat `roots`
 //      on the outgoing delta — absence = unchanged.
 
+import { removeTempDir } from '../../../scripts/test-temp.mjs';
 import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -134,7 +135,7 @@ test('delta ships roots after late populate — client mirror learns root post-h
     await client.dispose();
     await host.dispose();
   } finally {
-    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    removeTempDir(dir);
   }
 });
 
@@ -185,7 +186,7 @@ test('handshake after populate still works — roots arrive in the snapshot, nev
     await client.dispose();
     await host.dispose();
   } finally {
-    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    removeTempDir(dir);
   }
 });
 
@@ -226,6 +227,6 @@ test('root Entry ref identity in client mirror is stable across stable ticks', a
     await client.dispose();
     await host.dispose();
   } finally {
-    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    removeTempDir(dir);
   }
 });

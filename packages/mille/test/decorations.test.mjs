@@ -4,6 +4,7 @@
 //      removeProvider, bump + listener fanout).
 // 9.2+: integration with FileExplorer lands in later commits.
 
+import { removeTempDir } from '../../../scripts/test-temp.mjs';
 import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -68,7 +69,7 @@ async function withFx(body) {
     } catch {
       /* swallow — test may have already disposed */
     }
-    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    removeTempDir(dir);
   }
 }
 

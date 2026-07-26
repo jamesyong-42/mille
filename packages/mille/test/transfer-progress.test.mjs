@@ -1,3 +1,4 @@
+import { removeTempDir } from '../../../scripts/test-temp.mjs';
 import { strict as assert } from 'node:assert';
 import {
   existsSync,
@@ -71,7 +72,7 @@ test('copyFromPath emits OP_PROGRESS and OP_COMPLETE for recursive imports', asy
   } finally {
     sub.dispose();
     await fx.dispose();
-    rmSync(sandbox, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    removeTempDir(sandbox);
   }
 });
 
@@ -121,7 +122,7 @@ test('cancelOperation aborts an in-flight recursive copy with cleanup', async ()
   } finally {
     sub.dispose();
     await fx.dispose();
-    rmSync(sandbox, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    removeTempDir(sandbox);
   }
 });
 
@@ -153,6 +154,6 @@ test('AbortSignal cancels copyFromPath via generated operation id', async () => 
     assert.equal(aborted, true, 'expected progress before abort');
   } finally {
     await fx.dispose();
-    rmSync(sandbox, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    removeTempDir(sandbox);
   }
 });

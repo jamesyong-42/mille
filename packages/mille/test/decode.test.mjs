@@ -10,6 +10,7 @@
 //      an empty result is the only shape we can cover at this stage;
 //      Phase 6.4+ will extend this once rows actually exist.
 
+import { removeTempDir } from '../../../scripts/test-temp.mjs';
 import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
 import { createRequire } from 'node:module';
@@ -223,6 +224,6 @@ test('visibleRowsBin on an empty snapshot round-trips to []', { skip: !native },
     const rows = decodeBulkRows(buf);
     assert.deepEqual(rows, []);
   } finally {
-    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    removeTempDir(dir);
   }
 });

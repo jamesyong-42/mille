@@ -1,3 +1,4 @@
+import { removeTempDir } from '../../../scripts/test-temp.mjs';
 import { strict as assert } from 'node:assert';
 import { chmodSync, mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -66,7 +67,7 @@ test('root disappearance and recovery preserve identity without stale descendant
     assert.equal(fx.getSnapshot().roots()[0].id, rootBefore.id);
   } finally {
     await fx.dispose();
-    rmSync(sandbox, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    removeTempDir(sandbox);
   }
 });
 
@@ -85,7 +86,7 @@ test('initially missing roots publish an unavailable row instead of failing', as
     assert.equal(await fx.refreshWorkspaceRoots(), version);
   } finally {
     await fx.dispose();
-    rmSync(sandbox, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    removeTempDir(sandbox);
   }
 });
 
@@ -113,7 +114,7 @@ test(
     } finally {
       chmodSync(root, 0o700);
       await fx.dispose();
-      rmSync(sandbox, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+      removeTempDir(sandbox);
     }
   },
 );
@@ -156,6 +157,6 @@ test('port refresh synchronizes unavailable and recovered roots to every mirror'
     await clientA.dispose();
     await clientB.dispose();
     await host.dispose();
-    rmSync(sandbox, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    removeTempDir(sandbox);
   }
 });

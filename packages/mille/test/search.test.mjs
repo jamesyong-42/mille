@@ -6,6 +6,7 @@
 // the native side and hits come back with entry, score, and
 // matchedIndices populated in camelCase.
 
+import { removeTempDir } from '../../../scripts/test-temp.mjs';
 import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
@@ -39,7 +40,7 @@ test('search: empty query returns empty array', async () => {
     assert.equal(hits.length, 0);
     await fx.dispose();
   } finally {
-    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    removeTempDir(dir);
   }
 });
 
@@ -59,7 +60,7 @@ test('search: finds files matching a substring query', async () => {
     assert.ok(top.matchedIndices.length > 0, 'expected at least one matched index');
     await fx.dispose();
   } finally {
-    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    removeTempDir(dir);
   }
 });
 
@@ -74,7 +75,7 @@ test('search: matchedIndices point at the right characters', async () => {
     assert.deepEqual([...mainHit.matchedIndices], [0, 1, 2, 3]);
     await fx.dispose();
   } finally {
-    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    removeTempDir(dir);
   }
 });
 
@@ -95,7 +96,7 @@ test('search: limit option truncates results', async () => {
 
     await fx.dispose();
   } finally {
-    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    removeTempDir(dir);
   }
 });
 
@@ -112,7 +113,7 @@ test('search: fuzzy (skip-char) queries still match', async () => {
     );
     await fx.dispose();
   } finally {
-    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    removeTempDir(dir);
   }
 });
 
@@ -124,7 +125,7 @@ test('search: non-matching query returns empty', async () => {
     assert.equal(hits.length, 0);
     await fx.dispose();
   } finally {
-    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    removeTempDir(dir);
   }
 });
 
@@ -160,6 +161,6 @@ test('search: caseSensitive option respects case', async () => {
 
     await fx.dispose();
   } finally {
-    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    removeTempDir(dir);
   }
 });

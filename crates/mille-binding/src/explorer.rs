@@ -3875,7 +3875,7 @@ async fn create_symlink(target: &Path, dst: &Path) -> std::result::Result<(), Fx
             .await
             .map(|m| m.is_dir())
             .unwrap_or(false);
-        return tokio::task::spawn_blocking(move || {
+        tokio::task::spawn_blocking(move || {
             if is_dir {
                 symlink_dir(&target, &dst).map_err(|e| io_to_fx(e, dst))
             } else {
@@ -3883,7 +3883,7 @@ async fn create_symlink(target: &Path, dst: &Path) -> std::result::Result<(), Fx
             }
         })
         .await
-        .map_err(|e| FxError::InternalBug(format!("symlink task join failed: {e}")))?;
+        .map_err(|e| FxError::InternalBug(format!("symlink task join failed: {e}")))?
     }
     #[cfg(not(any(unix, windows)))]
     {

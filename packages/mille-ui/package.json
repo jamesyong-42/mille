@@ -103,7 +103,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "build": "tsc --build && node -e \"const fs=require('fs');const tokens=fs.readFileSync('src/theme/tokens.css','utf8');const focus=fs.readFileSync('src/theme/focus.css','utf8');const combined=tokens+'\\n'+focus;fs.mkdirSync('dist',{recursive:true});fs.writeFileSync('dist/tokens.css',combined);fs.writeFileSync('tokens.css',combined);fs.mkdirSync('dist/theme',{recursive:true});fs.copyFileSync('src/theme/minimal.css','dist/theme/minimal.css')\"",
+    "build": "tsc --build && node scripts/build-tokens.mjs",
     "build:material": "node scripts/build-material.mjs",
     "prepublishOnly": "node scripts/build-material.mjs && pnpm run build",
     "typecheck": "tsc --noEmit",

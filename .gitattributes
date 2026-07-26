@@ -1,0 +1,33 @@
+# Normalize every text file to LF in the repository and in the working tree.
+#
+# `.editorconfig` already declares `end_of_line = lf`, but nothing enforced it
+# at checkout. Git for Windows defaults to `core.autocrlf=true`, so a Windows
+# clone materialized the whole tree as CRLF: `pnpm format:check` then failed on
+# every file prettier covers (its `endOfLine` default is `lf`), building
+# `mille-ui` rewrote the committed `tokens.css` with mixed endings, and the
+# shell-git history test compared `v2\r\n` against `v2\n`.
+#
+# `eol=lf` is deliberate rather than plain `text=auto`: it pins the working
+# tree too, so the checkout a Windows contributor edits matches the one CI
+# lints.
+* text=auto eol=lf
+
+# Binary — never touch these.
+*.node   binary
+*.png    binary
+*.jpg    binary
+*.jpeg   binary
+*.gif    binary
+*.ico    binary
+*.webp   binary
+*.woff   binary
+*.woff2  binary
+*.ttf    binary
+*.otf    binary
+*.pdf    binary
+*.zip    binary
+*.gz     binary
+
+# Lockfiles are generated; keep them out of diffs and merges.
+pnpm-lock.yaml  -diff linguist-generated
+Cargo.lock      -diff linguist-generated

@@ -46,3 +46,7 @@ artifacts/
 .env
 .env.*
 !.env.example
+
+# Working record from scripts/migrate-trusted-publishers.sh
+trusted-publishers-before.tsv
+trusted-publishers-done.txt

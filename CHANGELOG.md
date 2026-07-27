@@ -12,6 +12,30 @@ were living in that gap.
 
 ### Remote workspaces (`@vibecook/mille-truffle`, new, unpublished)
 
+- **A client can connect, survive a disconnect, and reconnect.**
+  `connectMille(mesh, { peer, exportId })` dials, runs the open handshake, and
+  returns a `RemoteFileExplorer` that owns one live session and swaps it
+  underneath the caller on reconnect — so a dropped connection does not
+  invalidate the reference an application is holding.
+  Two behaviours are load-bearing. A dropped connection leaves the last mirror
+  snapshot readable through `getSnapshot()`, because the user was looking at
+  something and a stale tree beats a blank one; `remote.explorer` still throws
+  while offline, so new work fails fast rather than hanging. And queued
+  mutations are never replayed — a write that never returned a result frame
+  did not happen, and re-issuing it after a gap could duplicate a rename or
+  clobber a file changed in the interim.
+  Backoff is exponential with symmetric jitter, clamped so a large jitter
+  cannot push a retry past the ceiling. `ACCESS_DENIED`, `PROTOCOL_MISMATCH`
+  and `LIMIT_EXCEEDED` are terminal and never retried: the answer will not
+  change, and a client redialling a denial looks like a brute-force attempt to
+  whoever reads the server log. Reconnecting to a _replaced_ host emits
+  `identityReset`, since every `EntryId` the caller holds then refers to
+  nothing — or worse, to something else.
+  Verified across a real tailnet end to end with both public APIs: connect,
+  browse, mutate, a read-only export refusing writes with `EROFS`, read-write
+  on a read-only export refused outright, then the server killed and replaced
+  mid-session — `stale → reconnecting → online`, one `identityReset`, tree
+  usable again. Thirteen checks.
 - **A mille workspace can now be served to another tailnet device.**
   `serveMille(mesh, { exports })` binds a Truffle `mesh.net` listener, runs the
   open handshake, authorizes the peer, and attaches the accepted socket to a

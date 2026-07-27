@@ -1,10 +1,9 @@
 # @vibecook/mille-truffle
 
 Serve a [mille](https://www.npmjs.com/package/@vibecook/mille) workspace to another
-device on your tailnet, over [Truffle](https://github.com/jamesyong-42/truffle).
+device on your tailnet, over [Truffle](https://github.com/vibecook-dev/truffle).
 
-> **Experimental.** The server half is implemented; `connectMille` and the
-> reconnect facade are not. Not yet published.
+> **Experimental.** Server and client are both implemented. Not yet published.
 
 ## What it does
 
@@ -37,6 +36,33 @@ const server = await serveMille(mesh, {
 ```
 
 The mesh node is **borrowed**. Closing the server never stops it.
+
+### Connecting
+
+```ts
+import { connectMille } from '@vibecook/mille-truffle';
+
+const remote = await connectMille(mesh, {
+  peer,
+  exportId: 'mille',
+  access: 'read-write',
+  reconnect: {},
+});
+
+const rows = remote.explorer.getSnapshot().visibleRows({ offset: 0, limit: 50, expanded });
+```
+
+`remote.explorer` is the live session and throws when offline.
+`remote.getSnapshot()` does not — it keeps returning the last tree while the
+connection is gone, because a stale tree beats a blank one.
+
+Mutations are **never replayed** across a reconnect. A write that did not
+return a result frame did not happen; re-issuing it could duplicate a rename
+or clobber a file changed in the interim.
+
+Listen for `identityReset` if you persist `EntryId`s. It fires when the peer
+comes back to a *different* host instance, which means every id you hold now
+means nothing — resolve paths again instead.
 
 ## Security
 

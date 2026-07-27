@@ -1,12 +1,26 @@
 // @vibecook/mille-truffle — serve a mille workspace over a tailnet.
 //
-// The server half (PR 4). `connectMille` and the reconnect facade land in
-// PR 5; nothing here assumes they exist.
-//
 // Node-only: it builds framed stream channels over `mesh.net` sockets.
 
 export { serveMille } from './server.js';
 export type { MeshLike, MeshNetLike, MeshServerLike, TruffleSocketLike } from './server.js';
+
+export { connectMille } from './client.js';
+export type {
+  ConnectMilleOptions,
+  MeshConnectLike,
+  RemoteConnectionEvent,
+  RemoteFileExplorer,
+  RemoteIdentityResetEvent,
+} from './client.js';
+
+export { DEFAULT_RECONNECT, backoffDelay, resolveReconnect, shouldRetry } from './state.js';
+export type {
+  ReconnectOptions,
+  RemoteConnectionState,
+  ResolvedReconnect,
+  RetryDecision,
+} from './state.js';
 
 export { RemoteExplorerError, isRemoteExplorerError } from './errors.js';
 export type { RemoteExplorerErrorCode } from './errors.js';

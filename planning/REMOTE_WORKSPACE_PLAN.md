@@ -183,14 +183,13 @@ Verified against the current Mille tree:
   `Uint8Array.from`; `:526` does `Array.from(data)`.
 - **Spec §12.2's `Session` sketch is incomplete** — the real one also carries `lastRootIds`,
   `ackedVersion`, `ackCapable`. Preserve them.
-- **Repository metadata is stale, and one entry is dead.** The git remote is
-  `vibecook-dev/mille`, so the spec's target is the correct one. Both package manifests, the README
-  badge, and the docs links still say `jamesyong-42/mille` — those still resolve, because GitHub
-  keeps a redirect after a transfer, so nothing is broken today. They stop resolving the moment
-  anyone re-creates that name, which is a cheap thing to not be exposed to.
-  `Cargo.toml:14` is the real one: `https://github.com/jamesyong/file-explorer` 404s. It is only
-  crate metadata (the crates are unpublished), so nothing consumes it yet — but it would ship the
-  first time one is published.
+- **Repository references — fixed 2026-07-26.** After the transfer to `vibecook-dev`, seventeen
+  files still pointed at `jamesyong-42/mille`, plus a `Cargo.toml` entry naming a repository that
+  never moved (`jamesyong/file-explorer`). An earlier note here claimed the stale references still
+  resolved via GitHub's post-transfer redirect. That is true of `github.com` repo URLs and **not**
+  of GitHub Pages: `jamesyong-42.github.io/mille` returned 404 while `vibecook-dev.github.io/mille`
+  returned 200, so the README's documentation links were simply broken. All references now point at
+  `vibecook-dev`, matching what Truffle did for itself in `c73837e`.
 - **`8628354` helps** — mutation sync points are now genuinely acknowledged rather than
   `setImmediate`-timed, which §18.3 and §20.1 both lean on.
 

@@ -11,7 +11,7 @@ version = "0.3.0"
 edition = "2021"
 rust-version = "1.85"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/jamesyong/file-explorer"
+repository = "https://github.com/vibecook-dev/mille"
 
 [workspace.dependencies]
 # NAPI bindings (3.x as of 2026-04)

@@ -285,6 +285,7 @@ test('reconnect re-opens and keeps the same workspace instance', async () => {
       peer: 'fake',
       exportId: 'work',
       reconnect: { minDelayMs: 20, maxDelayMs: 60, jitter: 0 },
+      openTimeoutMs: 500,
     });
     const first = remote.workspaceInstanceId;
 
@@ -322,6 +323,13 @@ test('a replaced host emits identityReset so stale EntryIds are not trusted', as
       peer: 'fake',
       exportId: 'work',
       reconnect: { minDelayMs: 30, maxDelayMs: 80, jitter: 0 },
+      // There is a window below where the old server is gone and the
+      // replacement is not up yet. A reconnect landing in it gets a socket
+      // nobody accepts, and the default open deadline is 15 s (SPEC §13.5) —
+      // long enough to outlast this test's wait on a loaded runner, which is
+      // how it failed on Windows CI while passing locally. Fail an
+      // unanswered attempt fast so backoff can try again.
+      openTimeoutMs: 500,
     });
     const first = remote.workspaceInstanceId;
 
@@ -335,7 +343,7 @@ test('a replaced host emits identityReset so stale EntryIds are not trusted', as
       exports: { work: { label: 'Work', roots: [dir], access: 'read-only' } },
     });
 
-    const backBy = Date.now() + 10_000;
+    const backBy = Date.now() + 25_000;
     while (remote.state !== 'online' && Date.now() < backBy) {
       await new Promise((r) => setTimeout(r, 25));
     }

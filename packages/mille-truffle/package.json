@@ -18,14 +18,20 @@
       "import": "./dist/index.js"
     }
   },
-  "files": ["dist", "README.md"],
+  "files": [
+    "dist",
+    "README.md",
+    "ACCEPTANCE.md",
+    "acceptance"
+  ],
   "engines": {
     "node": ">=20"
   },
   "scripts": {
     "build": "tsc --build",
     "typecheck": "tsc --noEmit",
-    "test": "node ../../scripts/run-tests.mjs"
+    "test": "node ../../scripts/run-tests.mjs",
+    "acceptance": "node acceptance/tailnet-acceptance.mjs"
   },
   "peerDependencies": {
     "@vibecook/mille": "workspace:*",

@@ -102,6 +102,16 @@ Other properties worth knowing:
 - Roots are canonicalized once at startup. Clients name an export, never a
   path.
 
+## Acceptance
+
+The tailnet acceptance procedure, the coverage map for `AC-001`…`AC-012`, and
+the MessagePort regression check live in [ACCEPTANCE.md](./ACCEPTANCE.md).
+
+```bash
+# one machine, two ephemeral nodes (does not satisfy AC-002)
+pnpm --filter @vibecook/mille-truffle acceptance -- --role=both
+```
+
 ## Operational notes
 
 - **The heartbeat is load-bearing.** Truffle's sidecar reaps bridged

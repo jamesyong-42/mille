@@ -68,6 +68,32 @@ were living in that gap.
 
 ### Engine (`@vibecook/mille`)
 
+- **A restricted session could read outside the workspace through a symlink or
+  junction** — and a read-only remote session on an export explicitly
+  configured `followSymlinks: false` was the exact case that leaked. The
+  walker honours that setting: it listed a junction as a symlink entry and
+  never descended it. `resolvePath` did not. It resolves through the operating
+  system and hydrates whatever it finds, inserting the target as a child of
+  the link, so the entry ended up structurally inside the tree and physically
+  outside it — after which `readFile` served the real file. Two subsystems,
+  each correct on its own, disagreeing about what "do not follow symlinks"
+  means. Reproduced with a Windows junction, which needs no elevation to
+  create: `resolvePath('escape-link/secret.txt')` returned an id and reading
+  it returned the contents of a file outside the export.
+  Path resolution now refuses to cross a symlink for any session that is not
+  local-admin. `resolvePath` and `findVisiblePrefix` return `null` — the same
+  answer as "does not exist", so the boundary cannot be probed — and
+  id-bearing mutations reject with `EACCES`, checking every id argument
+  because a move names two and because an id is just a number on the wire that
+  could arrive from a guess or from an entry another session hydrated into the
+  shared store. Seeing a link is still fine; traversing through one is not.
+  Admin sessions are deliberately exempt: they already hold the raw explorer
+  through `host.local` and can read anything the process can.
+  Worth recording how this surfaced. The test skipped on Windows at first,
+  because directory symlinks need Developer Mode — the same
+  building-but-never-running shape the Windows readiness work existed to fix.
+  Falling back to a junction, which AC-008 names explicitly and which requires
+  no privilege, made it run and fail immediately.
 - **`ExplorerSessionContext` accepts explicit `undefined`** — its optional
   fields were declared `?:` without `| undefined`, which under
   `exactOptionalPropertyTypes` is not the same thing. Every real caller builds

@@ -117,6 +117,41 @@ function requestedOperationId(args: Record<string, unknown>): string | null {
   return typeof id === 'string' && id.length > 0 ? id : null;
 }
 
+/** `EntryKind.Symlink` — mirrors api.d.ts. Windows junctions land here too. */
+const ENTRY_KIND_SYMLINK = 2;
+
+/**
+ * Does reaching `id` require crossing a symlink or junction?
+ *
+ * `followSymlinks: false` is honoured by the *walker*, which never descends a
+ * reparse point — but `resolvePath` resolves through the filesystem and
+ * hydrates whatever it finds, inserting the target as a child of the link.
+ * The result is an entry that is structurally inside the tree and physically
+ * outside it, and a subsequent `readFile` serves the real file.
+ *
+ * Found by the AC-008 junction test: a read-only remote session on an export
+ * with `followSymlinks: false` could resolve `escape-link/secret.txt` and read
+ * a file outside the export root. SPEC §17.2 requires that reparse points are
+ * not followed on a remote export, and SEC-002 requires roots be inaccessible
+ * "through traversal or alternate path spelling".
+ *
+ * The link itself is fine to see — listing a symlink discloses nothing. What
+ * must not happen is traversing *through* one, so only strict ancestors are
+ * examined.
+ */
+function crossesSymlink(snapshot: MirrorSnapshot, id: EntryId): boolean {
+  let cursor = snapshot.getById(id)?.parentId ?? null;
+  let guard = 0;
+  while (cursor !== null && guard < 1024) {
+    const entry = snapshot.getById(cursor);
+    if (entry === null) return false;
+    if (entry.kind === ENTRY_KIND_SYMLINK) return true;
+    cursor = entry.parentId ?? null;
+    guard += 1;
+  }
+  return false;
+}
+
 /** Native store order is authoritative for viewport and structural metadata. */
 function sortedChildIds(snap: MirrorSnapshot, parentId: number): number[] {
   return [...snap.projectedChildrenOf(parentId)];
@@ -1181,6 +1216,13 @@ class FileExplorerHostImpl implements FileExplorerHost {
           if (!verdict.allowed) {
             throw new FileSystemError(verdict.code, verdict.message);
           }
+          // Defence in depth for the §17.2 boundary. `resolvePath` no longer
+          // hands a restricted session an id beyond a symlink, but ids are
+          // just numbers on the wire: one could arrive from a guess, or from
+          // an entry another session hydrated into the shared store. Refuse
+          // to act on it here too, rather than trusting that the only way to
+          // learn an id is the one we closed.
+          this.assertWithinBoundary(session, body.args);
           // SPEC §16.3 — claim the operation id. The mutation queue
           // serializes every session's mutations, so "check then claim" is
           // atomic here by construction rather than by locking.
@@ -1221,6 +1263,24 @@ class FileExplorerHostImpl implements FileExplorerHost {
         // eslint-disable-next-line no-console
         console.error('[mille] mutation queue error:', e);
       });
+  }
+
+  /**
+   * Refuse an operation whose target lies beyond a symlink or junction.
+   *
+   * Applies to every id-bearing argument, because a move or copy names two.
+   * Admin sessions are exempt — see `crossesSymlink`.
+   */
+  private assertWithinBoundary(session: Session, args: Record<string, unknown>): void {
+    if (session.context.policy.access === 'admin') return;
+    const snapshot = this.explorer.getSnapshot();
+    for (const key of ['id', 'parentId', 'newParentId'] as const) {
+      const value = args[key];
+      if (typeof value !== 'number') continue;
+      if (crossesSymlink(snapshot, value as EntryId)) {
+        throw new FileSystemError('EACCES', 'target is outside the workspace boundary');
+      }
+    }
   }
 
   /** The live session that owns `operationId`, if any. */
@@ -1577,6 +1637,22 @@ class FileExplorerHostImpl implements FileExplorerHost {
         const id = await this.explorer.resolvePath(path);
         if (id === null) return null;
 
+        // SPEC §17.2 / SEC-002 — a session under a restrictive policy must not
+        // reach outside the configured roots by naming a path that traverses a
+        // symlink or junction. Returning null rather than an error also keeps
+        // "outside the export" indistinguishable from "does not exist", so a
+        // remote peer cannot probe the filesystem beyond its boundary.
+        //
+        // Admin (in-process) sessions are exempt: they already hold the raw
+        // explorer via `host.local` and can read anything the process can, so
+        // gating them would break existing local consumers for no gain.
+        if (
+          session.context.policy.access !== 'admin' &&
+          crossesSymlink(this.explorer.getSnapshot(), id)
+        ) {
+          return null;
+        }
+
         // Return only the target-to-root records. This makes lazy path reveal
         // immediately usable by the renderer without shipping a full tree or
         // pretending that a partial path is an authoritative child listing.
@@ -1607,6 +1683,15 @@ class FileExplorerHostImpl implements FileExplorerHost {
           .getSnapshot()
           .visiblePrefixMatch(prefix, fromId, skipCurrent, new Set(expanded as EntryId[]));
         if (id === null) return null;
+        // Same boundary as resolvePath: a typeahead match must not be the way
+        // a restricted session learns about an entry beyond a symlink that
+        // some other session hydrated into the shared store.
+        if (
+          session.context.policy.access !== 'admin' &&
+          crossesSymlink(this.explorer.getSnapshot(), id)
+        ) {
+          return null;
+        }
         const snapshot = this.explorer.getSnapshot();
         const entries: ClientEntry[] = [];
         let cursor: EntryId | null = id;

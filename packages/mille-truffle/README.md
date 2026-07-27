@@ -3,7 +3,8 @@
 Serve a [mille](https://www.npmjs.com/package/@vibecook/mille) workspace to another
 device on your tailnet, over [Truffle](https://github.com/vibecook-dev/truffle).
 
-> **Experimental.** Server and client are both implemented. Not yet published.
+> **Experimental.** Server and client are both implemented. Not yet published —
+> the package is `private: true` on purpose, see [Publishing](#publishing).
 
 ## What it does
 
@@ -102,6 +103,16 @@ Other properties worth knowing:
 - Roots are canonicalized once at startup. Clients name an export, never a
   path.
 
+## Acceptance
+
+The tailnet acceptance procedure, the coverage map for `AC-001`…`AC-012`, and
+the MessagePort regression check live in [ACCEPTANCE.md](./ACCEPTANCE.md).
+
+```bash
+# one machine, two ephemeral nodes (does not satisfy AC-002)
+pnpm --filter @vibecook/mille-truffle acceptance -- --role=both
+```
+
 ## Operational notes
 
 - **The heartbeat is load-bearing.** Truffle's sidecar reaps bridged
@@ -115,3 +126,29 @@ Other properties worth knowing:
   session, so a reconnect within the lease keeps the same `EntryId`s.
 - Served exports default to `initialWalk: 'roots-only'` — roots are seeded and
   children arrive on expand, which is the right shape for a large remote tree.
+
+## Publishing
+
+The package is marked `private: true`, which keeps `pnpm -r publish` from
+picking it up during a tagged release. That is deliberate, not an oversight.
+
+`@vibecook/mille-truffle` does not exist on npm yet, and the release workflow
+publishes through **npm Trusted Publishing (OIDC)** with no token. Trusted
+Publishing can only be configured on a package that already exists, so the
+first publish has to be a manual one — see the note at the top of
+`.github/workflows/release.yml`. Flipping `private` before that happens would
+make the next tagged release attempt an OIDC publish for a package with no
+Trusted Publisher, and `pnpm -r publish` failing on one package takes the whole
+job with it, including `@vibecook/mille` and `@vibecook/mille-ui`.
+
+To ship it:
+
+1. Publish once by hand (`npm publish --access public` from `packages/mille-truffle`,
+   or extend `scripts/bootstrap-npm-publish.sh`, which currently covers only
+   `mille`, `mille-ui` and the platform packages).
+2. Add a Trusted Publisher on npmjs.com — org `vibecook-dev`, repo `mille`,
+   workflow `release.yml`, allowed action `npm publish`.
+3. Set `private: false` and confirm `pnpm -r publish --dry-run` lists it.
+
+Until then the two-device acceptance in [ACCEPTANCE.md](./ACCEPTANCE.md) is the
+remaining gate — `AC-002` cannot be discharged on one machine.

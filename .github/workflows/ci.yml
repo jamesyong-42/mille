@@ -21,7 +21,7 @@ jobs:
   # ------------------------------------------------------------------
   test-rust:
     name: Rust lints & tests
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -49,7 +49,7 @@ jobs:
   # ------------------------------------------------------------------
   test-js:
     name: JS typecheck & tests
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -209,7 +209,7 @@ jobs:
   # calibrated against the debug binary, and re-basing them is separate work.
   test-release-profile:
     name: Release-profile tests
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -299,7 +299,7 @@ jobs:
   # a timeout burns the default 6h budget instead of reporting.
   test-windows:
     name: Windows tests
-    runs-on: blacksmith-4vcpu-windows-2025
+    runs-on: windows-latest
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4

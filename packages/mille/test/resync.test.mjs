@@ -305,7 +305,7 @@ test('a never-acking client does not slow every subsequent mutation', async () =
   // Mutations are an acknowledged synchronization point, which means one
   // client that never replies could charge the fallback timeout to *every*
   // rename — measured at ~1s each before the host learned to stop waiting on
-  // it. The first mutation may still pay the probe; the rest must not.
+  // it. One mutation may still pay the probe; the others must not.
   const { frame, PROTOCOL_VERSION } = await import('../dist/protocol.js');
   const { sandbox, root } = fixture();
   for (let i = 0; i < 4; i += 1) writeFileSync(join(root, `mut${i}.txt`), 'x');
@@ -347,15 +347,22 @@ test('a never-acking client does not slow every subsequent mutation', async () =
       durations.push(Date.now() - started);
     }
 
-    // Everything after the first must be fast. Generous bound: the failure
-    // mode is a full 1000 ms fallback, so anything near it is unambiguous.
-    const afterFirst = durations.slice(1);
-    for (const [i, ms] of afterFirst.entries()) {
-      assert.ok(
-        ms < 300,
-        `mutation ${i + 2} took ${ms} ms — host is still waiting on the silent client (all: ${durations.join(', ')})`,
-      );
-    }
+    // The fallback must be paid at most once, but *which* mutation pays it is
+    // a race and must not be asserted. The silent client's handshake is posted
+    // asynchronously and nothing waits for it, so if it has not been processed
+    // before the first rename, that rename does not wait on the silent client
+    // and the next one pays instead. A loaded Windows runner produced
+    // `8, 1015, 3, 6` — one payment, correctly, just not on the mutation this
+    // assertion used to name.
+    //
+    // Generous bound: the failure mode is a full 1000 ms fallback, so anything
+    // near it is unambiguous.
+    const slow = durations.filter((ms) => ms >= 300);
+    assert.ok(
+      slow.length <= 1,
+      `${slow.length} mutations paid the fallback — host is still waiting on the ` +
+        `silent client (all: ${durations.join(', ')})`,
+    );
   } finally {
     await client.dispose();
     mute.port2.close();

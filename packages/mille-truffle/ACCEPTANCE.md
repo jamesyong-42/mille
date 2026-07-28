@@ -99,6 +99,26 @@ Then Ctrl-C the server.
 `--peer` accepts anything Truffle resolves: device name, device id, a ≥4-char
 id prefix, or the `100.x` address.
 
+### Run it from a console session, not over SSH
+
+On Windows the client must be started from an interactive session — physical
+console or RDP. Over SSH it dies before touching the network:
+
+```
+tsnet: NewLocalBackend: syspolicy: LocalBacked failed to register policy
+change callback: failed to get a store reader: Access is denied.
+```
+
+This is not a UAC problem and elevating does not help: the failing session was
+already `High Mandatory Level` with `BUILTIN\Administrators` enabled. What
+differs is the logon type — an SSH session carries `NT AUTHORITY\NETWORK`, and
+embedded tsnet cannot open the policy store under it on a host that is also
+running the real Tailscale service. The same command, same machine, same user,
+succeeds from the console.
+
+Measured 2026-07-27: identical invocation failed over SSH and passed 7/7 from
+the console.
+
 ### What the two-device run cannot check
 
 `AC-004` and `AC-005`/`AC-006` need the *server's* filesystem touched and the
@@ -162,3 +182,26 @@ runs, worst delta **+2.0%** against the 5% budget.
 
 Keep the JSON report with the release notes. It carries the run's role, Node
 version, platform, per-criterion outcomes, and the `satisfiesAC002` flag.
+
+## Result, 2026-07-27
+
+First genuine two-device run. Server on macOS arm64, client on Windows x64
+(Node 24.14.1), each with its own ephemeral tsnet node on a real tailnet.
+**7/7**, connect in 52 ms. AC-004/005/006 reported `SKIP` as designed and are
+covered by a `--role=both` run the same day, **14/14**.
+
+The run also earned its keep by finding two defects that a one-machine run
+cannot surface:
+
+- **AC-007 raced the tailnet route.** It is the client's first action, so on a
+  real link both dials failed in transport before reaching the server — which
+  logged no `open_requested` at all — and the report blamed authorization for
+  a refusal that never happened. The dials now retry through `TRANSPORT_ERROR`
+  and say `inconclusive` if they still never land. Once through, the server
+  refused `acceptance-locked` with `not on the export allow-list` and
+  `no-such-export-at-all` with `no such export`, while the client saw one
+  identical `access denied` for both — SEC-006 demonstrated rather than
+  assumed.
+- **`satisfiesAC002` ignored outcomes.** It was `role !== 'both'`, so a client
+  that failed to start its node still stamped the criterion met. It is now
+  gated on every check passing.

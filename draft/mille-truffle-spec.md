@@ -5,7 +5,7 @@ Implementation-Ready Specification
 • Status: Proposed
 • Spec version: 1.0
 • Date: July 25, 2026
-• Target repositories: vibecook-dev/mille, jamesyong-42/truffle
+• Target repositories: vibecook-dev/mille, vibecook-dev/truffle
 • Primary transport: Truffle TCP over Tailscale
 
 > This document is normative for the Phase 1 implementation unless a section is explicitly marked Future Work or Non-Normative.
@@ -1622,9 +1622,9 @@ The implementation should re-check repository heads before coding. This specific
 |Mille host           |https://github.com/vibecook-dev/mille/blob/main/packages/mille/src/host.ts       |Concrete session, mutation, tick, warning, and call dispatch behavior.|
 |Mille client         |https://github.com/vibecook-dev/mille/blob/main/packages/mille/src/client-port.ts|PortFileExplorer mirror/RPC behavior.                                 |
 |Mille protocol       |https://github.com/vibecook-dev/mille/blob/main/packages/mille/src/protocol.ts   |Semantic frame shapes and binary buffers.                             |
-|Truffle repository   |https://github.com/jamesyong-42/truffle                                          |Tailscale-native networking and package architecture.                 |
-|Truffle TCP API      |https://github.com/jamesyong-42/truffle/blob/main/packages/core/src/net.ts       |Node Duplex sockets, server/connect APIs, peer identity.              |
-|Truffle QUIC API     |https://github.com/jamesyong-42/truffle/blob/main/packages/core/src/quic.ts      |Independent ordered streams for future content multiplexing.          |
+|Truffle repository   |https://github.com/vibecook-dev/truffle                                          |Tailscale-native networking and package architecture.                 |
+|Truffle TCP API      |https://github.com/vibecook-dev/truffle/blob/main/packages/core/src/net.ts       |Node Duplex sockets, server/connect APIs, peer identity.              |
+|Truffle QUIC API     |https://github.com/vibecook-dev/truffle/blob/main/packages/core/src/quic.ts      |Independent ordered streams for future content multiplexing.          |
 |Tailscale grants     |https://tailscale.com/docs/features/access-control/grants                        |Port/protocol/device access-control model.                            |
 
 Repository snapshots observed during analysis: Mille head 5f2852e6e9bdee482ac98215bd29b18151c52c93; Truffle head 09367f6ced4c0030ce1ca42c3ab762923e7529f3 / release line v0.7.6. Treat these hashes as provenance, not as permanent compatibility requirements.

@@ -161,24 +161,37 @@ async function startServer(mesh, dir) {
 
 async function runClientChecks(mesh, peer, { dir, outside } = {}) {
   // AC-007 — a forbidden export and a nonexistent one must look identical.
-  const forbidden = await connectMille(mesh, {
-    peer,
-    port,
-    exportId: `${exportId}-locked`,
-    reconnect: false,
-  }).then(
-    (r) => ({ err: null, remote: r }),
-    (err) => ({ err, remote: null }),
-  );
-  const ghost = await connectMille(mesh, {
-    peer,
-    port,
-    exportId: 'no-such-export-at-all',
-    reconnect: false,
-  }).then(
-    (r) => ({ err: null, remote: r }),
-    (err) => ({ err, remote: null }),
-  );
+  //
+  // These are the first dials of the run, and on a real tailnet the route to
+  // the peer is not necessarily usable yet: the netmap has to arrive and a
+  // path has to be established. A dial that never reaches the server fails
+  // with TRANSPORT_ERROR before any open request is sent — which is not an
+  // authorization result, and must not be reported as one. Retry through it.
+  //
+  // Loopback establishes instantly and so never sees this; a two-device run
+  // on 2026-07-27 did, reporting `forbidden=TRANSPORT_ERROR
+  // ghost=TRANSPORT_ERROR` for a server that had in fact refused nothing
+  // because it was never contacted.
+  const openExpectingRefusal = async (wantedExport) => {
+    let outcome;
+    for (let attempt = 1; attempt <= 5; attempt += 1) {
+      outcome = await connectMille(mesh, {
+        peer,
+        port,
+        exportId: wantedExport,
+        reconnect: false,
+      }).then(
+        (r) => ({ err: null, remote: r }),
+        (err) => ({ err, remote: null }),
+      );
+      if (outcome.remote || outcome.err?.code !== 'TRANSPORT_ERROR') return outcome;
+      await new Promise((r) => setTimeout(r, attempt * 500));
+    }
+    return outcome;
+  };
+
+  const forbidden = await openExpectingRefusal(`${exportId}-locked`);
+  const ghost = await openExpectingRefusal('no-such-export-at-all');
   if (forbidden.remote) await forbidden.remote.close();
   if (ghost.remote) await ghost.remote.close();
 
@@ -189,6 +202,19 @@ async function runClientChecks(mesh, peer, { dir, outside } = {}) {
       'forbidden and unknown exports are indistinguishable',
       same,
       same ? forbidden.err.message : `"${forbidden.err.message}" vs "${ghost.err.message}"`,
+    );
+  } else if (
+    forbidden.err?.code === 'TRANSPORT_ERROR' &&
+    ghost.err?.code === 'TRANSPORT_ERROR'
+  ) {
+    // Both dials died before the server saw them, so this run tested nothing
+    // about authorization. Say that, rather than implying the refusal path is
+    // broken — the server logs no open_requested at all in this case.
+    bad(
+      'AC-007',
+      'unauthorized open refused',
+      'inconclusive: both dials failed with TRANSPORT_ERROR and never reached the server ' +
+        '(transport problem, not an authorization result)',
     );
   } else {
     bad('AC-007', 'unauthorized open refused', `forbidden=${forbidden.err?.code} ghost=${ghost.err?.code}`);
@@ -457,8 +483,12 @@ if (jsonPath !== '') {
         node: process.version,
         platform: `${process.platform}-${process.arch}`,
         // A one-machine run cannot speak for AC-002; say so in the artifact
-        // rather than letting a green report imply otherwise.
-        satisfiesAC002: role !== 'both',
+        // rather than letting a green report imply otherwise. Neither can a
+        // run that did not actually pass: a client which failed to start its
+        // node verified nothing, and stamping the criterion met on that
+        // artifact is the exact confusion this flag exists to prevent.
+        satisfiesAC002:
+          role !== 'both' && checks.length > 0 && checks.every((c) => c.passed),
         checks,
       },
       null,

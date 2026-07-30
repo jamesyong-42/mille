@@ -12,13 +12,20 @@ name: Release
 #   Allowed actions:   npm publish
 
 on:
+  # Kept as the manual escape hatch. Note that a tag pushed by release-please
+  # does NOT arrive here — GITHUB_TOKEN-created tags don't trigger workflows —
+  # which is why release-please.yml dispatches this workflow explicitly.
   push:
     tags:
       - "v*"
   workflow_dispatch:
     inputs:
+      publish:
+        description: "Publish to npm. Off by default so a dispatch can exercise the 8-target build without touching the registry."
+        type: boolean
+        default: false
       dry_run:
-        description: "Skip actual npm publish (pnpm publish --dry-run)"
+        description: "Run `pnpm publish --dry-run` instead of publishing (implies no registry writes)"
         type: boolean
         default: false
 
@@ -234,6 +241,56 @@ jobs:
           pnpm --filter @vibecook/mille run build:ts
           pnpm --filter @vibecook/mille-ui run build
 
+      # A tag push is an explicit act of release, so it publishes on its own.
+      # A dispatch must opt in via `publish=true` (release-please.yml passes
+      # it) — otherwise this workflow is a build-and-stamp rehearsal.
+      - name: Decide whether to publish
+        id: gate
+        env:
+          EVENT: ${{ github.event_name }}
+          PUBLISH_INPUT: ${{ inputs.publish }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          if [ "${DRY_RUN}" = "true" ]; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "Dry run requested — nothing will be published."
+          elif [ "${EVENT}" = "push" ] || [ "${PUBLISH_INPUT}" = "true" ]; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "Dispatch without publish=true — build only."
+          fi
+
+      # The tag and the versions in the tree must agree, or we publish one
+      # version's code under another version's number. Cheap to check, and the
+      # failure it prevents is unfixable after the fact: npm forbids reusing a
+      # version, so a wrong publish burns that number permanently.
+      - name: Verify tag matches package versions
+        if: ${{ steps.gate.outputs.publish == 'true' && startsWith(github.ref, 'refs/tags/') }}
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          PKG="v$(node -p "require('./packages/mille/package.json').version")"
+          if [ "$TAG" != "$PKG" ]; then
+            echo "::error::tag ${TAG} does not match packages/mille/package.json (${PKG}). Refusing to publish."
+            exit 1
+          fi
+          # Lock-step is the whole point: one straggler ships a version nobody
+          # can install alongside the rest.
+          for f in packages/mille-ui/package.json packages/mille-*/package.json; do
+            node -e "
+              const fs=require('fs');
+              const p=JSON.parse(fs.readFileSync('$f','utf8'));
+              if (p.private) process.exit(0);
+              if ('v'+p.version !== '$TAG') {
+                console.error('::error::$f is ' + p.version + ', expected ${TAG#v}');
+                process.exit(1);
+              }
+            "
+          done
+          echo "All published packages agree on ${TAG}."
+
       - name: Publish (dry-run)
         if: ${{ inputs.dry_run == true }}
         run: pnpm -r publish --access public --no-git-checks --dry-run
@@ -242,5 +299,5 @@ jobs:
       # short-lived publish token. No NODE_AUTH_TOKEN / NPM_TOKEN needed once
       # each package has a Trusted Publisher for release.yml.
       - name: Publish
-        if: ${{ inputs.dry_run != true }}
+        if: ${{ steps.gate.outputs.publish == 'true' }}
         run: pnpm -r publish --access public --no-git-checks

@@ -22,7 +22,7 @@ import { removeTempDir } from '../../../scripts/test-temp.mjs';
 import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
 import { execSync, spawnSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync, statSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, statSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 
@@ -54,6 +54,30 @@ function runGit(cwd, args) {
     throw new Error(`git ${args.join(' ')} failed: ${r.stderr}`);
   }
   return r.stdout;
+}
+
+/**
+ * Reduce a path to a form that survives comparison against one git
+ * printed. Two equivalent paths can differ textually in three ways
+ * that have nothing to do with what's being tested:
+ *
+ *   - macOS `os.tmpdir()` is `/var/...`, a symlink to `/private/var/...`
+ *   - Windows `TMP` is often an 8.3 short name (`RUNNER~1`) while git
+ *     prints the long form
+ *   - Windows drive letters and path case vary by producer
+ *
+ * `realpathSync.native` settles the first two; lowercasing settles the
+ * third, and only on the platform where paths are case-insensitive.
+ */
+function canonicalize(p) {
+  let out = path.resolve(p);
+  try {
+    out = realpathSync.native(out);
+  } catch {
+    // Path may not exist (negative cases) — the resolved form is still
+    // the best comparison we can make.
+  }
+  return process.platform === 'win32' ? out.toLowerCase() : out;
 }
 
 /**
@@ -130,11 +154,9 @@ test(
       const expected = runGit(linked, ['rev-parse', '--absolute-git-dir']).trim();
       const actual = resolveGitDir(dotGit);
 
-      // realpath both: macOS temp dirs are /var -> /private/var symlinks
-      // and git reports the resolved form.
       assert.equal(
-        path.resolve(actual),
-        path.resolve(expected),
+        canonicalize(actual),
+        canonicalize(expected),
         `resolveGitDir returned ${actual}, git says ${expected}`,
       );
     } finally {

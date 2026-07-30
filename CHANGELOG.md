@@ -267,6 +267,30 @@ were living in that gap.
   workspace paths, a symlink fixture that needs Windows Developer Mode, and a
   git fixture that inherited the developer's `core.autocrlf`.
 
+## [0.3.1](https://github.com/vibecook-dev/mille/compare/v0.3.0...v0.3.1) (2026-07-30)
+
+
+### Features
+
+* **host:** carry the explorer protocol over a byte stream ([1b93246](https://github.com/vibecook-dev/mille/commit/1b93246c0079532d19bafab6b1d7a74964d774f5))
+* **host:** give sessions permissions and enforce them host-side ([bcf9c93](https://github.com/vibecook-dev/mille/commit/bcf9c936ab19c0d293e98ade564e60e4ffe4a8e0))
+* **host:** make the host/client transport an interface, not a MessagePort ([b67b5d8](https://github.com/vibecook-dev/mille/commit/b67b5d842fb866510758629e4ee2a540d835c74d))
+* **truffle:** add connectMille and the reconnect facade ([34cdb82](https://github.com/vibecook-dev/mille/commit/34cdb8294c056fa386cca620b1ea053bfd5e45aa))
+* **truffle:** serve a mille workspace to another tailnet device ([8f06cbe](https://github.com/vibecook-dev/mille/commit/8f06cbe91ee4594b331b6147bda46814f30e9736))
+
+
+### Bug Fixes
+
+* **binding:** silence the Unix-side dead code the pin split created ([801543b](https://github.com/vibecook-dev/mille/commit/801543b37875d688275132d682e1128462798420))
+* **binding:** stop the undo journal pinning created files open on Windows ([7b276b4](https://github.com/vibecook-dev/mille/commit/7b276b4ef06d4846fc62c767f23e03e40cc5646e))
+* **ci:** untrack the native binaries, and fail the build if they return ([#35](https://github.com/vibecook-dev/mille/issues/35)) ([8356024](https://github.com/vibecook-dev/mille/commit/8356024eac69f02992f283b5e687aee72c5fc175))
+* **core:** map Win32 status codes so a locked file reports EBUSY ([f10a1ee](https://github.com/vibecook-dev/mille/commit/f10a1eee1c299705794e237895c7626a12abc2d8))
+* **core:** report Windows content writes as changes, not degraded renames ([0895952](https://github.com/vibecook-dev/mille/commit/08959520a3ddd8fa313a0579c79c7a0d49865cac))
+* **git:** keep decorations live inside linked worktrees ([#33](https://github.com/vibecook-dev/mille/issues/33)) ([f32c00e](https://github.com/vibecook-dev/mille/commit/f32c00e19fa21697db4f21a6a089ffea273e44bc))
+* **host:** make the documented sync points acknowledged, not timed ([a5352af](https://github.com/vibecook-dev/mille/commit/a5352afb4c98078e279eb78078bef1df5cfa0813))
+* **host:** stop path resolution crossing a symlink out of the workspace ([#30](https://github.com/vibecook-dev/mille/issues/30)) ([e84b3b4](https://github.com/vibecook-dev/mille/commit/e84b3b4b0c003f242fbe3019120ecd1a7766ad1e))
+* **test:** expand the test glob ourselves so pnpm test runs on Windows ([40c5487](https://github.com/vibecook-dev/mille/commit/40c5487bd3d12b1064139c8698022f8735da794d))
+
 ## 0.3.0 — 2026-07-25
 
 Ships Phases 4.4, 5 and 6.1–6.3, and closes a defect that made every prior

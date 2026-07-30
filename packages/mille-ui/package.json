@@ -1,6 +1,6 @@
 {
   "name": "@vibecook/mille-ui",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "React file-tree UI companion to @vibecook/mille. Virtualized, accessible, VS Code File Icon Theme compatible.",
   "license": "MIT",
   "type": "module",
@@ -125,7 +125,7 @@
   },
   "size-limit": [
     {
-      "name": "headless (SPEC \u00a712 target; 15 KB ratchet after Phase-5 enablement on registry)",
+      "name": "headless (SPEC §12 target; 15 KB ratchet after Phase-5 enablement on registry)",
       "path": "dist/headless.js",
       "limit": "15 KB",
       "gzip": true,
@@ -140,7 +140,7 @@
       ]
     },
     {
-      "name": "index (SPEC \u00a712 target 45 KB, limit 75 KB)",
+      "name": "index (SPEC §12 target 45 KB, limit 75 KB)",
       "path": "dist/index.js",
       "limit": "75 KB",
       "gzip": true,

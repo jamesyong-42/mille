@@ -1,0 +1,91 @@
+name: Release Please
+
+# Version bumps, changelog, tag and GitHub release — driven by Conventional
+# Commits. This workflow does NOT publish. It maintains a release PR; merging
+# that PR cuts the tag and hands off to `release.yml`, which owns npm.
+#
+# Why the handoff instead of one workflow:
+#
+#   npm Trusted Publishing binds each package's publisher to a *workflow
+#   filename* — `release.yml` for all ten of ours (see that file's header).
+#   Moving the publish step into this file would satisfy every local check and
+#   then fail at the registry, on a real release, with the tag already cut.
+#   `release.yml` therefore stays the only thing that publishes.
+#
+# Why the explicit dispatch instead of letting the tag trigger `release.yml`:
+#
+#   `release.yml` listens on `push: tags: v*`, but a tag pushed by
+#   GITHUB_TOKEN does not trigger workflows — GitHub suppresses that to stop
+#   recursive runs. So the tag would appear, the GitHub release would appear,
+#   and npm would silently get nothing. Dispatching by hand is the documented
+#   way around it and needs no PAT, which keeps this repo free of long-lived
+#   secrets (its whole publish story is OIDC).
+
+on:
+  push:
+    branches: [main]
+  # Recover a release whose dispatch failed after the tag was already cut:
+  # re-runs the hand-off for an existing tag without touching versions.
+  workflow_dispatch:
+    inputs:
+      dispatch_tag:
+        description: 'Existing tag to (re-)hand off to release.yml, e.g. v0.4.0'
+        type: string
+        required: true
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write # needed to dispatch release.yml
+
+concurrency:
+  group: release-please-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+      - id: release
+        if: github.event_name == 'push'
+        uses: googleapis/release-please-action@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # Two ways in: release-please just cut a tag, or a human passed one to
+      # re-run a hand-off that failed. Both end at the same dispatch.
+      - name: Resolve the tag to publish
+        id: resolve
+        env:
+          CREATED: ${{ steps.release.outputs.release_created }}
+          RP_TAG: ${{ steps.release.outputs.tag_name }}
+          MANUAL_TAG: ${{ inputs.dispatch_tag }}
+        run: |
+          set -euo pipefail
+          if [ -n "${MANUAL_TAG}" ]; then
+            echo "tag=${MANUAL_TAG}" >> "$GITHUB_OUTPUT"
+          elif [ "${CREATED}" = "true" ]; then
+            echo "tag=${RP_TAG}" >> "$GITHUB_OUTPUT"
+          else
+            # The ordinary case: a normal merge that only updated the release
+            # PR. Nothing to publish, and that is not a failure.
+            echo "tag=" >> "$GITHUB_OUTPUT"
+            echo "No release cut — release PR updated instead."
+          fi
+
+      - name: Hand off to release.yml
+        if: steps.resolve.outputs.tag != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.resolve.outputs.tag }}
+        run: |
+          set -euo pipefail
+          # `--ref "$TAG"` runs release.yml as it existed at that tag and checks
+          # the tag out, so the binaries and the version they publish under come
+          # from the same commit. `-f publish=true` is REQUIRED: release.yml's
+          # publish step is gated on it so a bare manual dispatch can exercise
+          # the 8-target build without reaching for the registry.
+          gh workflow run release.yml --repo "${{ github.repository }}" --ref "$TAG" -f publish=true
+          echo "Dispatched release.yml for ${TAG}."
+          echo "Publishing runs there — watch it, not this run:" >> "$GITHUB_STEP_SUMMARY"
+          echo "https://github.com/${{ github.repository }}/actions/workflows/release.yml" >> "$GITHUB_STEP_SUMMARY"

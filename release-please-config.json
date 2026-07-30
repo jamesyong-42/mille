@@ -1,0 +1,44 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "packages": {
+    ".": {
+      "release-type": "node",
+      "include-component-in-tag": false,
+
+      "bump-minor-pre-major": true,
+      "bump-patch-for-minor-pre-major": true,
+
+      "extra-files": [
+        { "type": "json", "path": "packages/mille/package.json", "jsonpath": "$.version" },
+        { "type": "json", "path": "packages/mille-ui/package.json", "jsonpath": "$.version" },
+
+        { "type": "json", "path": "packages/mille-darwin-arm64/package.json", "jsonpath": "$.version" },
+        { "type": "json", "path": "packages/mille-darwin-x64/package.json", "jsonpath": "$.version" },
+        { "type": "json", "path": "packages/mille-linux-arm64-gnu/package.json", "jsonpath": "$.version" },
+        { "type": "json", "path": "packages/mille-linux-arm64-musl/package.json", "jsonpath": "$.version" },
+        { "type": "json", "path": "packages/mille-linux-x64-gnu/package.json", "jsonpath": "$.version" },
+        { "type": "json", "path": "packages/mille-linux-x64-musl/package.json", "jsonpath": "$.version" },
+        { "type": "json", "path": "packages/mille-win32-arm64-msvc/package.json", "jsonpath": "$.version" },
+        { "type": "json", "path": "packages/mille-win32-x64-msvc/package.json", "jsonpath": "$.version" },
+
+        { "type": "toml", "path": "Cargo.toml", "jsonpath": "$.workspace.package.version" },
+
+        {
+          "type": "toml",
+          "path": "Cargo.lock",
+          "jsonpath": "$.package[?(@.name.value==='mille-core')].version"
+        },
+        {
+          "type": "toml",
+          "path": "Cargo.lock",
+          "jsonpath": "$.package[?(@.name.value==='mille-binding')].version"
+        },
+        {
+          "type": "toml",
+          "path": "Cargo.lock",
+          "jsonpath": "$.package[?(@.name.value==='mille-bench')].version"
+        }
+      ]
+    }
+  }
+}

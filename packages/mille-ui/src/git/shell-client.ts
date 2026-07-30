@@ -16,7 +16,7 @@
 // https://git-scm.com/docs/git-status#_porcelain_format_version_2
 
 import { spawn as nodeSpawn } from 'node:child_process';
-import { existsSync, statSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import * as path from 'node:path';
 
 import type { GitClient, GitStatusEntry, GitStatusLetter } from './client.js';
@@ -88,26 +88,6 @@ function findDotGit(start: string): string | null {
   return null;
 }
 
-/**
- * Resolve the *gitdir* given a `.git` entry. When `.git` is a
- * directory, that's the gitdir. When it's a file (worktree, submodule),
- * its contents start with `gitdir: <path>`. We only need to watch
- * `HEAD` and `index` — both live in the resolved gitdir.
- */
-function resolveGitDir(dotGit: string): string | null {
-  try {
-    const s = statSync(dotGit);
-    if (s.isDirectory()) return dotGit;
-    // For the file form, we'd need to parse it. v0.2 punts: we fall
-    // back to the `.git` file's directory, which in practice still
-    // covers refresh-on-change for the common workflows (submodule
-    // HEAD changes go through the parent's index). Worktree/submodule
-    // coverage is flagged in the README as deferred.
-    return path.dirname(dotGit);
-  } catch {
-    return null;
-  }
-}
 
 /**
  * Parse a single porcelain-v2 status letter. `.` means unchanged in
@@ -328,8 +308,11 @@ export function createShellGitClient(options: ShellGitClientOptions): GitClient 
   // Locate `.git` once; the watcher is cheap when missing (no-op
   // disposer) and the status call works whether or not we found it
   // (git itself resolves the repo root).
+  //
+  // The entry is handed over as-is: `watchDotGit` owns following the
+  // `gitdir:` redirect that a linked worktree or submodule puts there,
+  // so hosts that call it directly get the same treatment.
   const dotGit = findDotGit(rootPath);
-  const gitDir = dotGit !== null ? resolveGitDir(dotGit) : null;
 
   // onChange listeners. Firings are produced by the .git watcher; we
   // pipe them straight through — the consumer (companion's batcher)
@@ -337,9 +320,9 @@ export function createShellGitClient(options: ShellGitClientOptions): GitClient 
   const listeners = new Set<() => void>();
 
   let watcherDispose: (() => void) | null = null;
-  if (!disableWatcher && gitDir !== null) {
+  if (!disableWatcher && dotGit !== null) {
     watcherDispose = watchDotGit(
-      gitDir,
+      dotGit,
       () => {
         for (const l of [...listeners]) {
           try { l(); } catch { /* swallow — one listener mustn't block others */ }

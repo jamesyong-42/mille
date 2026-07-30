@@ -14,9 +14,12 @@ Git decoration companion for the `mille-ui` file tree. Registers a
   out to the host's `git` binary (Phase B4). Parses
   `git status --porcelain=v2 -z --untracked-files=all` and watches
   `.git/HEAD` + `.git/index` for refresh.
-- `watchDotGit(gitDir, onChange, { debounceMs })` — lower-level watcher
+- `watchDotGit(dotGit, onChange, { debounceMs })` — lower-level watcher
   used by the shell client. Exposed so hosts that hand-roll a client
-  (e.g. a `simple-git` wrapper) can reuse the refresh signal.
+  (e.g. a `simple-git` wrapper) can reuse the refresh signal. Accepts
+  either a gitdir or a `.git` entry carrying a `gitdir:` redirect.
+- `resolveGitDir(dotGit)` — follows that redirect. Exported for hosts
+  that need the real gitdir for their own bookkeeping.
 
 ## Shell client
 
@@ -62,6 +65,11 @@ state change:
 | `.git/HEAD`  | branch switch, detached-HEAD move, `git reset`        |
 | `.git/index` | `git add`, `git rm`, `git commit`, `git stash push`   |
 
+Both are located relative to the **resolved** gitdir. In a linked
+worktree or a submodule, `.git` is a file holding `gitdir: <path>` and
+those two files live at the far end of that redirect, per worktree —
+`watchDotGit` follows it before attaching anything.
+
 Worktree-only edits (a plain `save` in an editor) are **not** observed
 by this watcher — they don't change the index. If you need
 modified-on-save badge freshness, call `handle.refresh()` from your
@@ -74,11 +82,11 @@ filesystem watcher (chokidar, etc.).
   spawn subprocesses. A future `createIsomorphicGitClient` will plug
   into the same `GitClient` contract without requiring `git` on the
   host — see https://isomorphic-git.org/.
-- **Worktree / submodule watching.** When `.git` is a file (linked
-  worktree, submodule), we currently watch the containing directory
-  rather than resolving the `gitdir:` redirect. Status itself is
-  unaffected — `git` resolves the redirect — but HEAD/index changes in
-  the real gitdir may miss the watcher. Good enough for v0.2.
+- **Worktree list liveness.** `HEAD` and `index` are per-worktree and
+  now resolve correctly, but `git worktree add` / `remove` mutates
+  `<common>/worktrees/`, which nothing here watches. A host showing a
+  live list of worktrees needs its own watch on that directory; the
+  decoration path does not care.
 - **Per-entry watchers.** For million-file repos, debouncing on the
   index is cheap; scanning the whole output on every tick isn't. A
   future pass will diff two consecutive porcelain outputs so only the

@@ -12,7 +12,7 @@
 // of which are Node-free and safe to consume in a browser bundle.
 
 export { createShellGitClient } from './git/shell-client.js';
-export { watchDotGit } from './git/watch-dotgit.js';
+export { resolveGitDir, watchDotGit } from './git/watch-dotgit.js';
 export {
   assertPathUnderRoot,
   assertSafeRevision,

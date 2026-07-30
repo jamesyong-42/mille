@@ -17,6 +17,11 @@
 // Each watched path may or may not exist — an empty repo has no index,
 // and a bare repo has no HEAD in the usual location. ENOENT is
 // swallowed; the watcher still produces a valid disposer.
+//
+// The argument is a `.git` *entry*, not necessarily a directory:
+// linked worktrees and submodules make it a file holding a `gitdir:`
+// redirect, and following that is mandatory rather than cosmetic. See
+// `resolveGitDir` below.
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -27,17 +32,78 @@ export interface WatchDotGitOptions {
 }
 
 /**
- * Watch `{gitDir}/HEAD` and `{gitDir}/index` for changes. Returns a
- * disposer that closes the underlying `fs.FSWatcher`s.
+ * Resolve a `.git` entry to the directory that actually holds `HEAD`
+ * and `index`.
+ *
+ * In an ordinary repository `.git` *is* that directory. In a linked
+ * worktree (`git worktree add`) or a submodule it is a **file** whose
+ * contents are `gitdir: <path>`, and both `HEAD` and `index` live at
+ * the far end of that redirect — per worktree, not in the common dir.
+ *
+ * Following it is load-bearing, not a nicety. Watching the `.git` file
+ * itself attaches an inode watch whose events report the basename
+ * `.git`, which the HEAD/index filter rejects; watching its containing
+ * directory (what this used to fall back to) attaches to the worktree
+ * root, where neither `HEAD` nor `index` will ever appear. Both spell
+ * the same failure: the watcher goes permanently silent and badges
+ * freeze at whatever they showed on first paint, with no error.
+ *
+ * The redirect is resolved against the `.git` entry's own directory.
+ * Git writes an absolute path today, but the format permits a relative
+ * one and submodules in older repositories carry them.
+ *
+ * Returns `null` when the entry cannot be stat'd, read, or parsed —
+ * callers skip the watcher entirely rather than attach a dead one.
+ */
+export function resolveGitDir(dotGit: string): string | null {
+  let stats: fs.Stats;
+  try {
+    stats = fs.statSync(dotGit);
+  } catch {
+    return null;
+  }
+  if (stats.isDirectory()) return dotGit;
+  try {
+    // Deliberately anchored and multiline: the file is a single
+    // `gitdir: …` line today, but an unanchored search would happily
+    // match the word inside some future trailing key.
+    const match = /^gitdir:\s*(.+?)\s*$/m.exec(fs.readFileSync(dotGit, 'utf8'));
+    const target = match?.[1];
+    if (target === undefined || target === '') return null;
+    return path.resolve(path.dirname(dotGit), target);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Watch `HEAD` and `index` for changes. Returns a disposer that closes
+ * the underlying `fs.FSWatcher`s.
+ *
+ * `dotGit` may be either a real gitdir or a `.git` entry carrying a
+ * `gitdir:` redirect (linked worktree, submodule) — it is resolved
+ * before anything is watched, so passing an ordinary `.git` directory
+ * behaves exactly as it always has.
  *
  * The disposer is idempotent — safe to call twice.
  */
 export function watchDotGit(
-  gitDir: string,
+  dotGit: string,
   onChange: () => void,
   opts: WatchDotGitOptions = {},
 ): () => void {
   const debounceMs = opts.debounceMs ?? 100;
+
+  // An unresolvable entry has nothing worth watching. Return a valid
+  // no-op disposer rather than attaching watchers to a path that can
+  // never produce a HEAD/index event.
+  const resolved = resolveGitDir(dotGit);
+  if (resolved === null) return (): void => {};
+
+  // The helpers below are hoisted function declarations, and narrowing
+  // from the guard above does not reach into those — rebind to a
+  // plainly-typed const so they see a `string`.
+  const gitDir: string = resolved;
 
   const watchers: fs.FSWatcher[] = [];
   let pending: ReturnType<typeof setTimeout> | null = null;

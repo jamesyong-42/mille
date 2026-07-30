@@ -53,6 +53,27 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # `.gitignore` deliberately un-ignores packages/mille-*/**/*.node, because
+      # npm falls back to .gitignore when packing and the release job's freshly
+      # copied binaries have to reach the tarballs. The side effect is that a
+      # stray local build sitting in one of those directories is an ordinary
+      # untracked file that `git add -A` will happily commit — ~20 MB of it, and
+      # permanently, since pushed history can't be un-shipped.
+      #
+      # Nothing else would notice: the release still works, because the workflow
+      # overwrites these paths with fresh artifacts before publishing. The only
+      # symptom is a quietly growing repository.
+      - name: No native binaries may be committed
+        run: |
+          set -euo pipefail
+          tracked=$(git ls-files 'packages/mille-*/*.node')
+          if [ -n "$tracked" ]; then
+            echo "::error::Native binaries are checked in. They are build output — untrack with 'git rm --cached'."
+            echo "$tracked"
+            exit 1
+          fi
+          echo "No .node binaries tracked."
+
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         # version from package.json packageManager (pnpm@10.x)

@@ -5,6 +5,14 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # Release Please opens its PR with GITHUB_TOKEN, and GitHub suppresses
+  # workflow runs for events raised by that token — the same rule this repo
+  # already works around for tags in `release-please.yml`. The consequence is
+  # that the one PR which rewrites every version in the tree was the one PR
+  # nothing tested, so it merged red and broke `main` (0.3.1). `release-please.yml`
+  # dispatches this workflow onto the release branch explicitly; that needs a
+  # `workflow_dispatch` trigger to land on.
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -83,6 +91,14 @@ jobs:
         with:
           node-version: 20
           cache: pnpm
+
+      # Sits with the other repo-integrity checks rather than in the test
+      # matrix: it needs no install and no build, it is platform-independent,
+      # and the failure it catches deserves to surface in seconds instead of
+      # after a release-profile compile. 0.3.1 shipped with a stale version
+      # literal and turned `main` red — see the script header.
+      - name: Release version consistency
+        run: pnpm run release:check
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile=false

@@ -43,6 +43,7 @@
     "axe": "node scripts/axe-check.mjs",
     "bench:watch": "node scripts/watch-bench.mjs",
     "bench:watch:soak": "node scripts/watch-soak.mjs",
+    "release:check": "node scripts/check-release-versions.mjs",
     "lint": "pnpm -r --if-present lint",
     "format": "prettier --write .",
     "format:check": "prettier --check .",

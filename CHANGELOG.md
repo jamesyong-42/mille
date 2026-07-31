@@ -267,6 +267,14 @@ were living in that gap.
   workspace paths, a symlink fixture that needs Windows Developer Mode, and a
   git fixture that inherited the developer's `core.autocrlf`.
 
+## [0.3.2](https://github.com/vibecook-dev/mille/compare/v0.3.1...v0.3.2) (2026-07-31)
+
+
+### Bug Fixes
+
+* **ci:** test the release PR before it can break main ([#37](https://github.com/vibecook-dev/mille/issues/37)) ([b1631df](https://github.com/vibecook-dev/mille/commit/b1631df35f3343e8861112730bf5e015c9cc2534))
+* **test:** admit the empty file git leaves when killed mid-restore ([#39](https://github.com/vibecook-dev/mille/issues/39)) ([5be7dfe](https://github.com/vibecook-dev/mille/commit/5be7dfe9a9a8b48d82f65d0787ca480f90d12319))
+
 ## [0.3.1](https://github.com/vibecook-dev/mille/compare/v0.3.0...v0.3.1) (2026-07-30)
 
 

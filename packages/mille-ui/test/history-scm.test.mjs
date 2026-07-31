@@ -546,6 +546,14 @@ test(
       // the instant we look. That is the kill working, not corruption — the
       // property under test is that aborting rejects cleanly rather than
       // crashing the client, which the assertions above cover.
+      //
+      // A fourth outcome is that same race one step finer, and it reproduced in
+      // about half of CI's Linux runs before being admitted: the kill landed
+      // after git created the replacement file but before it wrote the
+      // contents, so the path exists and is empty. Absent and empty are the
+      // same instant of the same operation, observed either side of one
+      // syscall — there is no reading of this test under which one is corrupt
+      // and the other is fine.
       let body;
       try {
         body = readFileSync(path.join(dir, 'tracked.ts'), 'utf8');
@@ -554,7 +562,7 @@ test(
         body = null;
       }
       assert.ok(
-        body === null || body === 'again\n' || body === 'v2\n',
+        body === null || body === '' || body === 'again\n' || body === 'v2\n',
         `unexpected working-tree content: ${JSON.stringify(body)}`,
       );
     } finally {

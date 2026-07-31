@@ -300,12 +300,22 @@ jobs:
           done
 
       # The resync ack race reproduced ~1 in 20 and only under real timing.
+      #
+      # Output is captured rather than discarded. Twenty repetitions of full TAP
+      # would bury the log, but `>/dev/null` traded that for a failure message
+      # naming only the repetition number — which is the worst case for a flake,
+      # since the one run that reproduces it is also the one you cannot inspect.
+      # Quiet while passing, complete when it breaks.
       - name: Repeat resync synchronization regressions
         shell: bash
         run: |
+          log=$(mktemp)
           for run in $(seq 1 20); do
-            node --test packages/mille/test/resync.test.mjs >/dev/null \
-              || { echo "::error::resync regression on repetition ${run}"; exit 1; }
+            if ! node --test packages/mille/test/resync.test.mjs >"$log" 2>&1; then
+              echo "::error::resync regression on repetition ${run}"
+              cat "$log"
+              exit 1
+            fi
           done
           echo "20 clean resync repetitions"
 
@@ -414,17 +424,25 @@ jobs:
       # Multi-client fan-out ordering — the class of bug that only reproduced
       # off-Linux. Each of these asserts that every attached mirror is current
       # before the initiating client's promise resolves.
+      #
+      # Captured, not discarded — see the resync step above. This one already
+      # cost a diagnosis: repetition 9 failed on b1631df and the log recorded
+      # nothing but the repetition number.
       - name: Repeat port synchronization regressions
         shell: bash
         run: |
+          log=$(mktemp)
           for run in $(seq 1 10); do
-            node --test \
+            if ! node --test \
               packages/mille/test/resync.test.mjs \
               packages/mille/test/settings-live.test.mjs \
               packages/mille/test/multi-root-order.test.mjs \
               packages/mille/test/workspace-roots-live.test.mjs \
-              >/dev/null \
-              || { echo "::error::port synchronization regression on repetition ${run}"; exit 1; }
+              >"$log" 2>&1; then
+              echo "::error::port synchronization regression on repetition ${run}"
+              cat "$log"
+              exit 1
+            fi
           done
           echo "10 clean port synchronization repetitions"
 

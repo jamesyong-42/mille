@@ -12,6 +12,10 @@
         { "type": "json", "path": "packages/mille/package.json", "jsonpath": "$.version" },
         { "type": "json", "path": "packages/mille-ui/package.json", "jsonpath": "$.version" },
 
+        { "type": "generic", "path": "packages/mille-ui/src/index.ts" },
+        { "type": "generic", "path": "packages/mille-ui/src/testing.ts" },
+        { "type": "generic", "path": "packages/mille-ui/src/tailwind-preset.ts" },
+
         { "type": "json", "path": "packages/mille-darwin-arm64/package.json", "jsonpath": "$.version" },
         { "type": "json", "path": "packages/mille-darwin-x64/package.json", "jsonpath": "$.version" },
         { "type": "json", "path": "packages/mille-linux-arm64-gnu/package.json", "jsonpath": "$.version" },

@@ -45,6 +45,9 @@ concurrency:
 jobs:
   release-please:
     runs-on: ubuntu-latest
+    # The green-commit gate below polls for up to ~20 minutes; the default
+    # 6-hour job timeout would turn a stuck poll into a very expensive no-op.
+    timeout-minutes: 45
     steps:
       - id: release
         if: github.event_name == 'push'
@@ -72,6 +75,103 @@ jobs:
             echo "tag=" >> "$GITHUB_OUTPUT"
             echo "No release cut — release PR updated instead."
           fi
+
+      # The release PR rewrites every version in the tree, and until now it was
+      # the only PR in this repo that nothing tested. GitHub suppresses workflow
+      # runs for events raised by GITHUB_TOKEN, so `ci.yml`'s `pull_request`
+      # trigger never fires for a PR Release Please opened — 0.3.1 merged with
+      # zero checks and `main` was red five minutes later.
+      #
+      # That is the same suppression the tag hand-off below already works
+      # around, one stage earlier, so it gets the same treatment: dispatch CI at
+      # the branch explicitly. No PAT and no GitHub App, which keeps the
+      # no-long-lived-secrets property described in the header intact.
+      - name: Resolve the release PR branch
+        id: release-pr
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_PR_JSON: ${{ steps.release.outputs.pr }}
+        run: |
+          set -euo pipefail
+          # The action reports the PR it just touched; the shape of that output
+          # has moved between versions, so try each spelling before falling back
+          # to the label Release Please puts on its own open PR.
+          pr_json="${RELEASE_PR_JSON:-}"
+          [ -n "${pr_json}" ] || pr_json='{}'
+          branch=$(jq -r '.headBranchName // .headRefName // .head.ref // empty' \
+            <<< "${pr_json}" 2>/dev/null || true)
+          if [ -z "${branch}" ]; then
+            branch=$(gh pr list \
+              --repo "${{ github.repository }}" \
+              --base "${GITHUB_REF_NAME}" \
+              --state open \
+              --label "autorelease: pending" \
+              --json headRefName,updatedAt \
+              --jq 'map(select(.headRefName | startswith("release-please--")))
+                    | sort_by(.updatedAt) | last | .headRefName // empty')
+          fi
+          echo "branch=${branch}" >> "$GITHUB_OUTPUT"
+          if [ -z "${branch}" ]; then
+            echo "No open release PR — nothing to validate."
+          else
+            echo "Release PR branch: ${branch}"
+          fi
+
+      - name: Validate the prepared release PR
+        if: steps.release-pr.outputs.branch != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BRANCH: ${{ steps.release-pr.outputs.branch }}
+        run: |
+          set -euo pipefail
+          gh workflow run ci.yml --repo "${{ github.repository }}" --ref "$BRANCH"
+          echo "Dispatched ci.yml for ${BRANCH}."
+          echo "Release PR CI: https://github.com/${{ github.repository }}/actions/workflows/ci.yml" >> "$GITHUB_STEP_SUMMARY"
+
+      # The hand-off below is the last point at which a bad release can still be
+      # stopped — the tag exists, but nothing has reached npm. Spend that shot
+      # only on a commit whose own CI passed.
+      #
+      # Only the automatic path is gated. `workflow_dispatch` exists to recover a
+      # release whose hand-off failed after the tag was already cut, and a human
+      # reaching for that has decided the commit is good; making the escape hatch
+      # depend on a run that may have aged out would defeat its purpose.
+      - name: Require a green release commit
+        if: steps.release.outputs.release_created == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SHA: ${{ steps.release.outputs.sha }}
+        run: |
+          set -euo pipefail
+          # CI for the release commit starts from the same push that started this
+          # run, so it is normal to arrive before it finishes. 120 × 10s ≈ 20 min
+          # against a CI that takes about six.
+          for attempt in $(seq 1 120); do
+            run_json=$(gh run list \
+              --repo "${{ github.repository }}" \
+              --workflow ci.yml \
+              --commit "$SHA" \
+              --event push \
+              --limit 10 \
+              --json databaseId,status,conclusion,url \
+              --jq 'sort_by(.databaseId) | last // {}' 2>/dev/null || echo '{}')
+            status=$(jq -r '.status // empty' <<< "$run_json")
+            conclusion=$(jq -r '.conclusion // empty' <<< "$run_json")
+            url=$(jq -r '.url // empty' <<< "$run_json")
+            if [ "$status" = "completed" ]; then
+              if [ "$conclusion" = "success" ]; then
+                echo "CI passed for ${SHA}: ${url}"
+                exit 0
+              fi
+              echo "::error::CI ${conclusion} for release commit ${SHA} — refusing to publish: ${url}"
+              exit 1
+            fi
+            echo "Waiting for CI on ${SHA} (${attempt}/120)..."
+            sleep 10
+          done
+          echo "::error::Timed out waiting for CI on ${SHA}. Re-run with workflow_dispatch once it is green."
+          exit 1
 
       - name: Hand off to release.yml
         if: steps.resolve.outputs.tag != ''

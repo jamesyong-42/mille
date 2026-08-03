@@ -11,6 +11,7 @@
       "extra-files": [
         { "type": "json", "path": "packages/mille/package.json", "jsonpath": "$.version" },
         { "type": "json", "path": "packages/mille-ui/package.json", "jsonpath": "$.version" },
+        { "type": "json", "path": "packages/mille-truffle/package.json", "jsonpath": "$.version" },
 
         { "type": "generic", "path": "packages/mille-ui/src/index.ts" },
         { "type": "generic", "path": "packages/mille-ui/src/testing.ts" },

@@ -1,6 +1,14 @@
 # mille changelog
 
-## Unreleased
+## [0.3.2](https://github.com/vibecook-dev/mille/compare/v0.3.1...v0.3.2) (2026-07-31)
+
+
+### Bug Fixes
+
+* **ci:** test the release PR before it can break main ([#37](https://github.com/vibecook-dev/mille/issues/37)) ([b1631df](https://github.com/vibecook-dev/mille/commit/b1631df35f3343e8861112730bf5e015c9cc2534))
+* **test:** admit the empty file git leaves when killed mid-restore ([#39](https://github.com/vibecook-dev/mille/issues/39)) ([5be7dfe](https://github.com/vibecook-dev/mille/commit/5be7dfe9a9a8b48d82f65d0787ca480f90d12319))
+
+## [0.3.1](https://github.com/vibecook-dev/mille/compare/v0.3.0...v0.3.1) (2026-07-30)
 
 Windows was building but never running. Every test job targeted
 `ubuntu-latest`; Windows appeared only in the build matrix, which compiles a
@@ -10,7 +18,7 @@ the binary and perform a single walk. So the watcher, the host/renderer port
 protocol and the mutation paths shipped unexercised there, and three defects
 were living in that gap.
 
-### Remote workspaces (`@vibecook/mille-truffle`, new, unpublished)
+### Remote workspaces (`@vibecook/mille-truffle`, new — first published as 0.3.2)
 
 - **A client can connect, survive a disconnect, and reconnect.**
   `connectMille(mesh, { peer, exportId })` dials, runs the open handshake, and
@@ -266,16 +274,6 @@ were living in that gap.
   splitting on real temp paths, Unix errno literals, rooted-but-not-absolute
   workspace paths, a symlink fixture that needs Windows Developer Mode, and a
   git fixture that inherited the developer's `core.autocrlf`.
-
-## [0.3.2](https://github.com/vibecook-dev/mille/compare/v0.3.1...v0.3.2) (2026-07-31)
-
-
-### Bug Fixes
-
-* **ci:** test the release PR before it can break main ([#37](https://github.com/vibecook-dev/mille/issues/37)) ([b1631df](https://github.com/vibecook-dev/mille/commit/b1631df35f3343e8861112730bf5e015c9cc2534))
-* **test:** admit the empty file git leaves when killed mid-restore ([#39](https://github.com/vibecook-dev/mille/issues/39)) ([5be7dfe](https://github.com/vibecook-dev/mille/commit/5be7dfe9a9a8b48d82f65d0787ca480f90d12319))
-
-## [0.3.1](https://github.com/vibecook-dev/mille/compare/v0.3.0...v0.3.1) (2026-07-30)
 
 
 ### Features

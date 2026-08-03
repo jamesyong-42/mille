@@ -37,13 +37,19 @@ const errors = [];
 // The root manifest is private, but Release Please treats it as the release
 // anchor and bumps it, so a mismatch here means the release itself is broken.
 //
-// Deliberately absent: `packages/mille-truffle` (private, experimental, still
-// on its own 0.1.0 line) and `apps/playground` (private, pinned at 0.0.0).
-// Neither is published; forcing them onto the release version would create
+// Deliberately absent: `apps/playground`, which is private and pinned at 0.0.0.
+// It is not published, so forcing it onto the release version would create
 // churn without protecting a consumer.
+//
+// `packages/mille-truffle` was in that same sentence until it was published.
+// It kept its own 0.1.0 line while it was `private: true`, and that would have
+// been a quiet trap once it went public: `pnpm -r publish` skips a version the
+// registry already has, so a frozen version number does not fail a release —
+// it just silently never ships the fix. It is on the release line now.
 const jsonPackages = [
   'package.json',
   'packages/mille-ui/package.json',
+  'packages/mille-truffle/package.json',
   'packages/mille-darwin-arm64/package.json',
   'packages/mille-darwin-x64/package.json',
   'packages/mille-linux-arm64-gnu/package.json',

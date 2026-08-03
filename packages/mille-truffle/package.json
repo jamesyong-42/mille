@@ -1,11 +1,9 @@
 {
   "name": "@vibecook/mille-truffle",
-  "version": "0.1.0",
+  "version": "0.3.2",
   "description": "Serve a mille workspace to another tailnet device over Truffle.",
   "license": "MIT",
   "type": "module",
-  "private": true,
-  "//private": "Experimental until the two-device acceptance in PR 6. `pnpm -r publish` would pick this up otherwise; flip to false with the release wiring.",
   "repository": {
     "type": "git",
     "url": "https://github.com/vibecook-dev/mille"
@@ -33,8 +31,9 @@
     "test": "node ../../scripts/run-tests.mjs",
     "acceptance": "node acceptance/tailnet-acceptance.mjs"
   },
+  "//peerDependencies": "`workspace:^` publishes as `^x.y.z`; `workspace:*` would emit the exact `x.y.z`. This package reaches into mille's `./host`, `./client` and `./node` subpaths, so it tracks the minor line it was built against — but pinning a peer to one patch would make every mille patch release an unsatisfiable peer for anyone holding this one.",
   "peerDependencies": {
-    "@vibecook/mille": "workspace:*",
+    "@vibecook/mille": "workspace:^",
     "@vibecook/truffle": ">=0.7.8 <0.8.0"
   },
   "devDependencies": {
@@ -42,5 +41,8 @@
     "@vibecook/mille": "workspace:*",
     "@vibecook/truffle": "^0.7.8",
     "typescript": "~6.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

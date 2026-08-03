@@ -3,8 +3,9 @@
 Serve a [mille](https://www.npmjs.com/package/@vibecook/mille) workspace to another
 device on your tailnet, over [Truffle](https://github.com/vibecook-dev/truffle).
 
-> **Experimental.** Server and client are both implemented. Not yet published —
-> the package is `private: true` on purpose, see [Publishing](#publishing).
+> **Experimental.** Server and client are both implemented and the two-device
+> tailnet acceptance has passed ([ACCEPTANCE.md](./ACCEPTANCE.md)), but the API
+> may still move. Versioned in lock-step with `@vibecook/mille`.
 
 ## What it does
 
@@ -129,26 +130,33 @@ pnpm --filter @vibecook/mille-truffle acceptance -- --role=both
 
 ## Publishing
 
-The package is marked `private: true`, which keeps `pnpm -r publish` from
-picking it up during a tagged release. That is deliberate, not an oversight.
+This package ships on the **same version line as `@vibecook/mille`**, and did
+not always. It kept its own `0.1.0` while it was `private: true`, which would
+have become a silent trap the moment it went public: `pnpm -r publish` skips a
+version the registry already holds, so a frozen version number never fails a
+release — it just quietly stops shipping fixes. `release-please-config.json`
+and `scripts/check-release-versions.mjs` now both carry it, so it moves with
+every other package.
 
-`@vibecook/mille-truffle` does not exist on npm yet, and the release workflow
-publishes through **npm Trusted Publishing (OIDC)** with no token. Trusted
-Publishing can only be configured on a package that already exists, so the
-first publish has to be a manual one — see the note at the top of
-`.github/workflows/release.yml`. Flipping `private` before that happens would
-make the next tagged release attempt an OIDC publish for a package with no
-Trusted Publisher, and `pnpm -r publish` failing on one package takes the whole
-job with it, including `@vibecook/mille` and `@vibecook/mille-ui`.
+**Publish with `pnpm`, not `npm`.** The peer dependency on `@vibecook/mille` is
+written `workspace:^`, and only pnpm rewrites that into a real range on the way
+out. `npm publish` would upload the literal string `workspace:^` and produce a
+package nobody can install.
 
-To ship it:
+The first publish had to be manual: the release workflow authenticates through
+**npm Trusted Publishing (OIDC)** with no token, and a Trusted Publisher can
+only be configured on a package that already exists. That bootstrap is:
 
-1. Publish once by hand (`npm publish --access public` from `packages/mille-truffle`,
-   or extend `scripts/bootstrap-npm-publish.sh`, which currently covers only
-   `mille`, `mille-ui` and the platform packages).
-2. Add a Trusted Publisher on npmjs.com — org `vibecook-dev`, repo `mille`,
-   workflow `release.yml`, allowed action `npm publish`.
-3. Set `private: false` and confirm `pnpm -r publish --dry-run` lists it.
+```bash
+npm login
+pnpm --filter @vibecook/mille-truffle publish --access public --no-git-checks
+```
 
-Until then the two-device acceptance in [ACCEPTANCE.md](./ACCEPTANCE.md) is the
-remaining gate — `AC-002` cannot be discharged on one machine.
+> **The Trusted Publisher must be configured before the next tagged release.**
+> Until it exists, an OIDC publish for this package fails — and `pnpm -r publish`
+> failing on one package takes the whole job with it, including
+> `@vibecook/mille` and `@vibecook/mille-ui`. On npmjs.com: org `vibecook-dev`,
+> repo `mille`, workflow `release.yml`, allowed action `npm publish`.
+
+`scripts/bootstrap-npm-publish.sh` covers `mille`, `mille-ui` and the eight
+platform packages, and predates this one.

@@ -1,5 +1,12 @@
 # mille changelog
 
+## [0.3.3](https://github.com/vibecook-dev/mille/compare/v0.3.2...v0.3.3) (2026-08-03)
+
+
+### Features
+
+* **truffle:** publish mille-truffle on the shared release version line ([#40](https://github.com/vibecook-dev/mille/issues/40)) ([80d6593](https://github.com/vibecook-dev/mille/commit/80d65939f498612e9ba46dff99e081d01ea0f48e))
+
 ## [0.3.2](https://github.com/vibecook-dev/mille/compare/v0.3.1...v0.3.2) (2026-07-31)
 
 
